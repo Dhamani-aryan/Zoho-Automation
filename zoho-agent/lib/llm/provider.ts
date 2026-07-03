@@ -5,14 +5,27 @@ export type PlanParseInput = {
     text: string;
   }>;
   actionBlockCatalog: unknown[];
+  systemPrompt?: string;
 };
 
 export type ParsedPlan = {
+  intent_summary: string;
+  run_kind: "read" | "write";
   blocks: Array<{
     slug: string;
     config: Record<string, unknown>;
   }>;
-  records: unknown[];
+  record_selector: {
+    mode: "tag" | "ids" | "names" | "file" | "filter";
+    module: "deals" | "contacts" | "accounts";
+    tag?: string;
+    values?: string[];
+    filter?: {
+      field: string;
+      op: "equals" | "contains" | "starts_with";
+      value: string;
+    };
+  };
   run_parameters: Record<string, unknown>;
   warnings: string[];
   missing_info: string[];

@@ -1,26 +1,29 @@
-import { getEnv } from "@/lib/env";
+import { emptyPlan } from "@/lib/llm/parse-json";
+import { OpenAICodexProvider } from "@/lib/llm/openai-codex";
+import { OpenAIKeyProvider } from "@/lib/llm/openai-key";
 import type { LLMProvider } from "@/lib/llm/provider";
+import { resolveCredential } from "@/lib/llm/resolve-credential";
 
 class MissingProvider implements LLMProvider {
-  name = "missing-openai-key";
+  name = "missing-user-credential";
+
+  constructor(private readonly message: string) {}
 
   async parsePlan() {
-    return {
-      blocks: [],
-      records: [],
-      run_parameters: {},
-      warnings: ["OPENAI_API_KEY is not configured yet."],
-      missing_info: ["Add OPENAI_API_KEY during Phase 2 before enabling command parsing."]
-    };
+    return emptyPlan(this.message);
   }
 }
 
-export function getLLMProvider(): LLMProvider {
-  const apiKey = getEnv("OPENAI_API_KEY");
+export async function getLLMProviderForUser(userId: string): Promise<LLMProvider> {
+  const credential = await resolveCredential(userId);
 
-  if (!apiKey) {
-    return new MissingProvider();
+  if (credential.kind === "missing") {
+    return new MissingProvider(credential.message);
   }
 
-  throw new Error("OpenAIProvider not implemented — Phase 2");
+  if (credential.kind === "openai_api_key") {
+    return new OpenAIKeyProvider(credential.apiKey);
+  }
+
+  return new OpenAICodexProvider(userId, credential.refreshToken, credential.accountId);
 }
