@@ -2,7 +2,7 @@
 
 Version 2.0 — 2026-07-03
 Owner: Aryan Dhamani (aryan@klouddata.com), KloudData
-Status: **Plan finalized, all decisions resolved (see §11). Phase 0 (specs) done. Next: Phase 1 (build foundation). Aryan is preparing link CSVs for import.**
+Status: **Phase 1 COMPLETE (2026-07-04).** App running locally with hardened auth; Supabase live with full schema/RLS/seeds. Data loaded: **315 accounts, 833 contacts (all account-linked), 179 deals (all account-linked, 161 contact-linked)** via `npm run import:masters` (re-runnable; cleaning via `imports\clean_exports.py`). Field metadata synced: Accounts 64, Contacts 73, Deals 29, Tasks 19 fields incl. picklists (`npm run import:fieldmeta`). Vercel deploy deferred until team onboarding. **Next: Phase 2 — command parser + validation + preview. LLM auth = per-user (each user connects their own ChatGPT subscription via device-code, or their own API key; encrypted per-user); see `workflows/SPEC_llm_provider_codex_subscription.md`.**
 
 This document is self-contained: a new chat or developer can execute the project from this file alone. Companion files (same folder) hold deeper detail and are referenced where relevant.
 
@@ -31,7 +31,7 @@ This is a **controlled workflow executor with an AI front door**, not a free-for
 |---|----------|--------|
 | 1 | Execution | In the user's logged-in browser session, two modes: **(a) Zoho session API** (primary — search, reads, edits, owners, tags, duplicate checks, verification) and **(b) UI automation** (only for UI-only actions: email compose/schedule, task UI). No OAuth, no stored passwords. |
 | 2 | Browser bridge | Custom Chrome extension (Manifest V3), installed unpacked on each user's machine, host permissions locked to Zoho CRM domains, executes only steps of an approved run belonging to the same logged-in user. |
-| 3 | Agent brain | Hybrid. Our own agent layer; LLM behind a swappable `LLMProvider` interface — **OpenAI (GPT) first, Anthropic addable later by config**. LLM's only job: command + files → structured plan JSON. |
+| 3 | Agent brain | Hybrid. Our own agent layer; LLM behind a swappable `LLMProvider` interface. **Per-user credentials (not global): each user connects their OWN OpenAI access in Settings — either their ChatGPT subscription (Codex device-code flow, endorsed by OpenAI as "Codex for OSS") OR their own API key. Secrets stored encrypted per-user; resolved per request from the triggering user.** See `workflows/SPEC_llm_provider_codex_subscription.md`. LLM's only job: command + files → structured plan JSON. |
 | 4 | Command input | Free-text command box + file attach → structured preview requiring explicit approval. Saved presets for recurring runs. |
 | 5 | Hosting | Supabase (Postgres + Auth + Storage) + Vercel (Next.js web app + API). |
 | 6 | Workflow structure | **Atomic action blocks**, user-toggleable per run. Composites (e.g. "KD Blitz") are saved presets chaining blocks. Block values (task subject, Next Step value, CC, times) are inputs, never hardcoded. |
