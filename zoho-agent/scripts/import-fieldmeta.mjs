@@ -22,15 +22,15 @@ const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABA
   auth: { persistSession: false, autoRefreshToken: false }
 });
 
-for (const module of ["Accounts", "Contacts", "Deals", "Tasks"]) {
-  const p = join(dir, `fields_${module}.json`);
-  if (!existsSync(p)) { console.log(`${module}: fields_${module}.json not found in ${dir} — skipped`); continue; }
+for (const moduleName of ["Accounts", "Contacts", "Deals", "Tasks"]) {
+  const p = join(dir, `fields_${moduleName}.json`);
+  if (!existsSync(p)) { console.log(`${moduleName}: fields_${moduleName}.json not found in ${dir} — skipped`); continue; }
   const payload = JSON.parse(readFileSync(p, "utf8"));
   const fields = Array.isArray(payload) ? payload : payload.fields ?? payload.data ?? [];
   const rows = fields
     .filter(f => typeof f.api_name === "string" && f.api_name.trim())
     .map(f => ({
-      module,
+      module: moduleName,
       api_name: f.api_name.trim(),
       label: String(f.field_label ?? f.display_label ?? f.label ?? f.api_name).trim(),
       data_type: typeof f.data_type === "string" ? f.data_type : null,
@@ -39,7 +39,7 @@ for (const module of ["Accounts", "Contacts", "Deals", "Tasks"]) {
       synced_at: new Date().toISOString()
     }));
   const { data, error } = await db.from("zoho_field_meta").upsert(rows, { onConflict: "module,api_name" }).select("id");
-  if (error) { console.error(`${module}: ERROR ${error.message}`); process.exit(1); }
-  console.log(`${module}: ${data.length} fields stored`);
+  if (error) { console.error(`${moduleName}: ERROR ${error.message}`); process.exit(1); }
+  console.log(`${moduleName}: ${data.length} fields stored`);
 }
 console.log("done.");

@@ -19,12 +19,15 @@ Local-first Phase 1 scaffold for the KloudData Zoho workflow executor.
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
 3. Leave `OPENAI_API_KEY` empty until Phase 2.
-4. Install dependencies with `npm install`.
-5. Start locally with `npm run dev`.
+4. Add `LLM_CRED_ENC_KEY` before enabling Phase 2 credential storage. Generate a 32-byte key and base64-encode it.
+5. Install dependencies with `npm install`.
+6. Start locally with `npm run dev`.
 
 ## Database setup
 
 Run `supabase/schema.sql` in the Supabase SQL editor. It creates the Phase 1 tables, RLS policies, and workflow seed records.
+
+For Phase 2, also run `supabase/2026_phase2.sql`. It creates encrypted per-user LLM credential storage.
 
 ## Auth setup
 
