@@ -54,6 +54,7 @@ export const config = {
     "/imports/:path*",
     "/run/:path*",
     "/runs/:path*",
+    "/settings/:path*",
     "/admin/:path*",
     "/api/:path*"
   ]

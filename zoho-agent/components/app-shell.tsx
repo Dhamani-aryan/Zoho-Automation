@@ -4,6 +4,7 @@ import {
   FileUp,
   LayoutDashboard,
   PlayCircle,
+  Settings,
   Settings2
 } from "lucide-react";
 import Link from "next/link";
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/imports", label: "Imports", icon: FileUp },
   { href: "/run/new", label: "New Run", icon: PlayCircle },
   { href: "/runs", label: "Runs", icon: ClipboardList },
+  { href: "/settings", label: "Settings", icon: Settings },
   { href: "/admin/field-meta", label: "Field Meta", icon: Settings2 }
 ];
 
