@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { getRecentRuns } from "@/lib/supabase/queries";
@@ -32,7 +33,11 @@ export default async function RunsPage() {
             <tbody>
               {runs.map((run) => (
                 <tr key={run.id} className="border-t border-line">
-                  <td className="px-4 py-3 font-mono text-xs">{run.id}</td>
+                  <td className="px-4 py-3 font-mono text-xs">
+                    <Link className="text-accent hover:underline" href={`/run/${run.id}`}>
+                      {run.id}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3 capitalize">{run.run_kind}</td>
                   <td className="px-4 py-3">
                     <StatusBadge status={run.status} />
