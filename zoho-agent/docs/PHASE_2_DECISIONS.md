@@ -12,3 +12,17 @@ Confirmed on 2026-07-04.
 8. A preview with unresolved issues is saved as `draft`; a clean preview is saved as `preview_ready`.
 9. Read-only runs keep `approval_required=false`; write runs keep `approval_required=true`.
 10. The first deterministic preview mapper is `update_deal_field`, including Deal `Next_Step`.
+
+## Post-review fixes (2026-07-04)
+
+Applied after review of the initial Phase 2 build:
+
+1. **OAuth account-id decode** — corrected to read the nested claim `payload["https://api.openai.com/auth"].chatgpt_account_id` (was a wrong flat dotted key that always returned null). `lib/llm/codex-oauth.ts`.
+2. **Device redirect URI** — corrected to `https://auth.openai.com/deviceauth/callback` (was `/api/accounts/deviceauth/callback`, which would fail the device token exchange).
+3. **Providers now send attached files** — added `composeUserInput()` in `lib/llm/parse-json.ts`; both `openai-codex.ts` and `openai-key.ts` fold the parsed file summaries into the model input (previously only the command was sent, so file-driven commands were blind).
+4. **Real tag selection** — `record_selector.mode=tag` now filters against each record's `raw_data.tags`/`matched_tags` (was stubbed off with a false "tags not imported" message). Tags ARE present in `raw_data`.
+5. **Per-block preview mappers** — implemented for change_owner, add_tags/remove_tags, create_task, complete_task, schedule_email, and update_account/contact/deal fields (previously only update_deal_field; all others fell to needs_review). Includes picklist-membership checks, email-format checks, opt-out and no-email skips, and future-date checks.
+6. **Name/file resolution fallback** — exact → starts_with → contains; unmatched values are reported as `needs_review` items and multi-match values are flagged ambiguous, so no selector value silently vanishes.
+7. Preview result now carries eligible/skipped/needs_review counts. `change_owner` validates against `KNOWN_OWNERS` in `lib/constants.ts`.
+
+VERIFY on the dev machine (could not run in the review sandbox due to a file-sync lag): `npm run typecheck && npm run lint && npm run build`.

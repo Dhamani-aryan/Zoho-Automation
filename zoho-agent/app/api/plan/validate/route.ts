@@ -31,7 +31,14 @@ export async function POST(request: Request) {
 
   const validation = await validatePlanForPreview({
     supabase: auth.supabase,
-    plan: guarded
+    plan: guarded,
+    fieldMeta: catalog.fieldMeta as Array<{
+      module: string;
+      api_name: string;
+      data_type?: string | null;
+      picklist_values?: unknown;
+    }>,
+    role: auth.user.role
   });
 
   await auth.supabase.from("audit_events").insert({

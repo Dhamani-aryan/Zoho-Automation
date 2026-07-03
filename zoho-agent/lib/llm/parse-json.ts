@@ -1,4 +1,18 @@
-import type { ParsedPlan } from "@/lib/llm/provider";
+import type { ParsedPlan, PlanParseInput } from "@/lib/llm/provider";
+
+// Fold the command AND any attached file summaries into a single user-input
+// string the model actually sees. Without this, file-driven commands
+// ("schedule these drafts") are blind because the file never reaches the model.
+export function composeUserInput(input: PlanParseInput): string {
+  const parts = [`COMMAND:\n${input.command}`];
+  if (input.files && input.files.length > 0) {
+    parts.push("", "ATTACHED FILES (parsed):");
+    for (const file of input.files) {
+      parts.push(`--- FILE: ${file.name} ---`, file.text);
+    }
+  }
+  return parts.join("\n");
+}
 
 export function emptyPlan(message: string): ParsedPlan {
   return {

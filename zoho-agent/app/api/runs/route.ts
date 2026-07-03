@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
 import { validateParsedPlan } from "@/lib/plan/schema";
+import { loadPromptCatalog } from "@/lib/plan/system-prompt";
 import { validatePlanForPreview } from "@/lib/plan/validation";
 import type { PreviewItem, ValidationResult } from "@/lib/plan/validation";
 
@@ -51,10 +52,21 @@ export async function POST(request: Request) {
     );
   }
 
-  const validation = body?.validation ?? (await validatePlanForPreview({
-    supabase: auth.supabase,
-    plan: parsed.data
-  }));
+  let validation = body?.validation;
+  if (!validation) {
+    const catalog = await loadPromptCatalog();
+    validation = await validatePlanForPreview({
+      supabase: auth.supabase,
+      plan: parsed.data,
+      fieldMeta: catalog.fieldMeta as Array<{
+        module: string;
+        api_name: string;
+        data_type?: string | null;
+        picklist_values?: unknown;
+      }>,
+      role: auth.user.role
+    });
+  }
   const runStatus = validation.status === "preview_ready" ? "preview_ready" : "draft";
   const totals = computeTotals(validation.items);
 

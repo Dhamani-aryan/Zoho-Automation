@@ -1,4 +1,4 @@
-import { extractResponsesText, parsePlanJson } from "@/lib/llm/parse-json";
+import { composeUserInput, extractResponsesText, parsePlanJson } from "@/lib/llm/parse-json";
 import type { LLMProvider, ParsedPlan, PlanParseInput } from "@/lib/llm/provider";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -21,7 +21,7 @@ export class OpenAIKeyProvider implements LLMProvider {
         store: false,
         temperature: 0.1,
         instructions: input.systemPrompt ?? "",
-        input: input.command
+        input: composeUserInput(input)
       })
     });
 
