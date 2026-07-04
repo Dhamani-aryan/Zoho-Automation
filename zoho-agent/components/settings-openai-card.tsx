@@ -103,20 +103,35 @@ export function SettingsOpenAICard() {
     event.preventDefault();
     setLoading(true);
     setMessage(null);
-    const response = await fetch("/api/settings/llm/codex/paste", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credential: pasteValue })
-    });
-    const body = await response.json();
-    setLoading(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Could not connect pasted credential.");
-      return;
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 25000);
+
+    try {
+      const response = await fetch("/api/settings/llm/codex/paste", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ credential: pasteValue })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setMessage(body.error ?? "Could not connect pasted credential.");
+        return;
+      }
+      setPasteValue("");
+      setMessage("ChatGPT subscription connected from pasted credential.");
+      await refreshStatus();
+    } catch (error) {
+      setMessage(
+        error instanceof Error && error.name === "AbortError"
+          ? "Credential validation timed out. Try again with a fresh auth.json."
+          : "Could not connect pasted credential."
+      );
+    } finally {
+      window.clearTimeout(timeout);
+      setLoading(false);
     }
-    setPasteValue("");
-    setMessage("ChatGPT subscription connected from pasted credential.");
-    await refreshStatus();
   }
 
   async function disconnect() {

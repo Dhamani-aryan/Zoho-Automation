@@ -10,26 +10,53 @@ import {
 } from "@/lib/llm/codex-oauth";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
-// Extract a refresh token from either the pasted ~/.codex/auth.json contents
-// or a bare refresh-token string.
+const REFRESH_TIMEOUT_MS = 15000;
+
+type RefreshBody = {
+  access_token?: unknown;
+  refresh_token?: unknown;
+  expires_in?: unknown;
+  error_description?: string;
+};
+
 function extractRefreshToken(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Try JSON (full auth.json or a fragment).
   if (trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       const tokens = (parsed.tokens ?? parsed) as Record<string, unknown>;
-      const rt = tokens.refresh_token ?? parsed.refresh_token;
-      return typeof rt === "string" && rt.trim() ? rt.trim() : null;
+      const refreshToken = tokens.refresh_token ?? parsed.refresh_token;
+      return typeof refreshToken === "string" && refreshToken.trim() ? refreshToken.trim() : null;
     } catch {
       return null;
     }
   }
 
-  // Otherwise treat the whole paste as the refresh token itself.
   return trimmed;
+}
+
+async function refreshCodexCredential(refreshToken: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(OPENAI_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: controller.signal,
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: CODEX_CLIENT_ID
+      })
+    });
+    const body = (await response.json().catch(() => ({}))) as RefreshBody;
+    return { response, body };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function POST(request: Request) {
@@ -41,33 +68,48 @@ export async function POST(request: Request) {
   const refreshToken = extractRefreshToken(raw);
   if (!refreshToken) {
     return NextResponse.json(
-      { error: "Paste the contents of your ~/.codex/auth.json (or its refresh_token)." },
+      { error: "Paste the contents of your ~/.codex/auth.json or its refresh_token." },
       { status: 400 }
     );
   }
 
-  // Validate by performing a real refresh — this also mints the token we store.
-  const refreshResponse = await fetch(OPENAI_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: CODEX_CLIENT_ID
-    })
-  });
-  const refreshBody = await refreshResponse.json().catch(() => ({}));
-  if (!refreshResponse.ok || !refreshBody.refresh_token || !refreshBody.access_token) {
+  let refreshResult: Awaited<ReturnType<typeof refreshCodexCredential>>;
+  try {
+    refreshResult = await refreshCodexCredential(refreshToken);
+  } catch (error) {
+    const isTimeout = error instanceof Error && error.name === "AbortError";
     return NextResponse.json(
-      { error: refreshBody.error_description ?? "OpenAI rejected this Codex credential. Run `codex login` again and re-copy auth.json." },
+      {
+        error: isTimeout
+          ? "OpenAI credential validation timed out. Try again, or run `codex login` and paste a fresh auth.json."
+          : "Could not reach OpenAI to validate this Codex credential."
+      },
+      { status: 504 }
+    );
+  }
+
+  const { response: refreshResponse, body: refreshBody } = refreshResult;
+  const mintedRefreshToken =
+    typeof refreshBody.refresh_token === "string" ? refreshBody.refresh_token : "";
+  const accessToken = typeof refreshBody.access_token === "string" ? refreshBody.access_token : "";
+
+  if (!refreshResponse.ok || !mintedRefreshToken || !accessToken) {
+    return NextResponse.json(
+      {
+        error:
+          refreshBody.error_description ??
+          "OpenAI rejected this Codex credential. Run `codex login` again and re-copy auth.json."
+      },
       { status: 400 }
     );
   }
 
-  const accountId = decodeChatGptAccountId(refreshBody.access_token);
-  const encrypted = encryptSecret(refreshBody.refresh_token);
+  const accountId = decodeChatGptAccountId(accessToken);
+  const encrypted = encryptSecret(mintedRefreshToken);
   const service = createServiceSupabaseClient();
-  if (!service) return NextResponse.json({ error: "Supabase service role is not configured." }, { status: 500 });
+  if (!service) {
+    return NextResponse.json({ error: "Supabase service role is not configured." }, { status: 500 });
+  }
 
   const { error } = await service.from("user_llm_credentials").upsert({
     user_id: auth.user.id,
