@@ -57,7 +57,7 @@ After that admin exists, normal app reads and protected routes resolve permissio
 
 Phase 2 adds preview-only workflow planning:
 
-- `/settings` stores each user's own OpenAI credential.
+- `/settings` stores each user's own OpenAI credential. Three connect methods, all encrypted per user: ChatGPT device-code flow, **paste `~/.codex/auth.json` credential** (one-time paste, hosted app auto-refreshes; no local instance needed), or OpenAI API key.
 - `/run/new` parses commands, validates matching imported records, and saves preview runs.
 - `/run/[id]` shows the persisted per-record preview table.
 - `/api/plan/parse`, `/api/plan/validate`, `/api/runs`, and `/api/runs/[id]` are auth-protected.

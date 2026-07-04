@@ -27,6 +27,8 @@ OpenAI's Codex OAuth client (`app_EMoamEEZ73f0CkXaXp7hrann`) only accepts its **
 
 API-key connect is trivial: user pastes `sk-...`, we validate with a cheap test call, store encrypted per-user.
 
+**Third method (implemented 2026-07-04): paste Codex credential.** Because device-code login depends on a per-account ChatGPT "device authorization" setting that isn't always available, the app also accepts a pasted `~/.codex/auth.json` (or bare refresh_token) at `POST /api/settings/llm/codex/paste`. It validates by performing a real refresh, then stores the minted refresh token encrypted (kind `codex_oauth`). One-time paste; hosted app auto-refreshes thereafter — no local instance. Caveat: refresh-token rotation can make the hosted app and a local `codex` CLI invalidate each other; re-paste if prompted.
+
 ## Per-user credential storage (new table)
 
 ```sql

@@ -26,3 +26,12 @@ Applied after review of the initial Phase 2 build:
 7. Preview result now carries eligible/skipped/needs_review counts. `change_owner` validates against `KNOWN_OWNERS` in `lib/constants.ts`.
 
 VERIFY on the dev machine (could not run in the review sandbox due to a file-sync lag): `npm run typecheck && npm run lint && npm run build`.
+
+## Third credential option: paste Codex credential (2026-07-04)
+
+Added because device-code login depends on the "device authorization" toggle in a user's ChatGPT security settings, which isn't available/enabled on every account. This option matches the pre-existing local workflow.
+
+- Route: `POST /api/settings/llm/codex/paste` — accepts `{ credential }` = the pasted `~/.codex/auth.json` contents (or a bare refresh_token). Extracts the refresh token, validates it by performing a real refresh against `https://auth.openai.com/oauth/token`, stores the freshly minted refresh token encrypted (kind `codex_oauth`), and records the account id.
+- UI: Settings → OpenAI connection → ChatGPT subscription card now has "Or paste your Codex credential" (textarea + Connect from paste) beneath the device-code flow.
+- Behavior: one-time paste; the hosted app owns and auto-refreshes its own copy thereafter (no local instance, no npm run dev). Caveat: refresh-token rotation means the hosted app and a local `codex` CLI can occasionally invalidate each other — re-paste if prompted to reconnect.
+- All three connect methods (device-code, paste, API key) converge on the same encrypted `user_llm_credentials` row and the same per-user provider resolution.

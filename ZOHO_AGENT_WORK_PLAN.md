@@ -1,8 +1,13 @@
 # Zoho Workflow Agent — Master Plan & Build Guide
 
-Version 2.0 — 2026-07-03
+Version 2.1 — 2026-07-04
 Owner: Aryan Dhamani (aryan@klouddata.com), KloudData
-Status: **Phase 1 COMPLETE (2026-07-04).** App running locally with hardened auth; Supabase live with full schema/RLS/seeds. Data loaded: **315 accounts, 833 contacts (all account-linked), 179 deals (all account-linked, 161 contact-linked)** via `npm run import:masters` (re-runnable; cleaning via `imports\clean_exports.py`). Field metadata synced: Accounts 64, Contacts 73, Deals 29, Tasks 19 fields incl. picklists (`npm run import:fieldmeta`). Vercel deploy deferred until team onboarding. **Next: Phase 2 — command parser + validation + preview. LLM auth = per-user (each user connects their own ChatGPT subscription via device-code, or their own API key; encrypted per-user); see `workflows/SPEC_llm_provider_codex_subscription.md`.**
+Status: **Phases 0, 1, 2 COMPLETE (2026-07-04).**
+
+- **Phase 1:** App running locally, hardened auth (@supabase/ssr + middleware + role guards); Supabase live with full schema/RLS/seeds. Data loaded via `npm run import:masters`: **315 accounts, 833 contacts (all account-linked), 179 deals (all account-linked, 161 contact-linked)**; cleaning via `imports\clean_exports.py`. Field metadata synced (`npm run import:fieldmeta`): Accounts 64, Contacts 73, Deals 29, Tasks 19 incl. picklists.
+- **Phase 2:** Per-user LLM credentials — each user connects via any of three methods (ChatGPT device-code flow, paste `~/.codex/auth.json` credential, or OpenAI API key), AES-256-GCM encrypted, table `user_llm_credentials`. Command → parse (`/api/plan/parse`) → validate (`/api/plan/validate`) → preview → approved run (`/api/runs`) pipeline. Per-block validation with tag selection, picklist/email/opt-out/future-date checks, name-match fallback. Reviewed, fixed, `npm run build` passes. **No Zoho calls / no CRM writes yet, by design.** See `docs/PHASE_2_DECISIONS.md` + `workflows/SPEC_phase2_parser_validation_preview.md`.
+
+Vercel deploy deferred until team onboarding. **Next: manual test of Phase 2 on real data, then Phase 3 — Chrome extension + live Zoho execution (first block: `update_deal_field` / Next Step).**
 
 This document is self-contained: a new chat or developer can execute the project from this file alone. Companion files (same folder) hold deeper detail and are referenced where relevant.
 

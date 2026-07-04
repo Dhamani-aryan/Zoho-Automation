@@ -22,6 +22,7 @@ export function SettingsOpenAICard() {
   const [status, setStatus] = useState<CredentialStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [device, setDevice] = useState<DeviceStart | null>(null);
+  const [pasteValue, setPasteValue] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -95,6 +96,26 @@ export function SettingsOpenAICard() {
     }
     setDevice(null);
     setMessage("ChatGPT subscription connected.");
+    await refreshStatus();
+  }
+
+  async function savePastedCredential(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage(null);
+    const response = await fetch("/api/settings/llm/codex/paste", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: pasteValue })
+    });
+    const body = await response.json();
+    setLoading(false);
+    if (!response.ok) {
+      setMessage(body.error ?? "Could not connect pasted credential.");
+      return;
+    }
+    setPasteValue("");
+    setMessage("ChatGPT subscription connected from pasted credential.");
     await refreshStatus();
   }
 
@@ -174,6 +195,29 @@ export function SettingsOpenAICard() {
               Connect ChatGPT
             </button>
           )}
+
+          <form onSubmit={savePastedCredential} className="mt-5 border-t border-line pt-4">
+            <h4 className="text-sm font-semibold">Or paste your Codex credential</h4>
+            <p className="mt-1 text-xs text-muted">
+              Run <code>codex login</code> locally, then paste the contents of{" "}
+              <code>~/.codex/auth.json</code> (or just its refresh_token). Stored encrypted and
+              auto-refreshed — no device-auth setting needed.
+            </p>
+            <textarea
+              className="focus-ring mt-2 h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-xs"
+              value={pasteValue}
+              onChange={(event) => setPasteValue(event.target.value)}
+              placeholder='{"tokens":{"refresh_token":"...","access_token":"..."}}'
+            />
+            <button
+              type="submit"
+              disabled={loading || !pasteValue.trim()}
+              className="mt-3 inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm font-semibold disabled:opacity-60"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              Connect from paste
+            </button>
+          </form>
         </div>
 
         <form onSubmit={saveApiKey} className="rounded-md border border-line p-4">
