@@ -1,4 +1,5 @@
 import {
+  BotMessageSquare,
   ClipboardList,
   Database,
   FileUp,
@@ -14,6 +15,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { UserRole } from "@/lib/types";
 
 const navItems = [
+  { href: "/agent", label: "Agent", icon: BotMessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/records", label: "Records", icon: Database },
   { href: "/imports", label: "Imports", icon: FileUp },
