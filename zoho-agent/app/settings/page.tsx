@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
+import { SettingsExtensionCard } from "@/components/settings-extension-card";
 import { SettingsOpenAICard } from "@/components/settings-openai-card";
 
 export default function SettingsPage() {
@@ -8,9 +9,12 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="Settings"
         title="Account settings"
-        description="Connect the OpenAI credential used for your own command parsing runs."
+        description="Connect the credentials used for command parsing and local Zoho execution."
       />
-      <SettingsOpenAICard />
+      <div className="space-y-5">
+        <SettingsOpenAICard />
+        <SettingsExtensionCard />
+      </div>
     </AppShell>
   );
 }

@@ -15,3 +15,9 @@ Confirmed on 2026-07-05.
 Added `supabase/2026_phase3.sql` for extension token storage and live execution columns. The migration is additive/idempotent and includes the canonical Phase 3 `cancelled` enum value while leaving the existing `canceled` value untouched for backward compatibility.
 
 Added a pure orchestrator state module in `lib/orchestrator/state.ts` with unit coverage for run transitions, approval eligibility, claim/reclaim rules, item report transitions, stop rules, and completion/paused outcomes. Tests use Node's built-in test runner through `npm run test:orchestrator`.
+
+## Step 2: Extension Token Pairing
+
+Added `POST/GET/DELETE /api/settings/extension/token`. The plaintext token is generated as `zext_` plus 32 random bytes in hex, returned only from the generate response, and stored as a SHA-256 hash in `user_extension_tokens`. Regenerating replaces the stored hash for the current user; revoke sets status to `revoked`.
+
+Added a Settings card for the Chrome extension with token generate/rotate, one-time copy, revoke, status, label, and last-seen display. The card is local-first: it prepares for the extension handshake without requiring any Zoho call.
