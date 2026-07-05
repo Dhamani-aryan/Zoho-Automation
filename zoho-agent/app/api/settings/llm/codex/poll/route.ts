@@ -41,6 +41,23 @@ async function fetchWithTimeout(url: string, init: RequestInit) {
   }
 }
 
+// Compact, token-free snippet of an OpenAI response body for diagnostics.
+// Cap length defensively, and scrub in case OpenAI ever returns partial tokens.
+function bodySnippet(body: unknown) {
+  try {
+    const scrubbed = body && typeof body === "object" ? { ...(body as Record<string, unknown>) } : body;
+    if (scrubbed && typeof scrubbed === "object") {
+      delete (scrubbed as Record<string, unknown>).access_token;
+      delete (scrubbed as Record<string, unknown>).refresh_token;
+      delete (scrubbed as Record<string, unknown>).id_token;
+    }
+    const text = JSON.stringify(scrubbed);
+    return text && text !== "{}" ? text.slice(0, 300) : "";
+  } catch {
+    return "";
+  }
+}
+
 function upstreamFailure(error: unknown, what: string) {
   const isTimeout = error instanceof Error && error.name === "AbortError";
   return NextResponse.json(
@@ -95,11 +112,21 @@ export async function POST(request: Request) {
       codeResponse.status === 404 ||
       errorCode === "deviceauth_authorization_pending" ||
       errorCode === "slow_down";
+    if (!pending) {
+      console.error(
+        "[codex-poll] device-auth poll failed",
+        codeResponse.status,
+        bodySnippet(codeBody)
+      );
+    }
+    const detail = bodySnippet(codeBody);
     return NextResponse.json(
       {
         error: pending
           ? PENDING_MESSAGE
-          : `OpenAI device authorization failed${errorCode ? `: ${errorCode}` : ` (status ${codeResponse.status})`}.`
+          : `OpenAI device authorization failed (status ${codeResponse.status})${
+              errorCode ? `: ${errorCode}` : ""
+            }${detail ? ` — ${detail}` : ""}`
       },
       { status: pending ? 428 : 502 }
     );
@@ -138,12 +165,21 @@ export async function POST(request: Request) {
     typeof tokenBody.refresh_token !== "string" ||
     typeof tokenBody.access_token !== "string"
   ) {
+    console.error(
+      "[codex-poll] token exchange failed",
+      tokenResponse.status,
+      bodySnippet(tokenBody)
+    );
+    const summary =
+      (typeof tokenBody.error_description === "string" && tokenBody.error_description) ||
+      extractErrorCode(tokenBody) ||
+      "no error detail returned";
+    const detail = bodySnippet(tokenBody);
     return NextResponse.json(
       {
-        error:
-          (typeof tokenBody.error_description === "string" && tokenBody.error_description) ||
-          extractErrorCode(tokenBody) ||
-          "Token exchange failed."
+        error: `Token exchange failed (status ${tokenResponse.status}): ${summary}${
+          detail ? ` — ${detail}` : ""
+        }`
       },
       { status: 502 }
     );

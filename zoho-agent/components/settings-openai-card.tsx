@@ -24,7 +24,10 @@ export function SettingsOpenAICard() {
   const [device, setDevice] = useState<DeviceStart | null>(null);
   const [pasteValue, setPasteValue] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Which action is in flight ("apikey" | "start" | "poll" | "paste" | "disconnect").
+  // Per-action so e.g. "Check approval" doesn't spin the paste button too.
+  const [busy, setBusy] = useState<string | null>(null);
+  const isBusy = busy !== null;
 
   async function refreshStatus() {
     try {
@@ -83,7 +86,7 @@ export function SettingsOpenAICard() {
 
   async function saveApiKey(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoading(true);
+    setBusy("apikey");
     setMessage(null);
     try {
       const { ok, body } = await postJson("/api/settings/llm/api-key", { apiKey });
@@ -97,12 +100,12 @@ export function SettingsOpenAICard() {
     } catch (error) {
       setMessage(failureText(error, "Could not save API key."));
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   }
 
   async function startDeviceFlow() {
-    setLoading(true);
+    setBusy("start");
     setMessage(null);
     try {
       const { ok, body } = await postJson("/api/settings/llm/codex/start");
@@ -114,13 +117,13 @@ export function SettingsOpenAICard() {
     } catch (error) {
       setMessage(failureText(error, "Could not start ChatGPT connection."));
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   }
 
   async function pollDeviceFlow() {
     if (!device) return;
-    setLoading(true);
+    setBusy("poll");
     setMessage(null);
     try {
       const { ok, body } = await postJson("/api/settings/llm/codex/poll", device);
@@ -134,13 +137,13 @@ export function SettingsOpenAICard() {
     } catch (error) {
       setMessage(failureText(error, "Could not check approval. Try again."));
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   }
 
   async function savePastedCredential(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoading(true);
+    setBusy("paste");
     setMessage(null);
     try {
       const { ok, body } = await postJson("/api/settings/llm/codex/paste", {
@@ -160,12 +163,12 @@ export function SettingsOpenAICard() {
           : "Could not connect pasted credential."
       );
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   }
 
   async function disconnect() {
-    setLoading(true);
+    setBusy("disconnect");
     setMessage(null);
     try {
       const { ok, body } = await postJson("/api/settings/llm/disconnect");
@@ -178,7 +181,7 @@ export function SettingsOpenAICard() {
     } catch (error) {
       setMessage(failureText(error, "Disconnect failed."));
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   }
 
@@ -226,10 +229,10 @@ export function SettingsOpenAICard() {
               <button
                 type="button"
                 onClick={pollDeviceFlow}
-                disabled={loading}
+                disabled={isBusy}
                 className="ml-2 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-white disabled:opacity-60"
               >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+                {busy === "poll" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
                 Check approval
               </button>
             </div>
@@ -237,7 +240,7 @@ export function SettingsOpenAICard() {
             <button
               type="button"
               onClick={startDeviceFlow}
-              disabled={loading}
+              disabled={isBusy}
               className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
             >
               <PlugZap className="h-4 w-4" />
@@ -256,14 +259,14 @@ export function SettingsOpenAICard() {
               className="focus-ring mt-2 h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-xs"
               value={pasteValue}
               onChange={(event) => setPasteValue(event.target.value)}
-              placeholder='{"tokens":{"refresh_token":"...","access_token":"..."}}'
+              placeholder='{"tokens":{"refresh_token":"rt.1..."}}'
             />
             <button
               type="submit"
-              disabled={loading || !pasteValue.trim()}
+              disabled={isBusy || !pasteValue.trim()}
               className="mt-3 inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm font-semibold disabled:opacity-60"
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              {busy === "paste" ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
               Connect from paste
             </button>
           </form>
@@ -283,7 +286,7 @@ export function SettingsOpenAICard() {
           </label>
           <button
             type="submit"
-            disabled={loading || !apiKey}
+            disabled={isBusy || !apiKey}
             className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
           >
             <KeyRound className="h-4 w-4" />
@@ -297,7 +300,7 @@ export function SettingsOpenAICard() {
         <button
           type="button"
           onClick={disconnect}
-          disabled={loading || !status?.connected}
+          disabled={isBusy || !status?.connected}
           className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-50"
         >
           <Unplug className="h-4 w-4" />

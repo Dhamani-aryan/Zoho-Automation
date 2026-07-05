@@ -109,11 +109,23 @@ export async function POST(request: Request) {
   const accessToken = typeof refreshBody.access_token === "string" ? refreshBody.access_token : "";
 
   if (!refreshResponse.ok || !mintedRefreshToken || !accessToken) {
+    // Error responses carry no secrets; log + surface the full detail so a
+    // rejection is diagnosable (e.g. burned/rotated token vs account issue).
+    let detail = "";
+    try {
+      const scrubbed = { ...refreshBody };
+      delete scrubbed.access_token;
+      delete scrubbed.refresh_token;
+      detail = JSON.stringify(scrubbed).slice(0, 300);
+    } catch {
+      detail = "";
+    }
+    console.error("[codex-paste] refresh validation failed", refreshResponse.status, detail);
     return NextResponse.json(
       {
-        error:
-          refreshBody.error_description ??
-          "OpenAI rejected this Codex credential. Run `codex login` again and re-copy auth.json."
+        error: `OpenAI rejected this Codex credential (status ${refreshResponse.status})${
+          detail && detail !== "{}" ? `: ${detail}` : ""
+        }. Likely a rotated/expired refresh token — run \`codex login\` again and paste a FRESH auth.json.`
       },
       { status: 400 }
     );

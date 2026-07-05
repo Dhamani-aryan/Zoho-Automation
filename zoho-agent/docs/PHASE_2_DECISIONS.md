@@ -50,6 +50,18 @@ Hardened the poll route to match the pi reference: 15s timeouts on both OpenAI f
 
 Verified: `npx tsc --noEmit` passes. `npm run build` still needs a run on the dev machine (sandbox can't run SWC).
 
+## Follow-up: `token_exchange_user_error` diagnostics + per-action busy state (2026-07-05)
+
+After the fixes above, connect attempts surfaced OpenAI's error code `token_exchange_user_error` (device flow; paste also failing). This code comes from OpenAI's token endpoint, is not publicly documented, and the "user_error" naming suggests an account-side condition (e.g. approving with a ChatGPT account that lacks Codex access, or a rotated/burned refresh token from the earlier crashed paste attempts). Changes to diagnose from the real response instead of guessing:
+
+- `app/api/settings/llm/codex/poll/route.ts` — added `bodySnippet()`; device-poll and token-exchange failures now `console.error` the OpenAI status plus a token-scrubbed, 300-character body snippet and return the same diagnostic in the JSON error.
+- `app/api/settings/llm/codex/paste/route.ts` — refresh-validation failures now log and surface status + scrubbed body (access/refresh tokens deleted before stringify) and explicitly suggest a fresh `codex login`.
+- `components/settings-openai-card.tsx` — replaced the single shared `loading` boolean with per-action `busy` state ("apikey" | "start" | "poll" | "paste" | "disconnect"). Previously clicking "Check approval" made ALL card buttons spin (users read it as the paste flow starting). Buttons disable while any action runs but only the active one shows a spinner.
+
+Verified: `npx tsc --noEmit` passes. Next debugging step is reading the full OpenAI error body from the UI message or the `npm run dev` terminal (`[codex-poll]` / `[codex-paste]` lines).
+
+**Resolution trail (2026-07-05):** with diagnostics in place the device flow got past OpenAI entirely (`token_exchange_user_error` no longer reproduced — consistent with burned tokens/expired device session from the earlier crashed attempts) and failed at credential storage: `Could not find the table 'public.user_llm_credentials' in the schema cache`. Root cause: **Phase 2 build-order step 1 was never executed on the dev machine** — neither `LLM_CRED_ENC_KEY` in `.env.local` (fixed earlier today) nor the `supabase/2026_phase2.sql` migration (run by Aryan in the Supabase SQL editor). No code change required for this last error; the migration is idempotent.
+
 ## Third credential option: paste Codex credential (2026-07-04)
 
 Added because device-code login depends on the "device authorization" toggle in a user's ChatGPT security settings, which isn't available/enabled on every account. This option matches the pre-existing local workflow.
