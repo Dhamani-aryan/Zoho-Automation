@@ -27,6 +27,29 @@ Applied after review of the initial Phase 2 build:
 
 VERIFY on the dev machine (could not run in the review sandbox due to a file-sync lag): `npm run typecheck && npm run lint && npm run build`.
 
+## Device-code "Check approval" infinite-spinner fix (2026-07-05)
+
+Symptom: after approving on the OpenAI page, "Check approval" spun forever. Two layers:
+
+1. **Trigger:** `LLM_CRED_ENC_KEY` was missing from `.env.local` (spec step 1 was skipped), so `encryptSecret()` threw after a successful token exchange → the poll route 500'd with a non-JSON body. Fixed: key generated and added; route now catches encryption errors and returns a clear JSON message.
+2. **Spinner:** `pollDeviceFlow` in `settings-openai-card.tsx` had no try/catch/finally — a non-JSON response made `response.json()` throw before `setLoading(false)`. The same latent bug existed in `startDeviceFlow`, `saveApiKey`, and `disconnect` (only the paste handler had been fixed, commit 8027eef). Fixed: all mutating calls now go through a `postJson` helper with a 25s timeout, JSON-safe parsing, and `finally { setLoading(false) }`.
+
+Hardened the poll route to match the pi reference: 15s timeouts on both OpenAI fetches; 403/404/`deviceauth_authorization_pending`/`slow_down` → friendly "still pending" (428); 200-without-code treated as pending instead of exchanging `undefined`; OpenAI error objects normalized to strings so the UI never renders an object.
+
+**Same root cause broke the paste-credential and API-key flows** (all three routes call `encryptSecret`). Worse, the paste route performed its validation refresh — which ROTATES the refresh token at OpenAI — before crashing, so each failed paste attempt invalidated the token in the user's local `auth.json`. Fix: new `credentialEncryptionReady()` in `lib/crypto/cred.ts`; all three credential routes now verify encryption config (and, for paste, the Supabase service client) BEFORE any side-effecting upstream call. After a failed paste, users must run `codex login` again to mint a fresh token before re-pasting.
+
+**Files changed (2026-07-05, all changes together):**
+
+- `.env.local` — added the missing `LLM_CRED_ENC_KEY` (generated 32-byte base64; not committed).
+- `lib/crypto/cred.ts` — added `credentialEncryptionReady()`: config check without encrypting; used by routes to fail fast before side-effecting calls.
+- `app/api/settings/llm/codex/poll/route.ts` — rewritten: early config check; 15s `AbortController` timeouts on both OpenAI fetches; pending detection (403/404/`deviceauth_authorization_pending`/`slow_down` → 428 with friendly message); 200-without-code = pending; `encryptSecret` wrapped; error objects normalized to strings via `extractErrorCode()`.
+- `app/api/settings/llm/codex/paste/route.ts` — config + service-client checks moved BEFORE the token-rotating validation refresh; `encryptSecret`/service checks deduplicated after the move.
+- `app/api/settings/llm/api-key/route.ts` — early config check before the OpenAI validation call.
+- `components/settings-openai-card.tsx` — all mutating handlers (`saveApiKey`, `startDeviceFlow`, `pollDeviceFlow`, `savePastedCredential`, `disconnect`) refactored onto a shared `postJson()` helper: 25s timeout, JSON-safe parsing (`.json().catch(() => ({}))`), `errorText()`/`failureText()` string-safe messages, `finally { setLoading(false) }`. `refreshStatus()` wrapped in try/catch.
+- Invariant for future work: **no credential route may call OpenAI (or any side-effecting upstream) before `credentialEncryptionReady()` and the Supabase service client are confirmed**, and no client handler may await a fetch outside try/finally that resets its loading state.
+
+Verified: `npx tsc --noEmit` passes. `npm run build` still needs a run on the dev machine (sandbox can't run SWC).
+
 ## Third credential option: paste Codex credential (2026-07-04)
 
 Added because device-code login depends on the "device authorization" toggle in a user's ChatGPT security settings, which isn't available/enabled on every account. This option matches the pre-existing local workflow.

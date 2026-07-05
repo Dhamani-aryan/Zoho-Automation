@@ -23,6 +23,24 @@ function getCredentialKey() {
   return key;
 }
 
+/**
+ * Check encryption config WITHOUT encrypting anything. Credential routes must
+ * call this BEFORE any side-effecting upstream call (e.g. the paste route's
+ * validation refresh rotates the user's refresh token at OpenAI) so a server
+ * misconfiguration can never consume a credential and then fail to store it.
+ */
+export function credentialEncryptionReady(): { ok: true } | { ok: false; error: string } {
+  try {
+    getCredentialKey();
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Credential encryption key is not configured."
+    };
+  }
+}
+
 export function encryptSecret(secret: string): EncryptedSecret {
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, getCredentialKey(), iv);

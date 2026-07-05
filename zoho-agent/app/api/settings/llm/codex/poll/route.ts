@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { bufferToBytea } from "@/lib/crypto/bytea";
-import { encryptSecret } from "@/lib/crypto/cred";
+import { credentialEncryptionReady, encryptSecret } from "@/lib/crypto/cred";
 import { requireApiRole } from "@/lib/auth/guards";
 import {
   CODEX_CLIENT_ID,
@@ -11,6 +11,47 @@ import {
   tokenExpiryIso
 } from "@/lib/llm/codex-oauth";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+
+const OPENAI_TIMEOUT_MS = 15000;
+const PENDING_MESSAGE =
+  "Approval not confirmed yet. Finish approving in the OpenAI tab, then check again.";
+
+// OpenAI may return `error` as a string OR as an object like { code, message }.
+// Always reduce it to a string so the client never renders an object.
+function extractErrorCode(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error === "string" && error) return error;
+  if (error && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code) return code;
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+  return null;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function upstreamFailure(error: unknown, what: string) {
+  const isTimeout = error instanceof Error && error.name === "AbortError";
+  return NextResponse.json(
+    {
+      error: isTimeout
+        ? `OpenAI did not respond to the ${what} within ${OPENAI_TIMEOUT_MS / 1000}s. Check again in a moment.`
+        : `Could not reach OpenAI for the ${what}. Check your connection and try again.`
+    },
+    { status: 504 }
+  );
+}
 
 export async function POST(request: Request) {
   const auth = await requireApiRole(["admin", "operator", "reviewer"]);
@@ -23,35 +64,107 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Device auth id and user code are required." }, { status: 400 });
   }
 
-  const codeResponse = await fetch(CODEX_DEVICE_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode })
-  });
+  // Fail on server misconfiguration BEFORE consuming the one-time
+  // authorization code in the exchange below.
+  const encReady = credentialEncryptionReady();
+  if (!encReady.ok) {
+    return NextResponse.json(
+      { error: `Server configuration error: ${encReady.error}` },
+      { status: 500 }
+    );
+  }
+
+  // 1. Poll the device-auth token endpoint (mirrors pi's pollOpenAICodexDeviceAuth).
+  let codeResponse: Response;
+  try {
+    codeResponse = await fetchWithTimeout(CODEX_DEVICE_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode })
+    });
+  } catch (error) {
+    return upstreamFailure(error, "approval check");
+  }
   const codeBody = await codeResponse.json().catch(() => ({}));
 
   if (!codeResponse.ok) {
-    return NextResponse.json({ error: codeBody.error ?? "Authorization is still pending." }, { status: 400 });
+    const errorCode = extractErrorCode(codeBody);
+    // Reference behavior: 403/404 (or an explicit pending/slow_down code) = not approved yet.
+    const pending =
+      codeResponse.status === 403 ||
+      codeResponse.status === 404 ||
+      errorCode === "deviceauth_authorization_pending" ||
+      errorCode === "slow_down";
+    return NextResponse.json(
+      {
+        error: pending
+          ? PENDING_MESSAGE
+          : `OpenAI device authorization failed${errorCode ? `: ${errorCode}` : ` (status ${codeResponse.status})`}.`
+      },
+      { status: pending ? 428 : 502 }
+    );
   }
 
-  const tokenResponse = await fetch(OPENAI_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code: codeBody.authorization_code,
-      code_verifier: codeBody.code_verifier,
-      client_id: CODEX_CLIENT_ID,
-      redirect_uri: CODEX_DEVICE_REDIRECT_URI
-    })
-  });
+  const authorizationCode =
+    typeof codeBody.authorization_code === "string" ? codeBody.authorization_code : "";
+  const codeVerifier = typeof codeBody.code_verifier === "string" ? codeBody.code_verifier : "";
+  if (!authorizationCode || !codeVerifier) {
+    // 200 without the code payload — treat as still pending rather than
+    // exchanging literal "undefined" values.
+    return NextResponse.json({ error: PENDING_MESSAGE }, { status: 428 });
+  }
+
+  // 2. Exchange the authorization code for tokens.
+  let tokenResponse: Response;
+  try {
+    tokenResponse = await fetchWithTimeout(OPENAI_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: authorizationCode,
+        code_verifier: codeVerifier,
+        client_id: CODEX_CLIENT_ID,
+        redirect_uri: CODEX_DEVICE_REDIRECT_URI
+      })
+    });
+  } catch (error) {
+    return upstreamFailure(error, "token exchange");
+  }
   const tokenBody = await tokenResponse.json().catch(() => ({}));
 
-  if (!tokenResponse.ok || !tokenBody.refresh_token || !tokenBody.access_token) {
-    return NextResponse.json({ error: tokenBody.error_description ?? "Token exchange failed." }, { status: 502 });
+  if (
+    !tokenResponse.ok ||
+    typeof tokenBody.refresh_token !== "string" ||
+    typeof tokenBody.access_token !== "string"
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          (typeof tokenBody.error_description === "string" && tokenBody.error_description) ||
+          extractErrorCode(tokenBody) ||
+          "Token exchange failed."
+      },
+      { status: 502 }
+    );
   }
 
-  const encrypted = encryptSecret(tokenBody.refresh_token);
+  // 3. Encrypt and store the credential.
+  let encrypted: ReturnType<typeof encryptSecret>;
+  try {
+    encrypted = encryptSecret(tokenBody.refresh_token);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? `Server configuration error: ${error.message}`
+            : "Server configuration error: credential encryption failed."
+      },
+      { status: 500 }
+    );
+  }
+
   const service = createServiceSupabaseClient();
   if (!service) return NextResponse.json({ error: "Supabase service role is not configured." }, { status: 500 });
 

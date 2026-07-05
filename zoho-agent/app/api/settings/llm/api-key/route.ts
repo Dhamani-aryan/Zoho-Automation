@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { bufferToBytea } from "@/lib/crypto/bytea";
-import { encryptSecret } from "@/lib/crypto/cred";
+import { credentialEncryptionReady, encryptSecret } from "@/lib/crypto/cred";
 import { requireApiRole } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
@@ -16,6 +16,14 @@ export async function POST(request: Request) {
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
   if (!apiKey.startsWith("sk-")) {
     return NextResponse.json({ error: "Paste a valid OpenAI API key beginning with sk-." }, { status: 400 });
+  }
+
+  const encReady = credentialEncryptionReady();
+  if (!encReady.ok) {
+    return NextResponse.json(
+      { error: `Server configuration error: ${encReady.error}` },
+      { status: 500 }
+    );
   }
 
   const validation = await fetch("https://api.openai.com/v1/models", {

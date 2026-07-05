@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { bufferToBytea } from "@/lib/crypto/bytea";
-import { encryptSecret } from "@/lib/crypto/cred";
+import { credentialEncryptionReady, encryptSecret } from "@/lib/crypto/cred";
 import { requireApiRole } from "@/lib/auth/guards";
 import {
   CODEX_CLIENT_ID,
@@ -73,6 +73,21 @@ export async function POST(request: Request) {
     );
   }
 
+  // Fail on server misconfiguration BEFORE the validation refresh below —
+  // that refresh rotates the user's refresh token at OpenAI, so crashing
+  // after it would burn the pasted credential without storing anything.
+  const encReady = credentialEncryptionReady();
+  if (!encReady.ok) {
+    return NextResponse.json(
+      { error: `Server configuration error: ${encReady.error}` },
+      { status: 500 }
+    );
+  }
+  const service = createServiceSupabaseClient();
+  if (!service) {
+    return NextResponse.json({ error: "Supabase service role is not configured." }, { status: 500 });
+  }
+
   let refreshResult: Awaited<ReturnType<typeof refreshCodexCredential>>;
   try {
     refreshResult = await refreshCodexCredential(refreshToken);
@@ -106,10 +121,6 @@ export async function POST(request: Request) {
 
   const accountId = decodeChatGptAccountId(accessToken);
   const encrypted = encryptSecret(mintedRefreshToken);
-  const service = createServiceSupabaseClient();
-  if (!service) {
-    return NextResponse.json({ error: "Supabase service role is not configured." }, { status: 500 });
-  }
 
   const { error } = await service.from("user_llm_credentials").upsert({
     user_id: auth.user.id,

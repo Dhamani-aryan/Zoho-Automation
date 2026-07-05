@@ -27,8 +27,43 @@ export function SettingsOpenAICard() {
   const [loading, setLoading] = useState(false);
 
   async function refreshStatus() {
-    const response = await fetch("/api/settings/llm/status");
-    if (response.ok) setStatus(await response.json());
+    try {
+      const response = await fetch("/api/settings/llm/status");
+      if (response.ok) setStatus(await response.json());
+    } catch {
+      // Non-fatal: keep the last known status.
+    }
+  }
+
+  // Every mutating call goes through this helper so a network failure or a
+  // non-JSON error response can never strand the card in a loading state.
+  async function postJson(url: string, payload?: unknown, timeoutMs = 25000) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        signal: controller.signal,
+        ...(payload === undefined
+          ? {}
+          : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      });
+      const body: unknown = await response.json().catch(() => ({}));
+      return { ok: response.ok, body };
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function errorText(body: unknown, fallback: string) {
+    const error = body && typeof body === "object" ? (body as { error?: unknown }).error : undefined;
+    return typeof error === "string" && error ? error : fallback;
+  }
+
+  function failureText(error: unknown, fallback: string) {
+    return error instanceof Error && error.name === "AbortError"
+      ? "The request timed out. Try again in a moment."
+      : fallback;
   }
 
   useEffect(() => {
@@ -50,73 +85,69 @@ export function SettingsOpenAICard() {
     event.preventDefault();
     setLoading(true);
     setMessage(null);
-    const response = await fetch("/api/settings/llm/api-key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey })
-    });
-    const body = await response.json();
-    setLoading(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Could not save API key.");
-      return;
+    try {
+      const { ok, body } = await postJson("/api/settings/llm/api-key", { apiKey });
+      if (!ok) {
+        setMessage(errorText(body, "Could not save API key."));
+        return;
+      }
+      setApiKey("");
+      setMessage("API key connected.");
+      await refreshStatus();
+    } catch (error) {
+      setMessage(failureText(error, "Could not save API key."));
+    } finally {
+      setLoading(false);
     }
-    setApiKey("");
-    setMessage("API key connected.");
-    await refreshStatus();
   }
 
   async function startDeviceFlow() {
     setLoading(true);
     setMessage(null);
-    const response = await fetch("/api/settings/llm/codex/start", { method: "POST" });
-    const body = await response.json();
-    setLoading(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Could not start ChatGPT connection.");
-      return;
+    try {
+      const { ok, body } = await postJson("/api/settings/llm/codex/start");
+      if (!ok) {
+        setMessage(errorText(body, "Could not start ChatGPT connection."));
+        return;
+      }
+      setDevice(body as DeviceStart);
+    } catch (error) {
+      setMessage(failureText(error, "Could not start ChatGPT connection."));
+    } finally {
+      setLoading(false);
     }
-    setDevice(body);
   }
 
   async function pollDeviceFlow() {
     if (!device) return;
     setLoading(true);
     setMessage(null);
-    const response = await fetch("/api/settings/llm/codex/poll", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(device)
-    });
-    const body = await response.json();
-    setLoading(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Still waiting for approval.");
-      return;
+    try {
+      const { ok, body } = await postJson("/api/settings/llm/codex/poll", device);
+      if (!ok) {
+        setMessage(errorText(body, "Still waiting for approval."));
+        return;
+      }
+      setDevice(null);
+      setMessage("ChatGPT subscription connected.");
+      await refreshStatus();
+    } catch (error) {
+      setMessage(failureText(error, "Could not check approval. Try again."));
+    } finally {
+      setLoading(false);
     }
-    setDevice(null);
-    setMessage("ChatGPT subscription connected.");
-    await refreshStatus();
   }
 
   async function savePastedCredential(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     setMessage(null);
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 25000);
-
     try {
-      const response = await fetch("/api/settings/llm/codex/paste", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({ credential: pasteValue })
+      const { ok, body } = await postJson("/api/settings/llm/codex/paste", {
+        credential: pasteValue
       });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setMessage(body.error ?? "Could not connect pasted credential.");
+      if (!ok) {
+        setMessage(errorText(body, "Could not connect pasted credential."));
         return;
       }
       setPasteValue("");
@@ -129,7 +160,6 @@ export function SettingsOpenAICard() {
           : "Could not connect pasted credential."
       );
     } finally {
-      window.clearTimeout(timeout);
       setLoading(false);
     }
   }
@@ -137,15 +167,19 @@ export function SettingsOpenAICard() {
   async function disconnect() {
     setLoading(true);
     setMessage(null);
-    const response = await fetch("/api/settings/llm/disconnect", { method: "POST" });
-    const body = await response.json();
-    setLoading(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Disconnect failed.");
-      return;
+    try {
+      const { ok, body } = await postJson("/api/settings/llm/disconnect");
+      if (!ok) {
+        setMessage(errorText(body, "Disconnect failed."));
+        return;
+      }
+      setMessage("Disconnected.");
+      await refreshStatus();
+    } catch (error) {
+      setMessage(failureText(error, "Disconnect failed."));
+    } finally {
+      setLoading(false);
     }
-    setMessage("Disconnected.");
-    await refreshStatus();
   }
 
   return (
