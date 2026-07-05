@@ -27,3 +27,9 @@ Added a Settings card for the Chrome extension with token generate/rotate, one-t
 Added token-authenticated `/api/ext/handshake`, `/api/ext/claim`, and `/api/ext/report`. The shared auth helper accepts only `Authorization: Bearer zext_...`, hashes the token, resolves an active `user_extension_tokens` row plus active `public.users` profile, updates `last_seen_at`, and only then returns the service-role client. Extension routes never trust client-sent user ids.
 
 `claim` serves one item at a time for runs owned by the token user and only when the run is `approved` or `running`. It starts approved runs on first claim and supports stale running-item reclaim after five minutes with the Step 1 attempt cap. `report` accepts terminal item statuses, writes before/after/evidence/verified fields, recomputes totals, applies stop rules, pauses/completes runs, and writes audit events.
+
+## Step 4: Run Controls and Live Detail
+
+Added server-enforced `approve`, `pause`, `resume`, and `cancel` routes under `/api/runs/[id]`, plus CSV export at `/api/runs/[id]/report.csv`. Operators can control only their own runs; admins can control any run; reviewers cannot mutate. Approval is limited to write runs in `preview_ready`, and admin-only block approval requires an admin.
+
+The run detail API now returns live execution columns and JSON errors from a try/catch wrapper. The run detail page now uses a client component that polls while approved/running/paused, shows approve/pause/resume/cancel controls, displays live totals and `stop_reason`, and exposes CSV download after completion.

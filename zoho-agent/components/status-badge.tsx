@@ -10,6 +10,8 @@ const statusClasses: Record<string, string> = {
   draft: "border-line bg-white text-muted",
   paused: "border-amber-200 bg-amber-50 text-amber-800",
   failed: "border-red-200 bg-red-50 text-red-700",
+  cancelled: "border-zinc-200 bg-zinc-50 text-zinc-700",
+  canceled: "border-zinc-200 bg-zinc-50 text-zinc-700",
   missing: "border-red-200 bg-red-50 text-red-700",
   disconnected: "border-red-200 bg-red-50 text-red-700",
   skipped: "border-zinc-200 bg-zinc-50 text-zinc-700",
