@@ -33,3 +33,9 @@ Added token-authenticated `/api/ext/handshake`, `/api/ext/claim`, and `/api/ext/
 Added server-enforced `approve`, `pause`, `resume`, and `cancel` routes under `/api/runs/[id]`, plus CSV export at `/api/runs/[id]/report.csv`. Operators can control only their own runs; admins can control any run; reviewers cannot mutate. Approval is limited to write runs in `preview_ready`, and admin-only block approval requires an admin.
 
 The run detail API now returns live execution columns and JSON errors from a try/catch wrapper. The run detail page now uses a client component that polls while approved/running/paused, shows approve/pause/resume/cancel controls, displays live totals and `stop_reason`, and exposes CSV download after completion.
+
+## Step 5: Extension Skeleton
+
+Added the MV3 extension under `extension/` with `manifest.json`, options page, background worker, content-script ping stub, shared storage/API helpers, and `extension/build.mjs`. The extension defaults to `http://localhost:3000`, stores the user-pasted extension token in `chrome.storage.local`, and remains disabled until the user enables dry polling.
+
+The background worker performs handshake, claims one item from the first approved/running run, and immediately reports it as `skipped` with dry-run evidence. This proves backend wiring without touching Zoho. The content script does not call Zoho yet. `esbuild` is pinned exactly and `npm run build:extension` produces `extension/dist`.

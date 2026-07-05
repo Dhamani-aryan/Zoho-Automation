@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:orchestrator": "tsc -p tsconfig.orchestrator-test.json && node --test .tmp/orchestrator-test/tests/orchestrator-state.test.js",
+    "build:extension": "node extension/build.mjs",
     "import:masters": "node scripts/import-masters.mjs",
     "import:fieldmeta": "node scripts/import-fieldmeta.mjs"
   },
@@ -27,6 +28,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "autoprefixer": "10.5.2",
+    "esbuild": "0.28.1",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.10",
     "postcss": "8.5.16",

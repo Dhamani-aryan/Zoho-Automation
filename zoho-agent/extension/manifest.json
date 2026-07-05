@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Zoho Workflow Agent",
+  "version": "0.1.0",
+  "description": "Claims approved Zoho workflow runs from the local Zoho Agent app.",
+  "permissions": ["alarms", "storage", "tabs"],
+  "host_permissions": ["https://crm.zoho.com/*", "http://localhost:3000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://crm.zoho.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Zoho Workflow Agent"
+  }
+}
