@@ -1,11 +1,8 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
+import { hashExtensionToken } from "@/lib/extension/auth";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
-
-function tokenHash(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
 
 function newExtensionToken() {
   return `zext_${randomBytes(32).toString("hex")}`;
@@ -54,7 +51,7 @@ export async function POST(request: Request) {
       .upsert(
         {
           user_id: auth.user.id,
-          token_hash: tokenHash(token),
+          token_hash: hashExtensionToken(token),
           label,
           status: "active",
           created_at: new Date().toISOString(),
