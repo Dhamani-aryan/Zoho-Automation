@@ -28,7 +28,6 @@ Work = small toggleable "action blocks" (create_task, complete_task, update_deal
 Codex (the coding agent) writes the code locally; the chat writes specs, reviews Codex's output for quality/"slop," fixes issues, and keeps docs updated. Git commits must be authored as Aryan Dhamani (his personal email `dhamaniaryan4@gmail.com` is the one in use — confirmed 2026-07-05) with NO AI co-author. Note: the repo's `.git` is on a Windows drive, so git often must be run in Aryan's PowerShell, not the agent sandbox.
 
 ## Immediate next steps
-1. Aryan is mid-testing Phase 2 (connect a credential in Settings, run sample commands, confirm previews are correct).
-2. Then **Phase 3: the Chrome extension + live Zoho execution**, starting with the safest block (`update_deal_field` on Next Step) — verify each action, write run reports. Write the Phase 3 build spec the same detailed way the Phase 2 spec was written.
+**PIVOT (2026-07-05):** Aryan decided to migrate the primary UX to a tool-calling agent (chat; tools for DB search, live Zoho reads through the extension, DB sync, approval-gated writes). The complete migration plan for Codex is `workflows/SPEC_v2_tool_agent_migration.md` — read it before anything else; work proceeds in its Phases A–E, logged to `zoho-agent/docs/V2_DECISIONS.md`. The batch run pipeline and the Phase 3 extension work (steps 1–5, built + reviewed) are retained and reused. CRM writes keep the human approval gate.
 
 Confirm you've read the files above before proceeding.

@@ -104,6 +104,7 @@ export function buildPlanSystemPrompt(catalog: PromptCatalog) {
     'add_tags / remove_tags: { tag_names: ["..."] }',
     "create_task: { subject, due_date } (due_date YYYY-MM-DD)",
     "complete_task: { subject }",
+    'read_fields: { field_api_names: ["..."] } — read-only; use with run_kind="read" for "what is / show / check <field>" questions about specific records.',
     "schedule_email: { subject, schedule_date, schedule_time, to_email? } (date YYYY-MM-DD, time HH:MM; to_email defaults to the contact's own email)",
     "",
     "Action blocks:",

@@ -92,6 +92,15 @@ Follow-up: a later parse hit the Zod gate ("The model returned malformed plan JS
 
 Follow-up 2: with detail visible, the failure was `"filter": {}` — the model copies the shape example's `filter` key even in tag mode, and empty-object members failed as "expected string, received undefined". Schema now normalizes empty/partial/nulled `filter` to undefined (preprocess in `recordSelectorSchema`), same null→undefined guard on `tag`/`values`, and the prompt adds: omit optional keys entirely when unused, never emit empty objects or null.
 
+## Read queries + smarter deal resolution (2026-07-05)
+
+Test command "Check the duraco tapes deal and tell me the next step" exposed two gaps (the parser behaved correctly — it refused to invent a block and said so in missing_info):
+
+1. **Deals weren't findable by company name.** Deals are named "{Account} | SAP Cloud ERP" but users type company names. `resolveRecords` (names/file modes) now matches against the deal name AND its account name (from `raw_data` Account_Name variants), with a new word-level token fallback (each query token ≥3 chars prefix-matches a name word in either direction, so "duraco tapes" ↔ "Duraco Tape & Label | SAP Cloud ERP"). Unmatched values now include up to 3 near-miss suggestions in the needs_review message; ambiguous values list their matches.
+2. **No read block existed** — "what is <field> on <record>" had no catalog entry (this would also have failed acceptance test 6, "list IT contacts"-style reads). Added `read_fields`: seed SQL in `supabase/2026_read_fields_seed.sql` (RUN THIS in the Supabase SQL editor), mapper in `lib/plan/validation.ts` (reads values from the synced local copy, labeled "as of last import"), prompt config-key line in `system-prompt.ts`. Read runs skip the approval gate per Phase 1 decision 11. Live Zoho reads arrive with the Phase 3 extension.
+
+Design note (recorded after discussion with Aryan): the agent stays parse-then-validate rather than tool-calling. Rationale: the preview/approve gate requires the full action set to be fixed before approval; deterministic execution is what makes approval meaningful; batch execution with a model in the loop is slower, costlier, and nondeterministic. Tool-calling remains a v1.1 candidate strictly BEFORE the approval line (e.g. DB-informed disambiguation during parse). Resolution misses like this one are fixed by better deterministic matching, not by an agent loop.
+
 **MILESTONE (2026-07-05): first correct end-to-end parse + validate on real data.** "Set Next Step to \"2nd Email\" for the KD Blitz deals" → clean plan (`mode:"tag"`, `tag:"KD Blitz"`, `update_deal_field {field_api_name:"Next_Step", value:"2nd Email"}`) → Validate resolved the correct tagged deals. Acceptance test 1 of ~10 passed; remaining tests per the Phase 2 done-when list (§10 of the Phase 2 spec).
 
 ## Third credential option: paste Codex credential (2026-07-04)

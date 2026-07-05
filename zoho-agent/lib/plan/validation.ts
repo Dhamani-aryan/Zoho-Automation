@@ -164,24 +164,73 @@ type ResolveOutput = {
   warnings: string[];
   unmatched: string[]; // selector values that matched no record
   ambiguous: string[]; // selector values that matched more than one record
+  suggestions: Record<string, string[]>; // unmatched value -> near-miss record names
 };
+
+// Deals are named "{Account} | SAP Cloud ERP", but users think in company
+// names — so deals are searchable by their account name too (the reference
+// doc calls account-based search the best deal resolver).
+function accountNameOf(record: CrmRecord): string {
+  for (const key of ["Account_Name", "Account Name", "account_name", "ACCOUNTNAME"]) {
+    const v = record.raw[key];
+    if (typeof v === "string" && v.trim()) return v;
+    if (v && typeof v === "object" && typeof (v as { name?: unknown }).name === "string") {
+      return (v as { name: string }).name;
+    }
+  }
+  return "";
+}
+
+function searchTexts(moduleKey: ModuleKey, record: CrmRecord): string[] {
+  const texts = [record.name];
+  if (moduleKey === "deals") {
+    const account = accountNameOf(record);
+    if (account) texts.push(account);
+  }
+  return texts.map(normalize).filter(Boolean);
+}
+
+// Word-level match: every query token (≥3 chars) must prefix-match some word
+// of the text in either direction ("tapes" ↔ "tape", "duraco" ↔ "duraco").
+function tokensOf(value: string) {
+  return value.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+}
+
+function tokenMatch(query: string, text: string): boolean {
+  const queryTokens = tokensOf(query);
+  if (queryTokens.length === 0) return false;
+  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
+  return queryTokens.every((qt) =>
+    words.some((w) => w.startsWith(qt) || (w.length >= 3 && qt.startsWith(w)))
+  );
+}
+
+function anyTokenMatch(query: string, text: string): boolean {
+  const queryTokens = tokensOf(query);
+  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
+  return queryTokens.some((qt) =>
+    words.some((w) => w.startsWith(qt) || (w.length >= 3 && qt.startsWith(w)))
+  );
+}
 
 function resolveRecords(records: CrmRecord[], plan: ParsedPlan): ResolveOutput {
   const selector = plan.record_selector;
+  const moduleKey = selector.module as ModuleKey;
   const values = (selector.values ?? []).filter(Boolean);
   const warnings: string[] = [];
   const unmatched: string[] = [];
   const ambiguous: string[] = [];
+  const suggestions: Record<string, string[]> = {};
 
   if (selector.mode === "tag") {
     const tag = normalize(selector.tag);
     if (!tag) {
       warnings.push("Tag selector had no tag value.");
-      return { records: [], warnings, unmatched, ambiguous };
+      return { records: [], warnings, unmatched, ambiguous, suggestions };
     }
     const matched = records.filter((r) => tagsOf(r).some((t) => normalize(t) === tag || normalize(t).includes(tag)));
     if (matched.length === 0) warnings.push(`No records carry the tag "${selector.tag}".`);
-    return { records: matched, warnings, unmatched, ambiguous };
+    return { records: matched, warnings, unmatched, ambiguous, suggestions };
   }
 
   if (selector.mode === "ids") {
@@ -192,34 +241,55 @@ function resolveRecords(records: CrmRecord[], plan: ParsedPlan): ResolveOutput {
       if (hits.length === 0) unmatched.push(value);
       else out.push(...hits);
     }
-    return { records: out, warnings, unmatched, ambiguous };
+    return { records: out, warnings, unmatched, ambiguous, suggestions };
   }
 
   if (selector.mode === "names" || selector.mode === "file") {
     const out: CrmRecord[] = [];
     for (const value of values) {
       const n = normalize(value);
-      // exact by id/zoho id/name first
+      // exact by id/zoho id/searchable name (deal name OR its account name)
       let hits = records.filter(
-        (r) => normalize(r.name) === n || normalize(r.zoho_id) === n || normalize(r.id) === n
+        (r) =>
+          normalize(r.zoho_id) === n ||
+          normalize(r.id) === n ||
+          searchTexts(moduleKey, r).some((t) => t === n)
       );
-      // fallback: starts_with on name (the proven CRM fallback)
-      if (hits.length === 0) hits = records.filter((r) => normalize(r.name).startsWith(n));
+      // fallback: starts_with (the proven CRM fallback)
+      if (hits.length === 0) {
+        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => t.startsWith(n)));
+      }
       // fallback: contains
-      if (hits.length === 0) hits = records.filter((r) => normalize(r.name).includes(n) && n.length >= 3);
+      if (hits.length === 0 && n.length >= 3) {
+        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => t.includes(n)));
+      }
+      // fallback: word-level token match ("duraco tapes" ↔ "Duraco Tape & Label | SAP Cloud ERP")
+      if (hits.length === 0) {
+        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => tokenMatch(n, t)));
+      }
 
-      if (hits.length === 0) unmatched.push(value);
-      else if (hits.length > 1) ambiguous.push(value);
-      else out.push(hits[0]);
+      if (hits.length === 0) {
+        unmatched.push(value);
+        const near = records
+          .filter((r) => searchTexts(moduleKey, r).some((t) => anyTokenMatch(n, t)))
+          .slice(0, 3)
+          .map((r) => r.name);
+        if (near.length > 0) suggestions[value] = near;
+      } else if (hits.length > 1) {
+        ambiguous.push(value);
+        suggestions[value] = hits.slice(0, 3).map((r) => r.name);
+      } else {
+        out.push(hits[0]);
+      }
     }
-    return { records: out, warnings, unmatched, ambiguous };
+    return { records: out, warnings, unmatched, ambiguous, suggestions };
   }
 
   // filter mode
   const filter = selector.filter;
   if (!filter) {
     warnings.push("Filter selector was missing filter details.");
-    return { records: [], warnings, unmatched, ambiguous };
+    return { records: [], warnings, unmatched, ambiguous, suggestions };
   }
   const column = fieldToColumn(filter.field);
   const filterValue = normalize(filter.value);
@@ -229,7 +299,7 @@ function resolveRecords(records: CrmRecord[], plan: ParsedPlan): ResolveOutput {
     if (filter.op === "starts_with") return rv.startsWith(filterValue);
     return rv.includes(filterValue);
   });
-  return { records: matched, warnings, unmatched, ambiguous };
+  return { records: matched, warnings, unmatched, ambiguous, suggestions };
 }
 
 type BlockCtx = {
@@ -339,6 +409,31 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
     };
   }
 
+  // Read-only block: answers "what is / show / check <field>" questions from
+  // the synced local copy of the record. No Zoho call, no approval gate.
+  if (slug === "read_fields") {
+    const rawList = Array.isArray(cfg.field_api_names)
+      ? cfg.field_api_names
+      : cfg.field_api_name != null
+        ? [cfg.field_api_name]
+        : [];
+    const fields = rawList.filter((f): f is string => typeof f === "string" && f.trim() !== "");
+    if (fields.length === 0) return review(record, "No fields specified to read.");
+
+    const values: Record<string, unknown> = {};
+    for (const field of fields) {
+      const column = fieldToColumn(field);
+      values[field] = record.data[column] ?? record.raw[column] ?? null;
+    }
+    return {
+      status: "pending",
+      action: `${fields.map((f) => `${f} = ${JSON.stringify(values[f] ?? null)}`).join(", ")} — read from local copy (as of last import)`,
+      before_data: values,
+      after_data: {},
+      error_message: null
+    };
+  }
+
   if (slug === "schedule_email") {
     // Recipient email: prefer the record's own email (contacts), else config.
     const email =
@@ -411,10 +506,26 @@ export async function validatePlanForPreview({
 
   // Report selector values that could not be resolved so nothing vanishes silently.
   for (const value of resolved.unmatched) {
-    items.push(reviewItem(rowNumber++, moduleKey, value, `No ${moduleKey} record matched "${value}".`));
+    const near = resolved.suggestions[value];
+    items.push(
+      reviewItem(
+        rowNumber++,
+        moduleKey,
+        value,
+        `No ${moduleKey} record matched "${value}".${near?.length ? ` Closest: ${near.join("; ")}.` : ""}`
+      )
+    );
   }
   for (const value of resolved.ambiguous) {
-    items.push(reviewItem(rowNumber++, moduleKey, value, `"${value}" matched multiple ${moduleKey} — refine to one.`));
+    const options = resolved.suggestions[value];
+    items.push(
+      reviewItem(
+        rowNumber++,
+        moduleKey,
+        value,
+        `"${value}" matched multiple ${moduleKey} — refine to one.${options?.length ? ` Matches: ${options.join("; ")}.` : ""}`
+      )
+    );
   }
 
   for (const record of resolved.records) {
