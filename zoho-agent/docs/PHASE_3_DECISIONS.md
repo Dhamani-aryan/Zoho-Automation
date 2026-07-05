@@ -39,3 +39,16 @@ The run detail API now returns live execution columns and JSON errors from a try
 Added the MV3 extension under `extension/` with `manifest.json`, options page, background worker, content-script ping stub, shared storage/API helpers, and `extension/build.mjs`. The extension defaults to `http://localhost:3000`, stores the user-pasted extension token in `chrome.storage.local`, and remains disabled until the user enables dry polling.
 
 The background worker performs handshake, claims one item from the first approved/running run, and immediately reports it as `skipped` with dry-run evidence. This proves backend wiring without touching Zoho. The content script does not call Zoho yet. `esbuild` is pinned exactly and `npm run build:extension` produces `extension/dist`.
+
+## Review of steps 1–5 (2026-07-05, chat review)
+
+Overall verdict: solid — spec-conformant, invariants respected (JSON errors with `[tag]` logging, timeouts, token hashed, server re-checks everything, same-user enforcement), state machine pure + 7/7 tests pass, committed tree typechecks clean. Two defects found and fixed in `app/api/ext/claim/route.ts`:
+
+1. **Claim was not atomic.** The item UPDATE had no status/attempts guard, so two concurrent claims could both take the same item → double execution. Now guarded (`.eq status/attempts`, `.maybeSingle()`); zero rows = lost race → `{item:null, lost_race:true}` and the caller re-polls.
+2. **Stranded runs.** A `running` item that exhausted `MAX_ITEM_ATTEMPTS` and went stale could never be reclaimed (claim filters `attempts < MAX`), so the run stayed `running` forever. Claim's no-claimable branch now sweeps such items to `failed` and finalizes the run (status `completed` + recomputed totals) when nothing active remains.
+
+Accepted as documented: the `cancelled` (new) vs `canceled` (pre-existing, unused) enum duality — functional, but don't mix them; all Phase 3 code uses `cancelled`.
+
+Caution for testing: the dry-poll loop CONSUMES items (reports them `skipped`) — only enable it against a throwaway test run, never a real approved run.
+
+Commit identity: Aryan confirmed (2026-07-05) that `dhamaniaryan4@gmail.com` is his intended git author email; the HANDOFF working-method note has been updated accordingly. No AI co-author remains the rule.

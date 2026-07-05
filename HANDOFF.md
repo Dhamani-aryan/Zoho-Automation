@@ -25,7 +25,7 @@ Work = small toggleable "action blocks" (create_task, complete_task, update_deal
 - **Phase 2:** command → parse (`/api/plan/parse`) → validate (`/api/plan/validate`) → preview → approved run (`/api/runs`) pipeline. Per-block validation with tag selection, picklist/email/opt-out/future-date checks, name-match fallback. Reviewed and fixed; `npm run typecheck` passes, `npm run build` passes on Aryan's machine. **Phase 2 makes ZERO Zoho calls by design.**
 
 ## Working method
-Codex (the coding agent) writes the code locally; the chat writes specs, reviews Codex's output for quality/"slop," fixes issues, and keeps docs updated. Git commits must be authored as "Aryan Dhamani <aryan@klouddata.com>" with NO AI co-author. Note: the repo's `.git` is on a Windows drive, so git often must be run in Aryan's PowerShell, not the agent sandbox.
+Codex (the coding agent) writes the code locally; the chat writes specs, reviews Codex's output for quality/"slop," fixes issues, and keeps docs updated. Git commits must be authored as Aryan Dhamani (his personal email `dhamaniaryan4@gmail.com` is the one in use — confirmed 2026-07-05) with NO AI co-author. Note: the repo's `.git` is on a Windows drive, so git often must be run in Aryan's PowerShell, not the agent sandbox.
 
 ## Immediate next steps
 1. Aryan is mid-testing Phase 2 (connect a credential in Settings, run sample commands, confirm previews are correct).

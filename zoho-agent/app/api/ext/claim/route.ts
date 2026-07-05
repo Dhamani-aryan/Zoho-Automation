@@ -131,6 +131,25 @@ export async function POST(request: Request) {
 
     const claimable = await findClaimableItem(auth.service, runRow.id);
     if (!claimable) {
+      // Sweep: a running item that exhausted its attempts and went stale can
+      // never be reclaimed — without this it strands the run forever.
+      const staleBefore = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
+      const { error: sweepError } = await auth.service
+        .from("workflow_run_items")
+        .update({
+          status: "failed",
+          error_message: "Exceeded max attempts without a report (stale claim).",
+          executed_at: new Date().toISOString()
+        })
+        .eq("workflow_run_id", runRow.id)
+        .eq("status", "running")
+        .gte("attempts", MAX_ITEM_ATTEMPTS)
+        .lt("claimed_at", staleBefore);
+
+      if (sweepError) {
+        return NextResponse.json({ error: sweepError.message }, { status: 500 });
+      }
+
       const { count: activeCount, error: activeError } = await auth.service
         .from("workflow_run_items")
         .select("id", { count: "exact", head: true })
@@ -141,7 +160,34 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: activeError.message }, { status: 500 });
       }
 
-      return NextResponse.json({ item: null, run_complete: (activeCount ?? 0) === 0 });
+      const runComplete = (activeCount ?? 0) === 0;
+      if (runComplete && runRow.status === "running") {
+        // Finalize a run whose last items were swept — no report will arrive
+        // to do it. Totals are recomputed from the item statuses.
+        const { data: allItems } = await auth.service
+          .from("workflow_run_items")
+          .select("status")
+          .eq("workflow_run_id", runRow.id);
+        const rows = (allItems ?? []) as Array<{ status: string }>;
+        const countOf = (s: string) => rows.filter((row) => row.status === s).length;
+        await auth.service
+          .from("workflow_runs")
+          .update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+            totals: {
+              success: countOf("success"),
+              skipped: countOf("skipped"),
+              failed: countOf("failed"),
+              needs_review: countOf("needs_review"),
+              pending: 0,
+              running: 0
+            }
+          })
+          .eq("id", runRow.id);
+      }
+
+      return NextResponse.json({ item: null, run_complete: runComplete });
     }
 
     const claim = nextItemClaim({
@@ -150,6 +196,8 @@ export async function POST(request: Request) {
       claimedAt: claimable.claimed_at
     });
 
+    // Atomic claim: guard on the status+attempts we read so a concurrent
+    // poll cannot claim the same item twice. Zero rows updated = lost race.
     const { data: claimed, error: claimError } = await auth.service
       .from("workflow_run_items")
       .update({
@@ -158,13 +206,19 @@ export async function POST(request: Request) {
         claimed_at: claim.claimedAt
       })
       .eq("id", claimable.id)
+      .eq("status", claimable.status)
+      .eq("attempts", claimable.attempts)
       .select(
         "id,row_number,record_type,record_key,block_slug,status,action,zoho_url,before_data,after_data,attempts,claimed_at"
       )
-      .single();
+      .maybeSingle();
 
-    if (claimError || !claimed) {
-      return NextResponse.json({ error: claimError?.message ?? "Item could not be claimed." }, { status: 500 });
+    if (claimError) {
+      return NextResponse.json({ error: claimError.message }, { status: 500 });
+    }
+    if (!claimed) {
+      // Another claimer won the race; caller just polls again.
+      return NextResponse.json({ item: null, run_complete: false, lost_race: true });
     }
 
     const nextRunStatus = statusAfterClaim(runRow.status);
