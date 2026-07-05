@@ -9,7 +9,7 @@ All project files live in `G:\Zoho Automation` (a connected/mounted folder).
 - `G:\Zoho Automation\ZOHO_AGENT_WORK_PLAN.md` — master build guide + live status
 - `G:\Zoho Automation\PROJECT_OVERVIEW.md` — plain-English overview
 - `G:\Zoho Automation\zoho-agent\docs\PHASE_2_DECISIONS.md` and `PHASE_1_DECISIONS.md` — engineering decision logs
-- `G:\Zoho Automation\workflows\` (4 specs) and `G:\Zoho Automation\reference\ZOHO_SESSION_API_REFERENCE.md`
+- `G:\Zoho Automation\workflows\` (5 specs — Phase 3 spec: `SPEC_phase3_extension_live_execution.md`) and `G:\Zoho Automation\reference\ZOHO_SESSION_API_REFERENCE.md`
 
 ## What it is
 An internal web app for a 2–4 person sales-ops team to run repetitive Zoho CRM work (schedule outreach emails, create/complete tasks, update deal/account/contact fields, change owners, add tags) by typing a plain-English command → seeing a validated preview → approving → the tool executes inside each user's own logged-in Zoho session, verifies, and reports. Human-in-control: preview + approval always; no deletes; emails scheduled not sent; no Zoho passwords stored.

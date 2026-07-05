@@ -7,7 +7,7 @@ Status: **Phases 0, 1, 2 COMPLETE (2026-07-04).**
 - **Phase 1:** App running locally, hardened auth (@supabase/ssr + middleware + role guards); Supabase live with full schema/RLS/seeds. Data loaded via `npm run import:masters`: **315 accounts, 833 contacts (all account-linked), 179 deals (all account-linked, 161 contact-linked)**; cleaning via `imports\clean_exports.py`. Field metadata synced (`npm run import:fieldmeta`): Accounts 64, Contacts 73, Deals 29, Tasks 19 incl. picklists.
 - **Phase 2:** Per-user LLM credentials — each user connects via any of three methods (ChatGPT device-code flow, paste `~/.codex/auth.json` credential, or OpenAI API key), AES-256-GCM encrypted, table `user_llm_credentials`. Command → parse (`/api/plan/parse`) → validate (`/api/plan/validate`) → preview → approved run (`/api/runs`) pipeline. Per-block validation with tag selection, picklist/email/opt-out/future-date checks, name-match fallback. Reviewed, fixed, `npm run build` passes. **No Zoho calls / no CRM writes yet, by design.** See `docs/PHASE_2_DECISIONS.md` + `workflows/SPEC_phase2_parser_validation_preview.md`.
 
-Vercel deploy deferred until team onboarding. **Next: manual test of Phase 2 on real data, then Phase 3 — Chrome extension + live Zoho execution (first block: `update_deal_field` / Next Step).**
+Vercel deploy deferred until team onboarding. **Phase 2 manual testing in progress (2026-07-05): credential connect + first parse/validate confirmed working on real data after a day of fixes — see `zoho-agent/docs/PHASE_2_DECISIONS.md`. Next: finish the ~10 Phase 2 acceptance tests, then Phase 3 — Chrome extension + live Zoho execution (first block: `update_deal_field` / Next Step). The Phase 3 build spec is written: `workflows/SPEC_phase3_extension_live_execution.md`.**
 
 This document is self-contained: a new chat or developer can execute the project from this file alone. Companion files (same folder) hold deeper detail and are referenced where relevant.
 
@@ -17,6 +17,7 @@ Zoho Automation\
 ├── source_docs\                                  ← Aryan's original playbooks (6 files, proven in production)
 ├── workflows\SPEC_kd_blitz_email_scheduling.md   ← email scheduling + task + Next Step spec
 ├── workflows\SPEC_record_editing.md              ← field/owner/tag editing spec
+├── workflows\SPEC_phase3_extension_live_execution.md ← Phase 3 build spec (extension + live API blocks)
 └── reference\ZOHO_SESSION_API_REFERENCE.md       ← Zoho session-API auth, endpoints, field names, gotchas
 ```
 
