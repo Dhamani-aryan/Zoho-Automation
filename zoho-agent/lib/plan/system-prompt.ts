@@ -4,13 +4,34 @@ type PromptCatalog = {
   actionBlocks: unknown[];
   presets: unknown[];
   fieldMeta: unknown[];
+  tags: Record<string, string[]>;
 };
+
+// Tags live as delimited strings in raw_data (tags / matched_tags / all_tags)
+// — same keys tagsOf() reads in lib/plan/validation.ts.
+function collectTags(rows: Array<Record<string, unknown>> | null): string[] {
+  const set = new Set<string>();
+  for (const row of rows ?? []) {
+    for (const key of ["t1", "t2", "t3"]) {
+      const value = row[key];
+      if (typeof value === "string" && value.trim()) {
+        for (const part of value.split(/[;,|]/)) {
+          const tag = part.trim();
+          if (tag) set.add(tag);
+        }
+      }
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+const TAG_SELECT = "t1:raw_data->>tags, t2:raw_data->>matched_tags, t3:raw_data->>all_tags";
 
 export async function loadPromptCatalog(): Promise<PromptCatalog> {
   const supabase = await createServerSupabaseClient();
-  if (!supabase) return { actionBlocks: [], presets: [], fieldMeta: [] };
+  if (!supabase) return { actionBlocks: [], presets: [], fieldMeta: [], tags: {} };
 
-  const [blocks, presets, fieldMeta] = await Promise.all([
+  const [blocks, presets, fieldMeta, accountTags, contactTags, dealTags] = await Promise.all([
     supabase
       .from("action_blocks")
       .select("slug,name,module,required_inputs,admin_only,status")
@@ -25,13 +46,21 @@ export async function loadPromptCatalog(): Promise<PromptCatalog> {
       .from("zoho_field_meta")
       .select("module,api_name,label,data_type,picklist_values")
       .order("module")
-      .order("api_name")
+      .order("api_name"),
+    supabase.from("accounts").select(TAG_SELECT).limit(2000),
+    supabase.from("contacts").select(TAG_SELECT).limit(2000),
+    supabase.from("deals").select(TAG_SELECT).limit(2000)
   ]);
 
   return {
     actionBlocks: blocks.data ?? [],
     presets: presets.data ?? [],
-    fieldMeta: fieldMeta.data ?? []
+    fieldMeta: fieldMeta.data ?? [],
+    tags: {
+      accounts: collectTags(accountTags.data as Array<Record<string, unknown>> | null),
+      contacts: collectTags(contactTags.data as Array<Record<string, unknown>> | null),
+      deals: collectTags(dealTags.data as Array<Record<string, unknown>> | null)
+    }
   };
 }
 
@@ -62,6 +91,19 @@ export function buildPlanSystemPrompt(catalog: PromptCatalog) {
       warnings: [],
       missing_info: []
     }),
+    "",
+    "Record selector rules:",
+    `Known tags by module: ${JSON.stringify(catalog.tags)}`,
+    'If the command references one of these tags — or names a campaign/batch that matches one (e.g. "the KD Blitz deals" when "KD Blitz" is a deals tag) — use record_selector.mode="tag" with the exact tag string in record_selector.tag.',
+    'Use mode="names" only for actual record names (account/contact/deal names).',
+    "",
+    "Block config keys (use EXACTLY these keys, no synonyms):",
+    "update_deal_field / update_account_fields / update_contact_fields: { field_api_name, value }",
+    "change_owner: { target_owner }",
+    'add_tags / remove_tags: { tag_names: ["..."] }',
+    "create_task: { subject, due_date } (due_date YYYY-MM-DD)",
+    "complete_task: { subject }",
+    "schedule_email: { subject, schedule_date, schedule_time, to_email? } (date YYYY-MM-DD, time HH:MM; to_email defaults to the contact's own email)",
     "",
     "Action blocks:",
     JSON.stringify(catalog.actionBlocks),

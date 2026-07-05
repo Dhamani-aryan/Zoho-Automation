@@ -62,6 +62,32 @@ Verified: `npx tsc --noEmit` passes. Next debugging step is reading the full Ope
 
 **Resolution trail (2026-07-05):** with diagnostics in place the device flow got past OpenAI entirely (`token_exchange_user_error` no longer reproduced — consistent with burned tokens/expired device session from the earlier crashed attempts) and failed at credential storage: `Could not find the table 'public.user_llm_credentials' in the schema cache`. Root cause: **Phase 2 build-order step 1 was never executed on the dev machine** — neither `LLM_CRED_ENC_KEY` in `.env.local` (fixed earlier today) nor the `supabase/2026_phase2.sql` migration (run by Aryan in the Supabase SQL editor). No code change required for this last error; the migration is idempotent.
 
+## Parse "Request failed." fix — Codex provider was never functional (2026-07-05)
+
+First real parse attempt on `/run/new` returned the generic "Request failed.". Two layers again:
+
+1. **Route:** `/api/plan/parse` had no try/catch around `loadPromptCatalog` / `getLLMProviderForUser` / `provider.parsePlan`, so any provider throw became a non-JSON 500 and the client's `readJson` fell back to "Request failed.". Same latent pattern in `/api/plan/validate` and `/api/runs` (POST). All three now wrap the risky section and return the real error message as JSON (plus `console.error` with `[plan-parse]` / `[plan-validate]` / `[runs-create]` prefixes).
+2. **Provider (`lib/llm/openai-codex.ts`) — the actual failure.** Checked against the pi reference (now at `packages/ai/src/api/openai-codex-responses.ts`; the provider file was renamed since the spec was written). Three breakages:
+   - **Stale model id.** Default was `gpt-5-codex`, which no longer exists in the registry (`openai-codex.models.ts` now lists `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`). New default: `gpt-5.4` (override via `LLM_MODEL`).
+   - **Streaming.** The Codex backend is SSE-only: the reference always sends `stream: true` with `accept: text/event-stream`. We sent a non-streaming request and called `response.json()`. Now: send `stream: true`, buffer the SSE body, take the final object from the `response.completed` event (fallback: accumulated `response.output_text.delta`), handle `response.failed`.
+   - **Headers.** Missing `originator`, `User-Agent`, `session-id`/`x-client-request-id` (the credential spec warned header diffs cause 403s). Now mirrored from the reference (`originator: pi`).
+   - Also added a 90s timeout and verbatim status+body error surfacing (includes the model id so registry drift is obvious next time).
+
+`npx tsc --noEmit` passes. NOTE for future maintenance: the Codex model registry drifts — if parse starts failing with a model error, re-check `openai-codex.models.ts` in the pi repo and update `LLM_MODEL`/default.
+
+Follow-up fix: the backend then returned 400 "Input must be a list" — the Codex backend requires `input` as a list of message items (`[{type:"message", role:"user", content:[{type:"input_text", text}]}]`), unlike api.openai.com which also accepts a plain string. Fixed in `openai-codex.ts`.
+
+Follow-up fix 2: "Codex returned an empty response" — SSE extraction widened in `openai-codex.ts` (`response.completed` object, `output_text.delta` accumulation, `output_item.done`/`content_part.done` items, refusals); on empty output the error now lists the SSE event types seen and dumps the raw stream to the terminal as `[codex-parse]`.
+
+## First successful parse — prompt/validator gaps found on plan quality (2026-07-05)
+
+Parse now works end to end. The first real plan exposed two spec-vs-implementation gaps:
+
+1. **Prompt was missing the tag catalog** (spec §3 required "available tags so tag selectors validate"). The model classified "the KD Blitz deals" as `mode:"names"` with value "KD Blitz" and even warned it might be a tag. `loadPromptCatalog()` now also selects `raw_data->>tags/matched_tags/all_tags` from accounts/contacts/deals (limit 2000 each), dedupes into per-module tag lists, and the prompt instructs: command matches a known tag → `mode:"tag"`; `mode:"names"` only for actual record names.
+2. **Config-key drift.** The model emitted `new_value`; the preview mapper only read `cfg.value`, which would have flagged every row "No new value provided". The mapper now accepts `value ?? new_value`, and the prompt documents the EXACT config keys per block (field updates `{field_api_name, value}`, change_owner `{target_owner}`, tags `{tag_names[]}`, create_task `{subject, due_date}`, complete_task `{subject}`, schedule_email `{subject, schedule_date, schedule_time, to_email?}`).
+
+`npx tsc --noEmit` passes.
+
 ## Third credential option: paste Codex credential (2026-07-04)
 
 Added because device-code login depends on the "device authorization" toggle in a user's ChatGPT security settings, which isn't available/enabled on every account. This option matches the pre-existing local workflow.

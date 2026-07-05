@@ -12,8 +12,75 @@ import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
 const CODEX_RESPONSES_URL =
   process.env.CODEX_RESPONSES_URL ?? "https://chatgpt.com/backend-api/codex/responses";
-const CODEX_MODEL = process.env.LLM_MODEL ?? "gpt-5-codex";
+// Must be a model id from the pi reference's openai-codex.models.ts registry.
+// "gpt-5-codex" is NOT in the current registry and the backend rejects it.
+const CODEX_MODEL = process.env.LLM_MODEL ?? "gpt-5.4";
+const CODEX_TIMEOUT_MS = 90000;
 const refreshLocks = new Map<string, Promise<CodexToken>>();
+
+// The Codex backend only serves streaming (SSE) responses. Buffer the whole
+// stream, then pull the final response object from the `response.completed`
+// event (falling back to accumulated output_text deltas).
+function extractSseOutput(sseText: string): {
+  completed: unknown;
+  deltaText: string;
+  itemText: string;
+  failure: string | null;
+  eventSummary: string;
+} {
+  let completed: unknown = null;
+  let failure: string | null = null;
+  const deltas: string[] = [];
+  const itemTexts: string[] = [];
+  const eventCounts = new Map<string, number>();
+
+  for (const line of sseText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const type = typeof event.type === "string" ? event.type : "unknown";
+    eventCounts.set(type, (eventCounts.get(type) ?? 0) + 1);
+
+    if (type === "response.completed" && event.response) {
+      completed = event.response;
+    } else if (type === "response.output_text.delta" && typeof event.delta === "string") {
+      deltas.push(event.delta);
+    } else if (type === "response.output_item.done" || type === "response.content_part.done") {
+      // Alternate places the final text can appear, depending on backend version.
+      const item = (event.item ?? event.part) as
+        | { content?: Array<{ text?: unknown; refusal?: unknown }>; text?: unknown }
+        | undefined;
+      if (typeof item?.text === "string") itemTexts.push(item.text);
+      if (Array.isArray(item?.content)) {
+        for (const part of item.content) {
+          if (typeof part?.text === "string") itemTexts.push(part.text);
+          if (typeof part?.refusal === "string") failure = `Model refused: ${part.refusal}`;
+        }
+      }
+    } else if (type === "response.failed" || type === "error") {
+      const response = event.response as { error?: { message?: string } } | undefined;
+      failure =
+        response?.error?.message ??
+        (typeof (event as { message?: unknown }).message === "string"
+          ? ((event as { message?: string }).message as string)
+          : "Codex stream reported a failure.");
+    }
+  }
+
+  const eventSummary =
+    [...eventCounts.entries()].map(([type, count]) => `${type}×${count}`).join(", ") || "no events parsed";
+
+  return { completed, deltaText: deltas.join(""), itemText: itemTexts.join("\n"), failure, eventSummary };
+}
 
 type CodexToken = {
   accessToken: string;
@@ -85,27 +152,92 @@ export class OpenAICodexProvider implements LLMProvider {
     const accountId = token.accountId ?? this.accountId;
     if (!accountId) throw new Error("ChatGPT account id was not present in the Codex credential.");
 
-    const response = await fetch(CODEX_RESPONSES_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token.accessToken}`,
-        "Content-Type": "application/json",
-        "chatgpt-account-id": accountId,
-        "OpenAI-Beta": "responses=experimental"
-      },
-      body: JSON.stringify({
-        model: CODEX_MODEL,
-        store: false,
-        instructions: input.systemPrompt ?? "",
-        input: composeUserInput(input)
-      })
-    });
+    const sessionId = crypto.randomUUID();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CODEX_TIMEOUT_MS);
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(`Codex parse failed: ${payload.error?.message ?? response.statusText}`);
+    let response: Response;
+    try {
+      // Header set and body shape mirror pi's openai-codex-responses api
+      // (originator/User-Agent/session-id matter — diffs cause 403s).
+      response = await fetch(CODEX_RESPONSES_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${token.accessToken}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "chatgpt-account-id": accountId,
+          "OpenAI-Beta": "responses=experimental",
+          originator: "pi",
+          "User-Agent": "pi (zoho-agent)",
+          "session-id": sessionId,
+          "x-client-request-id": sessionId
+        },
+        body: JSON.stringify({
+          model: CODEX_MODEL,
+          store: false,
+          stream: true,
+          instructions: input.systemPrompt ?? "",
+          // The Codex backend requires the list form of `input` ("Input must
+          // be a list"), unlike api.openai.com which also accepts a string.
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: composeUserInput(input) }]
+            }
+          ],
+          text: { verbosity: "low" }
+        })
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      throw new Error(
+        error instanceof Error && error.name === "AbortError"
+          ? `Codex did not respond within ${CODEX_TIMEOUT_MS / 1000}s.`
+          : "Could not reach the Codex backend."
+      );
     }
 
-    return parsePlanJson(extractResponsesText(payload));
+    let raw: string;
+    try {
+      raw = await response.text();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      let detail = raw.slice(0, 300);
+      try {
+        const parsed = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
+        detail = parsed.error?.message ?? parsed.detail ?? detail;
+      } catch {
+        // keep raw snippet
+      }
+      throw new Error(`Codex parse failed (status ${response.status}, model ${CODEX_MODEL}): ${detail}`);
+    }
+
+    const { completed, deltaText, itemText, failure, eventSummary } = extractSseOutput(raw);
+    if (failure) throw new Error(`Codex parse failed: ${failure}`);
+
+    const completedText = completed ? extractResponsesText(completed) : "";
+    const outputText = [completedText, deltaText, itemText].find((text) => text.trim()) ?? "";
+    if (!outputText.trim()) {
+      // Dump the raw stream to the server log so the actual shape is visible.
+      console.error(
+        "[codex-parse] empty output. events:",
+        eventSummary,
+        "\nstream head:\n",
+        raw.slice(0, 1500),
+        "\nstream tail:\n",
+        raw.slice(-1500)
+      );
+      throw new Error(
+        `Codex returned no output text. SSE events seen: ${eventSummary}. Full stream logged to the dev terminal as [codex-parse].`
+      );
+    }
+
+    return parsePlanJson(outputText);
   }
 }

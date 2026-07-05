@@ -21,25 +21,33 @@ export async function POST(request: Request) {
     );
   }
 
-  const catalog = await loadPromptCatalog();
-  const guarded = applyPlanGuardrails({
-    plan: parsed.data,
-    actionBlocks: catalog.actionBlocks as Array<{ slug: string; admin_only?: boolean }>,
-    fieldMeta: catalog.fieldMeta as Array<{ module: string; api_name: string }>,
-    role: auth.user.role
-  });
+  let guarded: ReturnType<typeof applyPlanGuardrails>;
+  let validation: Awaited<ReturnType<typeof validatePlanForPreview>>;
+  try {
+    const catalog = await loadPromptCatalog();
+    guarded = applyPlanGuardrails({
+      plan: parsed.data,
+      actionBlocks: catalog.actionBlocks as Array<{ slug: string; admin_only?: boolean }>,
+      fieldMeta: catalog.fieldMeta as Array<{ module: string; api_name: string }>,
+      role: auth.user.role
+    });
 
-  const validation = await validatePlanForPreview({
-    supabase: auth.supabase,
-    plan: guarded,
-    fieldMeta: catalog.fieldMeta as Array<{
-      module: string;
-      api_name: string;
-      data_type?: string | null;
-      picklist_values?: unknown;
-    }>,
-    role: auth.user.role
-  });
+    validation = await validatePlanForPreview({
+      supabase: auth.supabase,
+      plan: guarded,
+      fieldMeta: catalog.fieldMeta as Array<{
+        module: string;
+        api_name: string;
+        data_type?: string | null;
+        picklist_values?: unknown;
+      }>,
+      role: auth.user.role
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Validation failed unexpectedly.";
+    console.error("[plan-validate]", message, error);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 
   await auth.supabase.from("audit_events").insert({
     user_id: auth.user.id,

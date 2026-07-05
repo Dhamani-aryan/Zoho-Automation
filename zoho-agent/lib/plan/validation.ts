@@ -260,7 +260,8 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
   // Field updates (deal/account/contact)
   if (slug === "update_deal_field" || slug === "update_account_fields" || slug === "update_contact_fields") {
     const fieldApiName = typeof cfg.field_api_name === "string" ? cfg.field_api_name : null;
-    const value = cfg.value;
+    // Models sometimes emit new_value despite the documented key being value.
+    const value = cfg.value ?? cfg.new_value;
     if (!fieldApiName) {
       return review(record, "Missing field_api_name for field update.");
     }

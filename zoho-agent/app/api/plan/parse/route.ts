@@ -64,14 +64,25 @@ export async function POST(request: Request) {
   }
 
   const started = Date.now();
-  const catalog = await loadPromptCatalog();
-  const provider = await getLLMProviderForUser(auth.user.id);
-  const plan = await provider.parsePlan({
-    command,
-    files: await summarizeFiles(files),
-    actionBlockCatalog: catalog.actionBlocks,
-    systemPrompt: buildPlanSystemPrompt(catalog)
-  });
+  let catalog: Awaited<ReturnType<typeof loadPromptCatalog>>;
+  let provider: Awaited<ReturnType<typeof getLLMProviderForUser>>;
+  let plan: Awaited<ReturnType<typeof provider.parsePlan>>;
+  try {
+    catalog = await loadPromptCatalog();
+    provider = await getLLMProviderForUser(auth.user.id);
+    plan = await provider.parsePlan({
+      command,
+      files: await summarizeFiles(files),
+      actionBlockCatalog: catalog.actionBlocks,
+      systemPrompt: buildPlanSystemPrompt(catalog)
+    });
+  } catch (error) {
+    // Surface the real reason to the UI — an unhandled throw here would
+    // render as a bare "Request failed." with no diagnostic value.
+    const message = error instanceof Error ? error.message : "Parse failed unexpectedly.";
+    console.error("[plan-parse]", message, error);
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
 
   const parsed = validateParsedPlan(plan);
   if (!parsed.success) {

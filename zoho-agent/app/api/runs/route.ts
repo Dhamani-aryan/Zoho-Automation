@@ -54,18 +54,24 @@ export async function POST(request: Request) {
 
   let validation = body?.validation;
   if (!validation) {
-    const catalog = await loadPromptCatalog();
-    validation = await validatePlanForPreview({
-      supabase: auth.supabase,
-      plan: parsed.data,
-      fieldMeta: catalog.fieldMeta as Array<{
-        module: string;
-        api_name: string;
-        data_type?: string | null;
-        picklist_values?: unknown;
-      }>,
-      role: auth.user.role
-    });
+    try {
+      const catalog = await loadPromptCatalog();
+      validation = await validatePlanForPreview({
+        supabase: auth.supabase,
+        plan: parsed.data,
+        fieldMeta: catalog.fieldMeta as Array<{
+          module: string;
+          api_name: string;
+          data_type?: string | null;
+          picklist_values?: unknown;
+        }>,
+        role: auth.user.role
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Run validation failed unexpectedly.";
+      console.error("[runs-create]", message, error);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
   const runStatus = validation.status === "preview_ready" ? "preview_ready" : "draft";
   const totals = computeTotals(validation.items);
