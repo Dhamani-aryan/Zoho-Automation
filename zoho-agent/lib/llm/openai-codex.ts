@@ -7,7 +7,21 @@ import {
   tokenExpiryIso
 } from "@/lib/llm/codex-oauth";
 import { composeUserInput, extractResponsesText, parsePlanJson } from "@/lib/llm/parse-json";
-import type { LLMProvider, ParsedPlan, PlanParseInput } from "@/lib/llm/provider";
+import type {
+  AgentModelResult,
+  AgentRunToolsInput,
+  AgentToolCall,
+  LLMProvider,
+  ParsedPlan,
+  PlanParseInput
+} from "@/lib/llm/provider";
+import {
+  composeAgentInput,
+  extractResponsesToolCalls,
+  formatResponsesTools,
+  parseToolArguments,
+  responsesInputFromText
+} from "@/lib/llm/tool-calls";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
 const CODEX_RESPONSES_URL =
@@ -25,6 +39,7 @@ function extractSseOutput(sseText: string): {
   completed: unknown;
   deltaText: string;
   itemText: string;
+  toolCalls: AgentToolCall[];
   failure: string | null;
   eventSummary: string;
 } {
@@ -33,6 +48,7 @@ function extractSseOutput(sseText: string): {
   const deltas: string[] = [];
   const itemTexts: string[] = [];
   const eventCounts = new Map<string, number>();
+  const streamedToolItems = new Map<string, { id: string; callId: string; name: string; args: string }>();
 
   for (const line of sseText.split("\n")) {
     const trimmed = line.trim();
@@ -54,6 +70,40 @@ function extractSseOutput(sseText: string): {
       completed = event.response;
     } else if (type === "response.output_text.delta" && typeof event.delta === "string") {
       deltas.push(event.delta);
+    } else if (
+      type === "response.output_item.added" ||
+      (type === "response.output_item.done" &&
+        (event.item as Record<string, unknown> | undefined)?.type === "function_call")
+    ) {
+      const item = event.item as Record<string, unknown> | undefined;
+      if (item?.type === "function_call") {
+        const id =
+          (typeof item.id === "string" && item.id) ||
+          (typeof event.item_id === "string" && event.item_id) ||
+          crypto.randomUUID();
+        const existing = streamedToolItems.get(id);
+        streamedToolItems.set(id, {
+          id,
+          callId: (typeof item.call_id === "string" && item.call_id) || existing?.callId || id,
+          name: (typeof item.name === "string" && item.name) || existing?.name || "",
+          args: typeof item.arguments === "string" ? item.arguments : existing?.args ?? ""
+        });
+      }
+    } else if (type === "response.function_call_arguments.delta" && typeof event.delta === "string") {
+      const itemId = typeof event.item_id === "string" ? event.item_id : "";
+      if (itemId) {
+        const existing = streamedToolItems.get(itemId) ?? { id: itemId, callId: itemId, name: "", args: "" };
+        existing.args += event.delta;
+        streamedToolItems.set(itemId, existing);
+      }
+    } else if (type === "response.function_call_arguments.done") {
+      const itemId = typeof event.item_id === "string" ? event.item_id : "";
+      const args = typeof event.arguments === "string" ? event.arguments : undefined;
+      if (itemId && args !== undefined) {
+        const existing = streamedToolItems.get(itemId) ?? { id: itemId, callId: itemId, name: "", args: "" };
+        existing.args = args;
+        streamedToolItems.set(itemId, existing);
+      }
     } else if (type === "response.output_item.done" || type === "response.content_part.done") {
       // Alternate places the final text can appear, depending on backend version.
       const item = (event.item ?? event.part) as
@@ -79,7 +129,24 @@ function extractSseOutput(sseText: string): {
   const eventSummary =
     [...eventCounts.entries()].map(([type, count]) => `${type}×${count}`).join(", ") || "no events parsed";
 
-  return { completed, deltaText: deltas.join(""), itemText: itemTexts.join("\n"), failure, eventSummary };
+  const completedToolCalls = completed ? extractResponsesToolCalls(completed) : [];
+  const seenToolIds = new Set(completedToolCalls.map((call) => call.id));
+  const streamedToolCalls = [...streamedToolItems.values()]
+    .filter((item) => item.name && !seenToolIds.has(item.callId))
+    .map((item) => ({
+      id: item.callId,
+      name: item.name,
+      args: parseToolArguments(item.args)
+    }));
+
+  return {
+    completed,
+    deltaText: deltas.join(""),
+    itemText: itemTexts.join("\n"),
+    toolCalls: [...completedToolCalls, ...streamedToolCalls],
+    failure,
+    eventSummary
+  };
 }
 
 type CodexToken = {
@@ -239,5 +306,91 @@ export class OpenAICodexProvider implements LLMProvider {
     }
 
     return parsePlanJson(outputText);
+  }
+
+  async runTools(input: AgentRunToolsInput): Promise<AgentModelResult> {
+    const token = await refreshCodexToken(this.userId, this.refreshToken);
+    const accountId = token.accountId ?? this.accountId;
+    if (!accountId) throw new Error("ChatGPT account id was not present in the Codex credential.");
+
+    const sessionId = crypto.randomUUID();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CODEX_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(CODEX_RESPONSES_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${token.accessToken}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "chatgpt-account-id": accountId,
+          "OpenAI-Beta": "responses=experimental",
+          originator: "pi",
+          "User-Agent": "pi (zoho-agent)",
+          "session-id": sessionId,
+          "x-client-request-id": sessionId
+        },
+        body: JSON.stringify({
+          model: CODEX_MODEL,
+          store: false,
+          stream: true,
+          instructions: input.instructions,
+          input: responsesInputFromText(composeAgentInput(input.messages)),
+          tools: formatResponsesTools(input.tools),
+          tool_choice: "auto",
+          parallel_tool_calls: false,
+          text: { verbosity: "low" }
+        })
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      throw new Error(
+        error instanceof Error && error.name === "AbortError"
+          ? `Codex did not respond within ${CODEX_TIMEOUT_MS / 1000}s.`
+          : "Could not reach the Codex backend."
+      );
+    }
+
+    let raw: string;
+    try {
+      raw = await response.text();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      let detail = raw.slice(0, 300);
+      try {
+        const parsed = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
+        detail = parsed.error?.message ?? parsed.detail ?? detail;
+      } catch {
+        // keep raw snippet
+      }
+      throw new Error(`Codex tool run failed (status ${response.status}, model ${CODEX_MODEL}): ${detail}`);
+    }
+
+    const { completed, deltaText, itemText, toolCalls, failure, eventSummary } = extractSseOutput(raw);
+    if (failure) throw new Error(`Codex tool run failed: ${failure}`);
+
+    const completedText = completed ? extractResponsesText(completed) : "";
+    const text = [completedText, deltaText, itemText].find((candidate) => candidate.trim()) ?? "";
+    if (!text.trim() && toolCalls.length === 0) {
+      console.error(
+        "[codex-tools] empty output. events:",
+        eventSummary,
+        "\nstream head:\n",
+        raw.slice(0, 1500),
+        "\nstream tail:\n",
+        raw.slice(-1500)
+      );
+      throw new Error(
+        `Codex returned no text or tool calls. SSE events seen: ${eventSummary}. Full stream logged to the dev terminal as [codex-tools].`
+      );
+    }
+
+    return { text, toolCalls };
   }
 }

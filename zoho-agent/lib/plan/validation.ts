@@ -1,16 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedPlan } from "@/lib/llm/provider";
 import { resolveOwner } from "@/lib/constants";
+import {
+  crmFieldToColumn,
+  fetchModuleRecords,
+  MIRROR_MODULES,
+  resolveMirrorRecords,
+  tagsOf,
+  type MirrorModuleKey,
+  type MirrorRecord
+} from "@/lib/records/mirror";
 
-type CrmRecord = {
-  id: string;
-  zoho_id: string | null;
-  zoho_url: string | null;
-  name: string;
-  owner: string | null;
-  raw: Record<string, unknown>;
-  data: Record<string, unknown>;
-};
+type CrmRecord = MirrorRecord;
 
 export type PreviewItem = {
   row_number: number;
@@ -45,261 +46,32 @@ export type FieldMetaRow = {
   picklist_values?: unknown;
 };
 
-const MODULE_CONFIG = {
-  accounts: {
-    table: "accounts",
-    zohoId: "zoho_account_id",
-    name: "account_name",
-    metaModule: "Accounts",
-    select: "id,zoho_account_id,zoho_url,account_name,owner,website,phone,industry,raw_data"
-  },
-  contacts: {
-    table: "contacts",
-    zohoId: "zoho_contact_id",
-    name: "full_name",
-    metaModule: "Contacts",
-    select: "id,zoho_contact_id,zoho_url,full_name,email,title,owner,raw_data"
-  },
-  deals: {
-    table: "deals",
-    zohoId: "zoho_deal_id",
-    name: "deal_name",
-    metaModule: "Deals",
-    select: "id,zoho_deal_id,zoho_url,deal_name,stage,next_step,owner,closing_date,amount,raw_data"
-  }
-} as const;
+const MODULE_CONFIG = MIRROR_MODULES;
 
-type ModuleKey = keyof typeof MODULE_CONFIG;
-
-const FIELD_COLUMN_MAP: Record<string, string> = {
-  Account_Name: "account_name",
-  Amount: "amount",
-  Closing_Date: "closing_date",
-  Deal_Name: "deal_name",
-  Email: "email",
-  First_Name: "first_name",
-  Last_Name: "last_name",
-  Next_Step: "next_step",
-  Owner: "owner",
-  Phone: "phone",
-  Stage: "stage",
-  Website: "website"
-};
+type ModuleKey = MirrorModuleKey;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function normalize(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function fieldToColumn(field: string) {
-  return FIELD_COLUMN_MAP[field] ?? field.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
-}
-
 function isFutureDate(dateStr: string, timeStr?: string) {
   const iso = timeStr ? `${dateStr}T${timeStr}` : dateStr;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null; // unparseable
-  return d.getTime() > Date.now();
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime() > Date.now();
 }
 
-// Allowed picklist values (lowercased) for a module+field, or null if not a picklist.
 function buildPicklistIndex(fieldMeta: FieldMetaRow[]) {
   const index = new Map<string, Set<string>>();
-  for (const f of fieldMeta) {
-    if (!Array.isArray(f.picklist_values) || f.picklist_values.length === 0) continue;
+  for (const field of fieldMeta) {
+    if (!Array.isArray(field.picklist_values) || field.picklist_values.length === 0) continue;
     const values = new Set<string>();
-    for (const pv of f.picklist_values as Array<Record<string, unknown>>) {
-      const v = pv?.actual_value ?? pv?.display_value ?? pv?.value ?? pv;
-      if (typeof v === "string" && v.trim()) values.add(v.trim().toLowerCase());
+    for (const picklistValue of field.picklist_values as Array<Record<string, unknown>>) {
+      const value =
+        picklistValue?.actual_value ?? picklistValue?.display_value ?? picklistValue?.value ?? picklistValue;
+      if (typeof value === "string" && value.trim()) values.add(value.trim().toLowerCase());
     }
-    if (values.size > 0) index.set(`${f.module}:${f.api_name}`, values);
+    if (values.size > 0) index.set(`${field.module}:${field.api_name}`, values);
   }
   return index;
-}
-
-function tagsOf(record: CrmRecord): string[] {
-  const raw = record.raw;
-  const parts: string[] = [];
-  for (const key of ["tags", "matched_tags", "all_tags"]) {
-    const v = raw[key];
-    if (typeof v === "string" && v.trim()) parts.push(v);
-  }
-  return parts
-    .flatMap((p) => p.split(/[;,|]/))
-    .map((t) => t.trim())
-    .filter(Boolean);
-}
-
-function rowToRecord(moduleKey: ModuleKey, row: Record<string, unknown>): CrmRecord {
-  const config = MODULE_CONFIG[moduleKey];
-  const zohoId = row[config.zohoId];
-  const name = row[config.name];
-  const raw = (row.raw_data && typeof row.raw_data === "object" ? row.raw_data : {}) as Record<string, unknown>;
-
-  return {
-    id: String(row.id),
-    zoho_id: typeof zohoId === "string" ? zohoId : null,
-    zoho_url: typeof row.zoho_url === "string" ? row.zoho_url : null,
-    name: typeof name === "string" ? name : String(name ?? ""),
-    owner: typeof row.owner === "string" ? row.owner : null,
-    raw,
-    data: row
-  };
-}
-
-async function fetchModuleRecords(supabase: SupabaseClient, moduleKey: ModuleKey) {
-  const config = MODULE_CONFIG[moduleKey];
-  const { data, error } = await supabase
-    .from(config.table)
-    .select(config.select)
-    .order(config.name, { ascending: true })
-    .limit(2000);
-  if (error) throw error;
-  return (data ?? []).map((row) => rowToRecord(moduleKey, row as unknown as Record<string, unknown>));
-}
-
-type ResolveOutput = {
-  records: CrmRecord[];
-  warnings: string[];
-  unmatched: string[]; // selector values that matched no record
-  ambiguous: string[]; // selector values that matched more than one record
-  suggestions: Record<string, string[]>; // unmatched value -> near-miss record names
-};
-
-// Deals are named "{Account} | SAP Cloud ERP", but users think in company
-// names — so deals are searchable by their account name too (the reference
-// doc calls account-based search the best deal resolver).
-function accountNameOf(record: CrmRecord): string {
-  for (const key of ["Account_Name", "Account Name", "account_name", "ACCOUNTNAME"]) {
-    const v = record.raw[key];
-    if (typeof v === "string" && v.trim()) return v;
-    if (v && typeof v === "object" && typeof (v as { name?: unknown }).name === "string") {
-      return (v as { name: string }).name;
-    }
-  }
-  return "";
-}
-
-function searchTexts(moduleKey: ModuleKey, record: CrmRecord): string[] {
-  const texts = [record.name];
-  if (moduleKey === "deals") {
-    const account = accountNameOf(record);
-    if (account) texts.push(account);
-  }
-  return texts.map(normalize).filter(Boolean);
-}
-
-// Word-level match: every query token (≥3 chars) must prefix-match some word
-// of the text in either direction ("tapes" ↔ "tape", "duraco" ↔ "duraco").
-function tokensOf(value: string) {
-  return value.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
-}
-
-function tokenMatch(query: string, text: string): boolean {
-  const queryTokens = tokensOf(query);
-  if (queryTokens.length === 0) return false;
-  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
-  return queryTokens.every((qt) =>
-    words.some((w) => w.startsWith(qt) || (w.length >= 3 && qt.startsWith(w)))
-  );
-}
-
-function anyTokenMatch(query: string, text: string): boolean {
-  const queryTokens = tokensOf(query);
-  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
-  return queryTokens.some((qt) =>
-    words.some((w) => w.startsWith(qt) || (w.length >= 3 && qt.startsWith(w)))
-  );
-}
-
-function resolveRecords(records: CrmRecord[], plan: ParsedPlan): ResolveOutput {
-  const selector = plan.record_selector;
-  const moduleKey = selector.module as ModuleKey;
-  const values = (selector.values ?? []).filter(Boolean);
-  const warnings: string[] = [];
-  const unmatched: string[] = [];
-  const ambiguous: string[] = [];
-  const suggestions: Record<string, string[]> = {};
-
-  if (selector.mode === "tag") {
-    const tag = normalize(selector.tag);
-    if (!tag) {
-      warnings.push("Tag selector had no tag value.");
-      return { records: [], warnings, unmatched, ambiguous, suggestions };
-    }
-    const matched = records.filter((r) => tagsOf(r).some((t) => normalize(t) === tag || normalize(t).includes(tag)));
-    if (matched.length === 0) warnings.push(`No records carry the tag "${selector.tag}".`);
-    return { records: matched, warnings, unmatched, ambiguous, suggestions };
-  }
-
-  if (selector.mode === "ids") {
-    const out: CrmRecord[] = [];
-    for (const value of values) {
-      const n = normalize(value);
-      const hits = records.filter((r) => normalize(r.id) === n || normalize(r.zoho_id) === n);
-      if (hits.length === 0) unmatched.push(value);
-      else out.push(...hits);
-    }
-    return { records: out, warnings, unmatched, ambiguous, suggestions };
-  }
-
-  if (selector.mode === "names" || selector.mode === "file") {
-    const out: CrmRecord[] = [];
-    for (const value of values) {
-      const n = normalize(value);
-      // exact by id/zoho id/searchable name (deal name OR its account name)
-      let hits = records.filter(
-        (r) =>
-          normalize(r.zoho_id) === n ||
-          normalize(r.id) === n ||
-          searchTexts(moduleKey, r).some((t) => t === n)
-      );
-      // fallback: starts_with (the proven CRM fallback)
-      if (hits.length === 0) {
-        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => t.startsWith(n)));
-      }
-      // fallback: contains
-      if (hits.length === 0 && n.length >= 3) {
-        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => t.includes(n)));
-      }
-      // fallback: word-level token match ("duraco tapes" ↔ "Duraco Tape & Label | SAP Cloud ERP")
-      if (hits.length === 0) {
-        hits = records.filter((r) => searchTexts(moduleKey, r).some((t) => tokenMatch(n, t)));
-      }
-
-      if (hits.length === 0) {
-        unmatched.push(value);
-        const near = records
-          .filter((r) => searchTexts(moduleKey, r).some((t) => anyTokenMatch(n, t)))
-          .slice(0, 3)
-          .map((r) => r.name);
-        if (near.length > 0) suggestions[value] = near;
-      } else if (hits.length > 1) {
-        ambiguous.push(value);
-        suggestions[value] = hits.slice(0, 3).map((r) => r.name);
-      } else {
-        out.push(hits[0]);
-      }
-    }
-    return { records: out, warnings, unmatched, ambiguous, suggestions };
-  }
-
-  // filter mode
-  const filter = selector.filter;
-  if (!filter) {
-    warnings.push("Filter selector was missing filter details.");
-    return { records: [], warnings, unmatched, ambiguous, suggestions };
-  }
-  const column = fieldToColumn(filter.field);
-  const filterValue = normalize(filter.value);
-  const matched = records.filter((r) => {
-    const rv = normalize(r.data[column] ?? r.raw[column]);
-    if (filter.op === "equals") return rv === filterValue;
-    if (filter.op === "starts_with") return rv.startsWith(filterValue);
-    return rv.includes(filterValue);
-  });
-  return { records: matched, warnings, unmatched, ambiguous, suggestions };
 }
 
 type BlockCtx = {
@@ -319,34 +91,31 @@ type Mapped = {
 };
 
 function param(ctx: BlockCtx, key: string): string {
-  const v = ctx.runParameters[key];
-  return typeof v === "string" ? v : "";
+  const value = ctx.runParameters[key];
+  return typeof value === "string" ? value : "";
 }
 
 function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: BlockCtx): Mapped {
   const cfg = block.config ?? {};
   const slug = block.slug;
 
-  // Field updates (deal/account/contact)
   if (slug === "update_deal_field" || slug === "update_account_fields" || slug === "update_contact_fields") {
     const fieldApiName = typeof cfg.field_api_name === "string" ? cfg.field_api_name : null;
-    // Models sometimes emit new_value despite the documented key being value.
     const value = cfg.value ?? cfg.new_value;
-    if (!fieldApiName) {
-      return review(record, "Missing field_api_name for field update.");
-    }
+    if (!fieldApiName) return review("Missing field_api_name for field update.");
     if (value === undefined || value === null || String(value).trim() === "") {
-      return review(record, `No new value provided for ${fieldApiName}.`);
+      return review(`No new value provided for ${fieldApiName}.`);
     }
-    // picklist membership
+
     const allowed = ctx.picklists.get(`${ctx.metaModule}:${fieldApiName}`);
     if (allowed && !allowed.has(String(value).trim().toLowerCase())) {
-      return review(record, `"${value}" is not an allowed option for ${fieldApiName}.`);
+      return review(`"${value}" is not an allowed option for ${fieldApiName}.`);
     }
     if (fieldApiName === "Email" && !EMAIL_RE.test(String(value))) {
-      return review(record, `"${value}" is not a valid email.`);
+      return review(`"${value}" is not a valid email.`);
     }
-    const column = fieldToColumn(fieldApiName);
+
+    const column = crmFieldToColumn(fieldApiName);
     return {
       status: "pending",
       action: `Set ${fieldApiName} = "${value}" on ${record.name}`,
@@ -359,8 +128,8 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
   if (slug === "change_owner") {
     const target = typeof cfg.target_owner === "string" ? cfg.target_owner : param(ctx, "target_owner");
     const owner = target ? resolveOwner(target) : null;
-    if (!target) return review(record, "No target owner specified.");
-    if (!owner) return review(record, `Owner "${target}" is not a known CRM user.`);
+    if (!target) return review("No target owner specified.");
+    if (!owner) return review(`Owner "${target}" is not a known CRM user.`);
     return {
       status: "pending",
       action: `Change owner of ${record.name} to ${owner.name}`,
@@ -371,8 +140,8 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
   }
 
   if (slug === "add_tags" || slug === "remove_tags") {
-    const tags = Array.isArray(cfg.tag_names) ? cfg.tag_names.filter((t) => typeof t === "string") : [];
-    if (tags.length === 0) return review(record, "No tag names provided.");
+    const tags = Array.isArray(cfg.tag_names) ? cfg.tag_names.filter((tag) => typeof tag === "string") : [];
+    if (tags.length === 0) return review("No tag names provided.");
     return {
       status: "pending",
       action: `${slug === "add_tags" ? "Add" : "Remove"} tags [${tags.join(", ")}] on ${record.name}`,
@@ -385,9 +154,9 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
   if (slug === "create_task") {
     const subject = typeof cfg.subject === "string" ? cfg.subject : param(ctx, "task_subject");
     const dueDate = typeof cfg.due_date === "string" ? cfg.due_date : param(ctx, "due_date");
-    if (!subject) return review(record, "Task subject is required.");
-    if (!dueDate) return review(record, "Task due date is required.");
-    if (isFutureDate(dueDate) === null) return review(record, `Task due date "${dueDate}" is not a valid date.`);
+    if (!subject) return review("Task subject is required.");
+    if (!dueDate) return review("Task due date is required.");
+    if (isFutureDate(dueDate) === null) return review(`Task due date "${dueDate}" is not a valid date.`);
     return {
       status: "pending",
       action: `Create task "${subject}" (due ${dueDate}) on ${record.name}`,
@@ -399,7 +168,7 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
 
   if (slug === "complete_task") {
     const subject = typeof cfg.subject === "string" ? cfg.subject : param(ctx, "task_subject");
-    if (!subject) return review(record, "Task subject to match is required.");
+    if (!subject) return review("Task subject to match is required.");
     return {
       status: "pending",
       action: `Complete task matching "${subject}" on ${record.name}`,
@@ -409,25 +178,23 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
     };
   }
 
-  // Read-only block: answers "what is / show / check <field>" questions from
-  // the synced local copy of the record. No Zoho call, no approval gate.
   if (slug === "read_fields") {
     const rawList = Array.isArray(cfg.field_api_names)
       ? cfg.field_api_names
       : cfg.field_api_name != null
         ? [cfg.field_api_name]
         : [];
-    const fields = rawList.filter((f): f is string => typeof f === "string" && f.trim() !== "");
-    if (fields.length === 0) return review(record, "No fields specified to read.");
+    const fields = rawList.filter((field): field is string => typeof field === "string" && field.trim() !== "");
+    if (fields.length === 0) return review("No fields specified to read.");
 
     const values: Record<string, unknown> = {};
     for (const field of fields) {
-      const column = fieldToColumn(field);
+      const column = crmFieldToColumn(field);
       values[field] = record.data[column] ?? record.raw[column] ?? null;
     }
     return {
       status: "pending",
-      action: `${fields.map((f) => `${f} = ${JSON.stringify(values[f] ?? null)}`).join(", ")} — read from local copy (as of last import)`,
+      action: `${fields.map((field) => `${field} = ${JSON.stringify(values[field] ?? null)}`).join(", ")} - read from local copy (as of last import)`,
       before_data: values,
       after_data: {},
       error_message: null
@@ -435,7 +202,6 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
   }
 
   if (slug === "schedule_email") {
-    // Recipient email: prefer the record's own email (contacts), else config.
     const email =
       (typeof record.data.email === "string" && record.data.email) ||
       (typeof cfg.to_email === "string" && cfg.to_email) ||
@@ -445,31 +211,33 @@ function mapBlock(block: ParsedPlan["blocks"][number], record: CrmRecord, ctx: B
     const scheduleDate = typeof cfg.schedule_date === "string" ? cfg.schedule_date : param(ctx, "schedule_date");
     const scheduleTime = typeof cfg.schedule_time === "string" ? cfg.schedule_time : param(ctx, "schedule_time");
 
-    if (!email) return skip(record, "No email address on this record.");
-    if (String(optOut).toLowerCase() === "true") return skip(record, "Contact is opted out of email.");
-    if (!EMAIL_RE.test(email)) return skip(record, `"${email}" is not a valid email.`);
-    if (!subject) return review(record, "Email subject is required.");
-    if (!scheduleDate || !scheduleTime) return review(record, "Schedule date and time are required.");
+    if (!email) return skip("No email address on this record.");
+    if (String(optOut).toLowerCase() === "true") return skip("Contact is opted out of email.");
+    if (!EMAIL_RE.test(email)) return skip(`"${email}" is not a valid email.`);
+    if (!subject) return review("Email subject is required.");
+    if (!scheduleDate || !scheduleTime) return review("Schedule date and time are required.");
+
     const future = isFutureDate(scheduleDate, scheduleTime);
-    if (future === null) return review(record, `Schedule "${scheduleDate} ${scheduleTime}" is not a valid date/time.`);
-    if (future === false) return review(record, `Schedule "${scheduleDate} ${scheduleTime}" is in the past.`);
+    if (future === null) return review(`Schedule "${scheduleDate} ${scheduleTime}" is not a valid date/time.`);
+    if (future === false) return review(`Schedule "${scheduleDate} ${scheduleTime}" is in the past.`);
 
     return {
       status: "pending",
-      action: `Schedule email to ${email} — "${subject}" at ${scheduleDate} ${scheduleTime}`,
+      action: `Schedule email to ${email} - "${subject}" at ${scheduleDate} ${scheduleTime}`,
       before_data: {},
       after_data: { to_email: email, subject, schedule_date: scheduleDate, schedule_time: scheduleTime },
       error_message: null
     };
   }
 
-  return review(record, `No preview mapper for block "${slug}".`);
+  return review(`No preview mapper for block "${slug}".`);
 }
 
-function review(_record: CrmRecord, message: string): Mapped {
+function review(message: string): Mapped {
   return { status: "needs_review", action: message, before_data: {}, after_data: {}, error_message: message };
 }
-function skip(_record: CrmRecord, message: string): Mapped {
+
+function skip(message: string): Mapped {
   return { status: "skipped", action: message, before_data: {}, after_data: {}, error_message: message };
 }
 
@@ -490,7 +258,7 @@ export async function validatePlanForPreview({
   const config = MODULE_CONFIG[moduleKey];
 
   const moduleRecords = await fetchModuleRecords(supabase, moduleKey);
-  const resolved = resolveRecords(moduleRecords, plan);
+  const resolved = resolveMirrorRecords(moduleRecords, plan.record_selector);
   warnings.push(...resolved.warnings);
 
   const ctx: BlockCtx = {
@@ -504,7 +272,6 @@ export async function validatePlanForPreview({
   const items: PreviewItem[] = [];
   let rowNumber = 1;
 
-  // Report selector values that could not be resolved so nothing vanishes silently.
   for (const value of resolved.unmatched) {
     const near = resolved.suggestions[value];
     items.push(
@@ -516,6 +283,7 @@ export async function validatePlanForPreview({
       )
     );
   }
+
   for (const value of resolved.ambiguous) {
     const options = resolved.suggestions[value];
     items.push(
@@ -523,7 +291,7 @@ export async function validatePlanForPreview({
         rowNumber++,
         moduleKey,
         value,
-        `"${value}" matched multiple ${moduleKey} — refine to one.${options?.length ? ` Matches: ${options.join("; ")}.` : ""}`
+        `"${value}" matched multiple ${moduleKey} - refine to one.${options?.length ? ` Matches: ${options.join("; ")}.` : ""}`
       )
     );
   }
@@ -552,9 +320,9 @@ export async function validatePlanForPreview({
     missingInfo.push("No records matched the requested selector.");
   }
 
-  const eligible = items.filter((i) => i.status === "pending").length;
-  const skipped = items.filter((i) => i.status === "skipped").length;
-  const needsReview = items.filter((i) => i.status === "needs_review").length;
+  const eligible = items.filter((item) => item.status === "pending").length;
+  const skipped = items.filter((item) => item.status === "skipped").length;
+  const needsReview = items.filter((item) => item.status === "needs_review").length;
   const status = needsReview > 0 || missingInfo.length > 0 ? "needs_review" : "preview_ready";
 
   return {

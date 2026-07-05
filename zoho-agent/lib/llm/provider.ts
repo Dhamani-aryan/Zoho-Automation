@@ -8,6 +8,36 @@ export type PlanParseInput = {
   systemPrompt?: string;
 };
 
+export type AgentPromptMessage = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolName?: string;
+};
+
+export type AgentToolDefinition = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  tier: 0 | 1 | 2;
+};
+
+export type AgentToolCall = {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+
+export type AgentRunToolsInput = {
+  instructions: string;
+  messages: AgentPromptMessage[];
+  tools: AgentToolDefinition[];
+};
+
+export type AgentModelResult = {
+  text: string;
+  toolCalls: AgentToolCall[];
+};
+
 export type ParsedPlan = {
   intent_summary: string;
   run_kind: "read" | "write";
@@ -34,4 +64,5 @@ export type ParsedPlan = {
 export interface LLMProvider {
   name: string;
   parsePlan(input: PlanParseInput): Promise<ParsedPlan>;
+  runTools(input: AgentRunToolsInput): Promise<AgentModelResult>;
 }

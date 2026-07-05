@@ -1,7 +1,7 @@
 import { emptyPlan } from "@/lib/llm/parse-json";
 import { OpenAICodexProvider } from "@/lib/llm/openai-codex";
 import { OpenAIKeyProvider } from "@/lib/llm/openai-key";
-import type { LLMProvider } from "@/lib/llm/provider";
+import type { AgentModelResult, LLMProvider } from "@/lib/llm/provider";
 import { resolveCredential } from "@/lib/llm/resolve-credential";
 
 class MissingProvider implements LLMProvider {
@@ -11,6 +11,10 @@ class MissingProvider implements LLMProvider {
 
   async parsePlan() {
     return emptyPlan(this.message);
+  }
+
+  async runTools(): Promise<AgentModelResult> {
+    throw new Error(this.message);
   }
 }
 
