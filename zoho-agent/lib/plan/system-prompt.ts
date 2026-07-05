@@ -96,6 +96,7 @@ export function buildPlanSystemPrompt(catalog: PromptCatalog) {
     `Known tags by module: ${JSON.stringify(catalog.tags)}`,
     'If the command references one of these tags — or names a campaign/batch that matches one (e.g. "the KD Blitz deals" when "KD Blitz" is a deals tag) — use record_selector.mode="tag" with the exact tag string in record_selector.tag.',
     'Use mode="names" only for actual record names (account/contact/deal names).',
+    'Omit optional keys entirely when unused: no "filter" unless mode="filter", no "tag" unless mode="tag", never emit empty objects or null for optional fields.',
     "",
     "Block config keys (use EXACTLY these keys, no synonyms):",
     "update_deal_field / update_account_fields / update_contact_fields: { field_api_name, value }",

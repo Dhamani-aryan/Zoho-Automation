@@ -86,9 +86,19 @@ export async function POST(request: Request) {
 
   const parsed = validateParsedPlan(plan);
   if (!parsed.success) {
+    const issues = parsed.error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+    console.error(
+      "[plan-parse] malformed plan JSON. issues:",
+      issues,
+      "\nplan:\n",
+      JSON.stringify(plan).slice(0, 1500)
+    );
     return NextResponse.json(
       {
-        error: "The model returned malformed plan JSON.",
+        error: `The model returned malformed plan JSON — ${issues}`,
         details: parsed.error.flatten()
       },
       { status: 422 }

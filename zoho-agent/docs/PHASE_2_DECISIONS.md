@@ -88,6 +88,12 @@ Parse now works end to end. The first real plan exposed two spec-vs-implementati
 
 `npx tsc --noEmit` passes.
 
+Follow-up: a later parse hit the Zod gate ("The model returned malformed plan JSON" with no visible detail). Two changes: (1) the 422 error string now embeds the first 5 Zod issues (path: message) and the raw plan is logged as `[plan-parse]`; (2) `lib/plan/schema.ts` now tolerates harmless drift — enums lowercased via `.transform().pipe()` (Zod v4: generic-tuple `z.enum` widens to string, so literal arrays are inlined), string coercion on values/warnings/missing_info/tag, defaults for omitted blocks/record_selector. Guardrails still re-verify slugs and field names, so leniency does not weaken safety.
+
+Follow-up 2: with detail visible, the failure was `"filter": {}` — the model copies the shape example's `filter` key even in tag mode, and empty-object members failed as "expected string, received undefined". Schema now normalizes empty/partial/nulled `filter` to undefined (preprocess in `recordSelectorSchema`), same null→undefined guard on `tag`/`values`, and the prompt adds: omit optional keys entirely when unused, never emit empty objects or null.
+
+**MILESTONE (2026-07-05): first correct end-to-end parse + validate on real data.** "Set Next Step to \"2nd Email\" for the KD Blitz deals" → clean plan (`mode:"tag"`, `tag:"KD Blitz"`, `update_deal_field {field_api_name:"Next_Step", value:"2nd Email"}`) → Validate resolved the correct tagged deals. Acceptance test 1 of ~10 passed; remaining tests per the Phase 2 done-when list (§10 of the Phase 2 spec).
+
 ## Third credential option: paste Codex credential (2026-07-04)
 
 Added because device-code login depends on the "device authorization" toggle in a user's ChatGPT security settings, which isn't available/enabled on every account. This option matches the pre-existing local workflow.
