@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp/orchestrator-test",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "isolatedModules": false
+  },
+  "include": ["lib/orchestrator/state.ts", "tests/orchestrator-state.test.ts"]
+}

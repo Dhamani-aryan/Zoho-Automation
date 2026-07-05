@@ -9,6 +9,7 @@ export type RunStatus =
   | "paused"
   | "completed"
   | "failed"
+  | "cancelled"
   | "canceled";
 
 export type RunItemStatus =
