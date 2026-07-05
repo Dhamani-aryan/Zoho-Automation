@@ -34,6 +34,23 @@ Extended `LLMProvider` with `runTools()`. The OpenAI API-key provider uses stand
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
 
+## Phase A Review Gate
+
+Implementation is complete and committed through the `/agent` chat surface. Verification on 2026-07-06:
+
+- `npm run typecheck` passes.
+- `npm run lint` passes.
+- `npm run build` passes after rerunning outside the sandbox because `.next/trace-build` hit a Windows `EPERM` in the sandbox.
+- `npm run test:orchestrator` passes 7/7 after rerunning outside the sandbox because `.tmp/orchestrator-test` writes hit the same sandbox `EPERM`.
+- `npm run build:extension` passes after rerunning outside the sandbox because the build needed to unlink existing ignored `extension/dist` files.
+
+Manual acceptance still requires Aryan to run `supabase/2026_v2_agent.sql` in Supabase, then test `/agent` against the real mirror:
+
+1. "Get me the next step for the Duraco deal" should use `db_search_records` / `db_get_record` and answer from the local mirror, labeled as of last sync.
+2. "Merge these duplicate accounts" should not improvise; it should call `request_new_tool` and create a `tool_requests` row.
+
+Stop here for review before Phase B. No Zoho calls or CRM writes exist in Phase A.
+
 ## Phase A Checkpoint: Agent Routes + Chat UI
 
 Added the Phase A server loop in `lib/agent/loop.ts`: it persists the user message, calls the user's existing LLM credential through `runTools()`, executes only Tier-0 tools, persists assistant/tool messages, emits SSE events, and audits `agent_turn` / `tool_call`. The loop enforces the Phase A budgets: max 15 tool calls and 3 minutes wall clock.
