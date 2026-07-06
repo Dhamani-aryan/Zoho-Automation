@@ -55,7 +55,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex h-16 items-center border-b border-line px-5">
           <div>
             <div className="text-sm font-semibold tracking-[0]">Zoho Agent</div>
-            <div className="text-xs text-muted">Phase 1 foundation</div>
+            <div className="text-xs text-muted">V2 agent pilot</div>
           </div>
         </div>
         <nav className="space-y-1 p-3">

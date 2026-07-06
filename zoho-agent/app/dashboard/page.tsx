@@ -15,15 +15,15 @@ export default async function DashboardPage() {
   return (
     <AppShell>
       <PageHeader
-        eyebrow="Foundation"
+        eyebrow="V2 Agent"
         title="Operations dashboard"
-        description="Phase 1 tracks records, uploads, field metadata, and run history before live Zoho execution is added."
+        description="Monitor the local CRM mirror, batch run history, and the V2 agent rollout. Phase A answers from Supabase only; live Zoho reads come next through the extension."
         action={
           <Link
-            href="/imports"
+            href="/agent"
             className="inline-flex h-10 items-center justify-center rounded-md bg-accent px-4 text-sm font-semibold text-white"
           >
-            Import data
+            Open agent
           </Link>
         }
       />
@@ -70,21 +70,21 @@ export default async function DashboardPage() {
             </div>
           ) : (
             <div className="px-4 py-10 text-sm text-muted">
-              No runs yet. The first live executor arrives in Phase 3; Phase 1 can still log
-              imports and preview data.
+              No batch runs yet. The V2 agent can already answer from the local mirror; saved
+              preview runs remain here for batch workflows.
             </div>
           )}
         </section>
 
         <section className="rounded-md border border-line bg-white p-4 shadow-soft">
-          <h2 className="text-sm font-semibold">Phase 1 checklist</h2>
+          <h2 className="text-sm font-semibold">V2 rollout status</h2>
           <div className="mt-4 space-y-3 text-sm">
             {[
-              "Create Supabase schema and RLS",
-              "Seed action blocks and presets",
-              "Import account/contact/deal link CSVs",
-              "Paste Zoho field metadata JSON",
-              "Deploy to Vercel after local pass"
+              "Phase A: local DB agent tools live",
+              "Tool trace visible in /agent",
+              "Missing CRM capabilities file tool requests",
+              "Phase B next: live Zoho reads through extension",
+              "CRM writes still require explicit approval"
             ].map((item) => (
               <div key={item} className="flex items-center gap-3">
                 <div className="h-2 w-2 rounded-full bg-accent" />
