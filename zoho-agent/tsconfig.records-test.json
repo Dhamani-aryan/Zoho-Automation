@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp/records-test",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "isolatedModules": false
+  },
+  "include": ["lib/constants.ts", "lib/records/zoho-upsert.ts", "tests/zoho-upsert.test.ts"]
+}
