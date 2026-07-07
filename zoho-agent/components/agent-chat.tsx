@@ -331,7 +331,7 @@ export function AgentChat({
       <section className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
         <div className="shrink-0 border-b border-line px-5 py-4">
           <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
-          <div className="text-xs text-muted">Phase B: local DB tools plus read-only live Zoho bridge.</div>
+          <div className="text-xs text-muted">Phase C: local DB tools, live Zoho reads, and mirror sync.</div>
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">

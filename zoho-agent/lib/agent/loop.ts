@@ -6,7 +6,9 @@ import {
   TIER0_TOOL_DEFINITIONS
 } from "@/lib/agent/tier0-tools";
 import {
+  isInProcessTier1Tool,
   isTier1Tool,
+  runInProcessTier1Tool,
   TIER1_TOOL_DEFINITIONS,
   validateTier1ToolCall
 } from "@/lib/agent/tier1-tools";
@@ -44,8 +46,9 @@ Use tools when you need facts. Local DB tools read the Supabase mirror; Zoho too
 Never claim a local mirror answer is live Zoho data. Say "as of last sync" for DB-sourced answers.
 For a specific record question, search the mirror first to resolve likely records, then use live Zoho reads when the user needs current field values.
 Always label live Zoho answers as live from Zoho. If the extension is offline, say that clearly and offer the mirror answer instead.
+For tag-driven pull/sync requests, use zoho_search with the tag, paginate until Zoho says there are no more records, then call db_sync_records with only the records the user asked to sync. Report inserted, updated, unchanged, and warnings.
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
-Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase B.
+Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase C.
 When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
 Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
@@ -229,15 +232,19 @@ export async function runAgentTurn({
         } else if (isTier1Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for extension jobs.");
           const validatedCall = await validateTier1ToolCall(call, service);
-          result = await runBridgedTool({
-            service,
-            user,
-            sessionId,
-            call: validatedCall,
-            onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-          });
+          if (isInProcessTier1Tool(validatedCall.name)) {
+            result = await runInProcessTier1Tool({ call: validatedCall, service, userId: user.id });
+          } else {
+            result = await runBridgedTool({
+              service,
+              user,
+              sessionId,
+              call: validatedCall,
+              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+            });
+          }
         } else {
-          throw new Error(`Unknown or unavailable tool "${call.name}" in Phase B.`);
+          throw new Error(`Unknown or unavailable tool "${call.name}" in Phase C.`);
         }
       } catch (error) {
         ok = false;

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
+import { upsertZohoRecords, type MirrorDbClient, type SyncModule } from "@/lib/records/zoho-upsert";
 
 const modules = ["Accounts", "Contacts", "Deals"] as const;
 const relatedChildren = ["Contacts", "Deals"] as const;
@@ -56,6 +57,16 @@ const zohoReadApiSchema = z.object({
   params: z.record(z.string(), z.string()).optional().default({})
 }).refine((args) => Object.keys(args.params).length <= 8, {
   message: "zoho_read_api params are limited to 8 keys."
+});
+
+const syncModuleSchema = z.preprocess(
+  (value) => String(value ?? "").trim().toLowerCase(),
+  z.enum(["accounts", "contacts", "deals"])
+);
+
+const dbSyncRecordsSchema = z.object({
+  module: syncModuleSchema,
+  records: z.array(z.object({ id: z.string().trim().min(1) }).catchall(z.unknown())).min(1).max(200)
 });
 
 export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
@@ -124,6 +135,33 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
         }
       }
     }
+  },
+  {
+    name: "db_sync_records",
+    tier: 1,
+    description:
+      "Upsert live Zoho Accounts, Contacts, or Deals records into the local Supabase mirror. This is a local DB sync only; it never writes to Zoho.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["module", "records"],
+      properties: {
+        module: { type: "string", enum: ["accounts", "contacts", "deals"] },
+        records: {
+          type: "array",
+          minItems: 1,
+          maxItems: 200,
+          items: {
+            type: "object",
+            required: ["id"],
+            properties: {
+              id: { type: "string" }
+            },
+            additionalProperties: true
+          }
+        }
+      }
+    }
   }
 ];
 
@@ -131,6 +169,10 @@ export type Tier1ToolName = (typeof TIER1_TOOL_DEFINITIONS)[number]["name"];
 
 export function isTier1Tool(name: string): name is Tier1ToolName {
   return TIER1_TOOL_DEFINITIONS.some((tool) => tool.name === name);
+}
+
+export function isInProcessTier1Tool(name: string) {
+  return name === "db_sync_records";
 }
 
 async function assertFieldsExist(service: SupabaseClient, module: string, fields: string[]) {
@@ -171,5 +213,58 @@ export async function validateTier1ToolCall(call: AgentToolCall, service: Supaba
     return { ...call, args };
   }
 
+  if (call.name === "db_sync_records") {
+    const args = dbSyncRecordsSchema.parse(call.args);
+    return { ...call, args };
+  }
+
   throw new Error(`Unknown Tier-1 tool: ${call.name}`);
+}
+
+function cappedNames(rows: Array<{ zoho_id: string; name: string }>) {
+  return {
+    count: rows.length,
+    names: rows.slice(0, 50).map((row) => row.name),
+    omitted_count: Math.max(0, rows.length - 50)
+  };
+}
+
+export async function runInProcessTier1Tool({
+  call,
+  service,
+  userId
+}: {
+  call: AgentToolCall;
+  service: SupabaseClient;
+  userId: string;
+}) {
+  if (call.name !== "db_sync_records") throw new Error(`Unknown in-process Tier-1 tool: ${call.name}`);
+  const args = dbSyncRecordsSchema.parse(call.args);
+  const result = await upsertZohoRecords({
+    db: service as unknown as MirrorDbClient,
+    module: args.module as SyncModule,
+    records: args.records
+  });
+
+  const { error } = await service.from("audit_events").insert({
+    user_id: userId,
+    event_type: "mirror_sync",
+    message: `Synced ${result.module}: ${result.inserted.length} inserted, ${result.updated.length} updated, ${result.unchanged_count} unchanged.`,
+    metadata: {
+      module: result.module,
+      inserted: result.inserted.length,
+      updated: result.updated.length,
+      unchanged: result.unchanged_count,
+      warnings: result.warnings
+    }
+  });
+  if (error) throw error;
+
+  return {
+    module: result.module,
+    inserted: cappedNames(result.inserted),
+    updated: cappedNames(result.updated),
+    unchanged_count: result.unchanged_count,
+    warnings: result.warnings
+  };
 }

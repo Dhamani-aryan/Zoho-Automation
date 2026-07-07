@@ -6,13 +6,14 @@ export type SyncModule = (typeof SYNC_MODULES)[number];
 type DbError = { message: string };
 type DbRow = Record<string, unknown>;
 type DbResult<T> = { data: T | null; error: DbError | null };
+type Awaitable<T> = PromiseLike<T>;
 
 type SelectBuilder = {
-  in(column: string, values: string[]): Promise<DbResult<DbRow[]>>;
+  in(column: string, values: string[]): Awaitable<DbResult<DbRow[]>>;
 };
 
 type UpsertBuilder = {
-  select(columns: string): Promise<DbResult<DbRow[]>>;
+  select(columns: string): Awaitable<DbResult<DbRow[]>>;
 };
 
 export type MirrorDbClient = {
