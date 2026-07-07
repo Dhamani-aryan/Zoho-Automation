@@ -60,3 +60,15 @@ Added `/api/agent/sessions`, `/api/agent/sessions/[id]`, and `/api/agent/session
 Added `/agent` with a session list, chat pane, streaming assistant messages, and visible Tier-0 tool trace rows. Added the Agent nav item and protected `/agent` in middleware. Phase A UI explicitly labels responses as local DB-only; no Zoho tools are available yet.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
+
+## Phase A review (2026-07-06, chat review)
+
+Verdict: high quality, spec-conformant, approved with two small fixes applied by the reviewer. Verified independently: committed tree typechecks clean, orchestrator tests 7/7, migration SQL matches the spec with proper role-checked RLS, `db_query` is structured-only, tool args double-validated (JSON Schema + Zod), unknown tools error back to the model, budgets enforced, mirror refactor leaves a single shared matching implementation used by both the run pipeline and the agent. Docs honest and complete — no slop found.
+
+Fixes applied:
+1. `app/api/agent/sessions/[id]/messages/route.ts` — session lookup now enforces ownership explicitly (`user_id === auth.user.id`) and rejects archived sessions. RLS let admins READ any session, so an admin posting into another user's chat would have started a turn that died mid-way on the message-insert policy.
+2. `lib/agent/loop.ts` — transcript rebuild now skips assistant tool-call marker rows (tool_name set, no content); they exist for UI trace/audit but replayed as empty assistant messages in the prompt.
+
+Noted as a KNOWN Phase A limitation (fix scheduled first in Phase B): the transcript is flattened to one text block per model call (`composeAgentInput`) instead of item-based `function_call`/`function_call_output` pairing. Fine for Phase A's single-tier loop; must be upgraded before multi-step Zoho tool chains.
+
+Next: `workflows/SPEC_v2_phase_b_extension_bridge.md` — extension job bridge + live Zoho reads (GET-only), transcript upgrade first.

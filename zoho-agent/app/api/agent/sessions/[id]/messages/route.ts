@@ -18,12 +18,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const { data: session, error: sessionError } = await auth.supabase
     .from("agent_sessions")
-    .select("id")
+    .select("id,user_id,status")
     .eq("id", id)
     .single();
 
   if (sessionError || !session) {
     return Response.json({ error: sessionError?.message ?? "Agent session not found." }, { status: 404 });
+  }
+  // RLS lets admins READ any session, but turns must run only in the owner's
+  // session (message inserts would fail RLS mid-turn otherwise).
+  if (session.user_id !== auth.user.id) {
+    return Response.json({ error: "You can only send messages in your own agent sessions." }, { status: 403 });
+  }
+  if (session.status !== "active") {
+    return Response.json({ error: "This agent session is archived." }, { status: 409 });
   }
 
   const encoder = new TextEncoder();

@@ -57,19 +57,23 @@ function truncateToolResult(value: unknown) {
 }
 
 function messageRowsToPrompt(rows: AgentMessageRow[]): AgentPromptMessage[] {
-  return rows.map((row) => {
+  const prompt: AgentPromptMessage[] = [];
+  for (const row of rows) {
     if (row.role === "tool") {
-      return {
+      prompt.push({
         role: "tool",
         toolName: row.tool_name ?? undefined,
         content: row.tool_result == null ? row.content ?? "" : stringifyForModel(row.tool_result)
-      };
+      });
+      continue;
     }
-    return {
-      role: row.role,
-      content: row.content ?? ""
-    };
-  });
+    // Skip assistant tool-call marker rows (tool_name set, no content) — they
+    // exist for the UI trace/audit, but replaying them as empty assistant
+    // messages just pollutes the prompt.
+    if (row.role === "assistant" && !row.content?.trim()) continue;
+    prompt.push({ role: row.role, content: row.content ?? "" });
+  }
+  return prompt;
 }
 
 function toolError(error: unknown) {
