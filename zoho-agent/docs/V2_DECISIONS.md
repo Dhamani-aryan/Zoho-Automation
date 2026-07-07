@@ -94,3 +94,10 @@ Added `lib/agent/bridge.ts` for Tier-1 extension-backed tools. It fails before s
 Wired the agent loop so Tier-1 tool calls use the bridge while Tier-0 tools still run in-process. The chat UI now understands `tool_status` SSE events and labels the agent surface as Phase B read-only bridge work.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass. Fake-job done/failed testing still needs a Supabase row or the extension executor from the next checkpoint.
+## Phase B Checkpoint: Tier-1 Live Read Tool Definitions
+
+Added Tier-1 tool definitions for `zoho_search`, `zoho_get_record`, `zoho_get_related`, and `zoho_read_api`. Args are Zod-validated server-side before queueing. `zoho_search` requires exactly one of `criteria`, `name`, or `tag`; `zoho_read_api` is GET-only via anchored allowlist regexes; params are capped at eight keys.
+
+`zoho_get_record` validates requested field API names against `zoho_field_meta` before a job is inserted. The loop now exposes Tier-0 plus Tier-1 tools to the model, routes Tier-1 calls through the extension bridge, and keeps the agent instructions honest about mirror vs live sources and the Phase B no-write boundary.
+
+Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.

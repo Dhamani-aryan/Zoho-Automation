@@ -5,6 +5,11 @@ import {
   runTier0Tool,
   TIER0_TOOL_DEFINITIONS
 } from "@/lib/agent/tier0-tools";
+import {
+  isTier1Tool,
+  TIER1_TOOL_DEFINITIONS,
+  validateTier1ToolCall
+} from "@/lib/agent/tier1-tools";
 import { runBridgedTool } from "@/lib/agent/bridge";
 import { getLLMProviderForUser } from "@/lib/llm";
 import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
@@ -35,12 +40,15 @@ type AgentMessageRow = {
 
 const AGENT_INSTRUCTIONS = `You are the Zoho Automation tool agent.
 
-Use tools when you need facts. Phase A tools only read the local Supabase mirror or file a missing-tool request.
+Use tools when you need facts. Local DB tools read the Supabase mirror; Zoho tools read live data through the user's Chrome extension.
 Never claim a local mirror answer is live Zoho data. Say "as of last sync" for DB-sourced answers.
-For a specific record question, search first, then fetch the record if needed.
+For a specific record question, search the mirror first to resolve likely records, then use live Zoho reads when the user needs current field values.
+Always label live Zoho answers as live from Zoho. If the extension is offline, say that clearly and offer the mirror answer instead.
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
-Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase A.
+Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase B.
 When you have enough information, answer briefly with the relevant record names and values.`;
+
+const AGENT_TOOL_DEFINITIONS = [...TIER0_TOOL_DEFINITIONS, ...TIER1_TOOL_DEFINITIONS];
 
 function titleFromMessage(content: string) {
   return content.replace(/\s+/g, " ").trim().slice(0, 80) || "Agent chat";
@@ -157,7 +165,7 @@ export async function runAgentTurn({
     const model = await provider.runTools({
       instructions: AGENT_INSTRUCTIONS,
       messages: transcript,
-      tools: TIER0_TOOL_DEFINITIONS
+      tools: AGENT_TOOL_DEFINITIONS
     });
 
     if (model.text.trim()) {
@@ -195,7 +203,7 @@ export async function runAgentTurn({
       }
 
       toolCallCount += 1;
-      const tier = TIER0_TOOL_DEFINITIONS.find((tool) => tool.name === call.name)?.tier ?? 0;
+      const tier = AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === call.name)?.tier ?? 0;
       await emit({ type: "tool_call", call, tier });
       await supabase.from("agent_messages").insert({
         session_id: sessionId,
@@ -217,13 +225,14 @@ export async function runAgentTurn({
       try {
         if (isTier0Tool(call.name)) {
           result = await runTier0Tool({ call, supabase, userId: user.id });
-        } else if (tier === 1) {
+        } else if (isTier1Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for extension jobs.");
+          const validatedCall = await validateTier1ToolCall(call, service);
           result = await runBridgedTool({
             service,
             user,
             sessionId,
-            call,
+            call: validatedCall,
             onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
           });
         } else {
