@@ -46,7 +46,8 @@ For a specific record question, search the mirror first to resolve likely record
 Always label live Zoho answers as live from Zoho. If the extension is offline, say that clearly and offer the mirror answer instead.
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
 Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase B.
-When you have enough information, answer briefly with the relevant record names and values.`;
+When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
+Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
 const AGENT_TOOL_DEFINITIONS = [...TIER0_TOOL_DEFINITIONS, ...TIER1_TOOL_DEFINITIONS];
 
