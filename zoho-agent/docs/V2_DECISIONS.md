@@ -87,6 +87,21 @@ Started Phase B with the transcript upgrade required before multi-step live Zoho
 Call IDs are persisted inside `agent_messages.tool_args._call_id` instead of adding a column. This keeps already-run V2 migrations compatible while preserving the required call_id round-trip for new tool calls. Legacy tool rows without `_call_id` are replayed as plain text fallback context rather than dropped.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
+## Phase B live-read timeout debug (2026-07-07, chat)
+
+Symptom: mirror search fine, Tier-1 job queued, backend expires with "Timed out waiting for the Chrome extension to report this job" — extension never reported.
+
+Diagnosis (two stacked causes):
+1. **Job silently never claimed when no crm.zoho.com tab matched.** `jobs.ts pollOnce()` returned BEFORE claiming when `tabs.query` found no CRM tab, while the 1-minute run-items poll kept `last_seen_at` fresh — so the backend preflight passed, the job sat `queued`, and the user got the generic 90s timeout. This exactly matches the reported symptom.
+2. **The fe7cca2 page-context executor could never run on Zoho anyway.** It injected an inline `<script>` element; Zoho CRM's page CSP blocks inline scripts, so `pageRunner` would never execute and every claimed job would burn the 20s content timeout and report a useless "page-context executor" error.
+
+Fixes:
+- `extension/src/jobs.ts` — tab lookup moved AFTER claim; missing tab now reports `failed` immediately with "No crm.zoho.com tab is open…" (actionable chat feedback in seconds, not a 90s timeout). Step-level `saveLastJobStatus` breadcrumbs added: connected → claimed → running-in-tab → completed/failed.
+- **Executor switched to `chrome.scripting.executeScript({ world: "MAIN" })`** driven from the background worker — CSP-immune, and the promise resolves with the runner's return value so the postMessage plumbing is gone. New self-contained `extension/src/page-runner.ts` (GET-only, same header/fallback/logged-out logic; MUST stay closure-free — it is serialized into the page). `content.ts` reduced to the ping listener. `manifest.json` adds the `scripting` permission (answers: yes executeScript, yes scripting permission).
+- `lib/agent/bridge.ts` — timeout errors now distinguish "never picked up" (check toggle + CRM tab) from "picked up but never reported" (refresh the tab).
+
+Verified: `npx tsc --noEmit` clean. `npm run build:extension` must run on the dev machine (esbuild binary is win32 in node_modules). After rebuilding, RELOAD the unpacked extension; content-script changes also need a crm.zoho.com tab refresh.
+
 ## Phase B review (2026-07-07, chat review)
 
 Verdict: approved, one real defect fixed, no blocking issues. Independently verified: committed tree typechecks clean; extension executor is grep-provably GET-only (single fetch path, `method: "GET"`, only 4 read functions mapped); claim is atomic (status-guarded update + lost_race); sweeps correct and same-user scoped; report finalizes only the owner's `running` job; bridge fails before side effects on offline extension, expires timed-out jobs with a guarded update, and maps `zoho_logged_out` to user guidance; tier-1 args are Zod-validated + field-checked BEFORE queueing; `zoho_read_api` allowlist is anchored and GET-only; item-based transcript pairs `function_call`/`function_call_output` by `call_id`, `_call_id` persistence is backward-compatible, legacy tool rows fall back to text, `AGENT_FLAT_TRANSCRIPT=1` path intact; chat handles `tool_status` keyed by call_id.

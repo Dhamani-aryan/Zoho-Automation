@@ -128,7 +128,14 @@ export async function runBridgedTool({
     .maybeSingle();
 
   if (expired) {
-    throw new Error("Timed out waiting for the Chrome extension to report this job.");
+    // Tailor the timeout by how far the job got — "never claimed" vs
+    // "claimed but never reported" point at different user fixes.
+    const claimedAt = (expired as ToolJobRow).claimed_at;
+    throw new Error(
+      claimedAt
+        ? "The extension picked this job up but never reported a result. Refresh the crm.zoho.com tab and ask again."
+        : "The extension never picked this job up. Check that the extension toggle is ON in its options page and that a crm.zoho.com tab is open, then ask again."
+    );
   }
 
   throw new Error("Zoho tool job finished after the server wait timed out. Ask again to inspect the latest state.");

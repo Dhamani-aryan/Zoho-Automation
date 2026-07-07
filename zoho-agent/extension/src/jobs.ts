@@ -1,4 +1,5 @@
 import { claimJob, handshake, reportJobDone, reportJobFailed, type ToolJob } from "./api";
+import { zohoPageRunner, type PageResult } from "./page-runner";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
 const ACTIVE_POLL_MS = 1500;
@@ -20,22 +21,38 @@ async function crmTab() {
   return tabs.find((tab) => typeof tab.id === "number") ?? null;
 }
 
-async function executeInTab(tabId: number, job: ToolJob) {
-  return chrome.tabs.sendMessage(tabId, { action: "zohoAgentExecuteJob", job }) as Promise<{
-    ok?: boolean;
-    result?: unknown;
-    error_message?: string;
-    error_code?: string;
-  }>;
+// Runs the read-only executor in the page's MAIN world via chrome.scripting.
+// Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
+async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: zohoPageRunner,
+      args: [{ tool_name: job.tool_name, args: job.args }]
+    });
+    const result = results?.[0]?.result as PageResult | undefined;
+    if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
+      return {
+        ok: false,
+        error_message: "Zoho page executor returned no result (the tab may still be loading). Try again."
+      };
+    }
+    return result;
+  } catch (error) {
+    return {
+      ok: false,
+      error_message: `Could not run in the Zoho tab${
+        error instanceof Error ? `: ${error.message}` : ""
+      }. If the extension was just reloaded, refresh the crm.zoho.com tab and try again.`
+    };
+  }
 }
 
 async function pollOnce() {
   if (inFlight) return;
   const settings = await loadSettings();
   if (!settings.enabled) return;
-
-  const tab = await crmTab();
-  if (!tab?.id) return;
 
   inFlight = true;
   try {
@@ -49,17 +66,22 @@ async function pollOnce() {
     }
 
     idleSince = 0;
-    await saveLastJobStatus(`Running ${claimed.job.tool_name} (${claimed.job.id}).`);
+    await saveLastJobStatus(`Claimed ${claimed.job.tool_name} (${claimed.job.id}).`);
 
-    let response: Awaited<ReturnType<typeof executeInTab>>;
-    try {
-      response = await executeInTab(tab.id, claimed.job);
-    } catch (error) {
-      response = {
-        ok: false,
-        error_message: error instanceof Error ? error.message : "Could not reach the Zoho content script."
-      };
+    // Tab check AFTER claim: a missing CRM tab now reports an actionable
+    // failure within seconds instead of leaving the job queued until the
+    // backend's 90s wait expires.
+    const tab = await crmTab();
+    if (!tab?.id) {
+      const message =
+        "No crm.zoho.com tab is open in this Chrome profile. Open Zoho CRM in a tab and ask again.";
+      await reportJobFailed(settings, claimed.job.id, message);
+      await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com tab open.`);
+      return;
     }
+
+    await saveLastJobStatus(`Running ${claimed.job.tool_name} in tab ${tab.id}.`);
+    const response = await executeInTab(tab.id, claimed.job);
 
     if (response.ok) {
       await reportJobDone(settings, claimed.job.id, response.result ?? null);

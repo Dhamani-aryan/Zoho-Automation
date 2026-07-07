@@ -30,6 +30,16 @@ declare namespace chrome {
     };
   }
 
+  namespace scripting {
+    type InjectionResult = { result?: unknown };
+    function executeScript<Args extends unknown[]>(injection: {
+      target: { tabId: number };
+      world?: "MAIN" | "ISOLATED";
+      func: (...args: Args) => unknown;
+      args?: Args;
+    }): Promise<InjectionResult[]>;
+  }
+
   namespace tabs {
     type Tab = {
       id?: number;
