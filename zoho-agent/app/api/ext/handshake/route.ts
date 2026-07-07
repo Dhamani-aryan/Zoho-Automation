@@ -22,6 +22,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: runsError.message }, { status: 500 });
     }
 
+    const { count: queuedJobs, error: jobsError } = await auth.service
+      .from("tool_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", auth.user.id)
+      .eq("status", "queued");
+
+    if (jobsError) {
+      return NextResponse.json({ error: jobsError.message }, { status: 500 });
+    }
+
     const runIds = (runs ?? []).map((run) => run.id);
     const counts = new Map<string, ReturnType<typeof emptyCounts>>();
 
@@ -46,6 +56,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       user: { id: auth.user.id, name: auth.user.name, email: auth.user.email },
+      queued_jobs: queuedJobs ?? 0,
       approved_runs: (runs ?? []).map((run) => ({
         id: run.id,
         status: run.status,

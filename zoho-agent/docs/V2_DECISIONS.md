@@ -34,6 +34,14 @@ Extended `LLMProvider` with `runTools()`. The OpenAI API-key provider uses stand
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
 
+## Phase B Checkpoint: Extension Job Claim/Report Routes
+
+Added the read-tool job bridge routes under `/api/ext/jobs/*`. `POST /api/ext/jobs/claim` uses the existing extension bearer-token auth, sweeps this user's stale queued/running jobs, then claims the oldest queued job with a guarded `status='queued'` update so concurrent polls lose cleanly. `POST /api/ext/jobs/[id]/report` only finalizes the claiming user's `running` job, stores `done`/`failed`, preserves `zoho_logged_out` as an error code in the result payload, and audits `ext_job_reported`.
+
+Extended `/api/ext/handshake` with `queued_jobs` so the extension options UI can show pending agent jobs. No schema change was required because `tool_jobs` already exists in the V2 migration.
+
+Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass. Manual curl/database claim testing still needs a real `tool_jobs` row in Supabase.
+
 ## Phase A Review Gate
 
 Implementation is complete and committed through the `/agent` chat surface. Verification on 2026-07-06:
