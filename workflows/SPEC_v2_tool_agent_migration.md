@@ -216,6 +216,9 @@ create table public.tool_requests (
 
 ## 10. Migration phases (each runnable; live logging to docs/V2_DECISIONS.md, same style as Phase 2/3)
 
+Detailed per-phase build specs (authoritative over the summaries below):
+A/B shipped — `SPEC_v2_phase_b_extension_bridge.md`; C — `SPEC_v2_phase_c_sync.md`; D — `SPEC_v2_phase_d_gated_writes.md`; E — `SPEC_v2_phase_e_hardening.md`; F — `SPEC_v2_phase_f_ui_workflows.md`.
+
 - **Phase A — agent core, DB tools only.** Migration SQL; loop runner with budgets; both LLM providers doing tool calling; chat UI with streaming + tool trace; Tier-0 tools. Done when: "get me the next step for the duraco deal" answers from the mirror (labeled as-of-sync) with a visible tool trace, and scenario 4 files a tool request.
 - **Phase B — extension bridge + live reads.** tool_jobs + claim/report; fast poll; Tier-1 Zoho read tools; `zoho-api.ts` finished. Done when: scenario 1 runs end to end live (DB search → live Zoho read → answer) with the extension trace visible.
 - **Phase C — sync.** `db_sync_records` + shared upsert lib. Done when: scenario 2 (tag → fetch → upsert → report counts) passes against a real tag Aryan creates, and the Records browser shows the new rows.
