@@ -18,19 +18,24 @@ const token = input("token");
 const enabled = input("enabled");
 const message = text("message");
 const status = text("status");
+const jobStatus = text("jobStatus");
+let currentSettings: ExtensionSettings | null = null;
 
 function readForm(): ExtensionSettings {
   return {
     backendUrl: backendUrl.value.trim() || "http://localhost:3000",
     token: token.value.trim(),
-    enabled: enabled.checked
+    enabled: enabled.checked,
+    lastJobStatus: currentSettings?.lastJobStatus ?? "No agent jobs yet."
   };
 }
 
 function writeForm(settings: ExtensionSettings) {
+  currentSettings = settings;
   backendUrl.value = settings.backendUrl;
   token.value = settings.token;
   enabled.checked = settings.enabled;
+  jobStatus.textContent = settings.lastJobStatus;
 }
 
 async function save() {
@@ -41,8 +46,11 @@ async function save() {
 async function runHandshake() {
   await save();
   const result = await handshake(readForm());
+  const nextSettings = { ...readForm(), lastJobStatus: `Connected. ${result.queued_jobs ?? 0} queued agent job(s).` };
+  await saveSettings(nextSettings);
+  writeForm(nextSettings);
   status.textContent = JSON.stringify(result, null, 2);
-  message.textContent = `Connected as ${result.user.name}.`;
+  message.textContent = `Connected as ${result.user.name}. ${result.queued_jobs ?? 0} queued agent job(s).`;
 }
 
 async function dryClaimOnce() {

@@ -101,3 +101,10 @@ Added Tier-1 tool definitions for `zoho_search`, `zoho_get_record`, `zoho_get_re
 `zoho_get_record` validates requested field API names against `zoho_field_meta` before a job is inserted. The loop now exposes Tier-0 plus Tier-1 tools to the model, routes Tier-1 calls through the extension bridge, and keeps the agent instructions honest about mirror vs live sources and the Phase B no-write boundary.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
+## Phase B Checkpoint: Extension GET Job Executor
+
+Finished the Phase B extension executor for read-only agent jobs. Added a GET-only Zoho session API helper, content-script execution for `zoho_search`, `zoho_get_record`, `zoho_get_related`, and `zoho_read_api`, and a separate background `jobs.ts` poller that claims one agent job at a time only when the extension is enabled and a `crm.zoho.com` tab exists. The old Phase 3 dry run-item polling path remains separate.
+
+The options page now shows queued agent jobs from handshake plus a last-job status line, and the enable toggle is labeled as read-only Zoho session access. Logged-out Zoho detection reports `zoho_logged_out` back to the server.
+
+Verified after this checkpoint: `npm run typecheck`, `npm run lint`, and `npm run build:extension` pass. GET-only proof: `jobs.ts`/`zoho-api.ts` contain one CRM fetch path and it uses `method: "GET"`; no PUT/POST/PATCH/DELETE CRM path exists in the Phase B executor.

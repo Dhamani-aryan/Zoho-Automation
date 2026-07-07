@@ -29,4 +29,14 @@ declare namespace chrome {
       set(items: Record<string, unknown>, callback?: () => void): void;
     };
   }
+
+  namespace tabs {
+    type Tab = {
+      id?: number;
+      url?: string;
+    };
+
+    function query(queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
+    function sendMessage(tabId: number, message: unknown): Promise<unknown>;
+  }
 }
