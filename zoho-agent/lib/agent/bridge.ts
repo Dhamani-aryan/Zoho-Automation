@@ -4,7 +4,7 @@ import type { AgentToolCall } from "@/lib/llm/provider";
 
 const DEFAULT_TIMEOUT_MS = 90 * 1000;
 const POLL_INTERVAL_MS = 500;
-const EXTENSION_LIVE_MS = 60 * 1000;
+const EXTENSION_LIVE_MS = 120 * 1000;
 
 type ToolJobStatus = "queued" | "running" | "done" | "failed" | "expired";
 

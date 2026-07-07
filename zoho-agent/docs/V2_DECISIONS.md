@@ -130,3 +130,5 @@ Manual live acceptance remains: reload the unpacked extension, keep the toggle e
 During extension testing, Chrome surfaced stack traces at `extension/src/api.ts` instead of a useful root cause when the backend fetch failed or returned a non-OK response. `appFetch` now reports the concrete URL plus timeout/backend/host-permission guidance, the alarm-triggered dry poll catches failures instead of surfacing uncaught promise errors, and the manifest includes `http://127.0.0.1:3000/*` alongside `localhost`.
 
 Verified after this fix: `npm run typecheck`, `npm run lint`, and `npm run build:extension` pass.
+
+Follow-up from first live-read attempt: mirror search worked, but `zoho_get_record` failed preflight with "Chrome extension is not connected." The server liveness window is now 120s instead of 60s so MV3's 1-minute alarm wake plus normal jitter does not falsely mark a recently handshaking extension offline.
