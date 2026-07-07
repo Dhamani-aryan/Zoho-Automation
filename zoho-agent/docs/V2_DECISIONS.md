@@ -149,3 +149,13 @@ Verified after this fix: `npm run typecheck`, `npm run lint`, and `npm run build
 Follow-up from first live-read attempt: mirror search worked, but `zoho_get_record` failed preflight with "Chrome extension is not connected." The server liveness window is now 120s instead of 60s so MV3's 1-minute alarm wake plus normal jitter does not falsely mark a recently handshaking extension offline.
 
 HeySnap session-API reference confirmed the Zoho fetch must run in the actual `crm.zoho.com` page context, not the extension service worker. The content script now injects a one-shot page-context runner for `zoho_search`, `zoho_get_record`, `zoho_get_related`, and `zoho_read_api`; the page runner reads `#token`, sends `X-ZCSRF-TOKEN: crmcsrfparam=<token>`, `X-CRM-ORG: 890324941`, `X-Requested-With`, `credentials: "include"`, and posts the JSON/error result back to the content script for reporting.
+
+## Phase C Checkpoint: Live Zoho to Mirror Sync
+
+Added `lib/records/zoho-upsert.ts` for live Zoho API rows. It intentionally stays separate from `scripts/import-masters.mjs` because CSV exports and live API payloads use different shapes; field-map unification remains a Phase E hardening item. The mapper preserves the full live record in `raw_data`, composes canonical Zoho URLs, resolves contact/deal account/contact FKs from existing mirror rows, warns on unresolved lookups, and classifies each row as inserted, updated, or unchanged before upserting only changed rows.
+
+Added `db_sync_records` as a Tier-1 in-process tool. The model must pass `{ module, records }` with 1-200 live Zoho records that each have a string `id`; Zod validation happens before the service client upsert. The tool audits `mirror_sync` with counts and returns capped inserted/updated names plus warnings. Existing Zoho read tools still go through the extension bridge; this local DB sync never writes to Zoho.
+
+Agent instructions now tell the model to use `zoho_search` for tag-driven pulls, paginate until `more_records=false`, then call `db_sync_records` only for the records the user asked to sync. The Agent UI label now reflects Phase C.
+
+Verified after this checkpoint: `npm run typecheck`, `npm run lint`, and `npm run test:records` pass. Live acceptance still needs Aryan to create/tag 2-3 demo records in Zoho, ask the agent to pull that tag into the mirror, verify Records shows the rows, then re-run and confirm all records report unchanged.
