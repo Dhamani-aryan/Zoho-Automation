@@ -41,10 +41,11 @@ export async function appFetch<T>(
   timeoutMs = 15000
 ): Promise<T> {
   if (!settings.token.trim()) throw new Error("Extension token is missing.");
+  const url = `${settings.backendUrl.replace(/\/$/, "")}${path}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${settings.backendUrl.replace(/\/$/, "")}${path}`, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -58,6 +59,16 @@ export async function appFetch<T>(
       throw new Error(typeof body.error === "string" ? body.error : `Request failed with ${response.status}.`);
     }
     return body as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Request to ${url} timed out after ${timeoutMs / 1000}s.`);
+    }
+    if (error instanceof TypeError) {
+      throw new Error(
+        `Could not reach ${url}. Check that the app is running, Backend URL is correct, and the extension has host permission for that URL.`
+      );
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

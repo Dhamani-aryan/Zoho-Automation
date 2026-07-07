@@ -87,6 +87,18 @@ Started Phase B with the transcript upgrade required before multi-step live Zoho
 Call IDs are persisted inside `agent_messages.tool_args._call_id` instead of adding a column. This keeps already-run V2 migrations compatible while preserving the required call_id round-trip for new tool calls. Legacy tool rows without `_call_id` are replayed as plain text fallback context rather than dropped.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
+## Phase B review (2026-07-07, chat review)
+
+Verdict: approved, one real defect fixed, no blocking issues. Independently verified: committed tree typechecks clean; extension executor is grep-provably GET-only (single fetch path, `method: "GET"`, only 4 read functions mapped); claim is atomic (status-guarded update + lost_race); sweeps correct and same-user scoped; report finalizes only the owner's `running` job; bridge fails before side effects on offline extension, expires timed-out jobs with a guarded update, and maps `zoho_logged_out` to user guidance; tier-1 args are Zod-validated + field-checked BEFORE queueing; `zoho_read_api` allowlist is anchored and GET-only; item-based transcript pairs `function_call`/`function_call_output` by `call_id`, `_call_id` persistence is backward-compatible, legacy tool rows fall back to text, `AGENT_FLAT_TRANSCRIPT=1` path intact; chat handles `tool_status` keyed by call_id.
+
+Defect fixed (extension/src/background.ts): the job poller was a `setTimeout` chain started at worker startup — MV3 terminates idle service workers (~30s), killing the chain; job pickup could stall indefinitely until an unrelated wake. The existing 1-minute alarm now also fires `pollAgentJobOnce()`, bounding worst-case pickup latency to the alarm period (worker wake re-runs `startJobPolling` for the fast loop).
+
+Non-blocking recommendations (Phase C backlog):
+1. `lib/agent/bridge.ts` EXTENSION_LIVE_MS=60s can spuriously report "extension not connected" during a worker-teardown gap; consider 120s.
+2. `extension/src/jobs.ts` calls handshake+claim every 1.5s cycle; claim alone updates last_seen — drop the per-cycle handshake to halve request volume.
+3. `extension/src/zoho-api.ts` `rawGet` trusts server-validated paths; add the same allowlist check extension-side as defense-in-depth.
+4. Missing tests: none for jobs claim/report atomicity or bridge timeout paths — add route-level tests when a test harness for Next routes lands (orchestrator-style pure-function extraction would work: move sweep/claim decisions into lib functions).
+
 ## Phase B Checkpoint: Server Bridge Wait Loop
 
 Added `lib/agent/bridge.ts` for Tier-1 extension-backed tools. It fails before side effects if the user's extension has not handshaken within 60 seconds, enqueues one `tool_jobs` row, emits queued/running status updates, polls every 500ms, expires timed-out jobs, and converts `zoho_logged_out` failures into direct user guidance.
@@ -113,3 +125,8 @@ Verified after this checkpoint: `npm run typecheck`, `npm run lint`, and `npm ru
 Automated verification passed after the extension executor checkpoint: `npm run typecheck`, `npm run lint`, `npm run build`, `npm run build:extension`, and `npm run test:orchestrator` (7/7). The production build still emits Next's middleware-to-proxy deprecation warning, but it completes successfully.
 
 Manual live acceptance remains: reload the unpacked extension, keep the toggle enabled with a logged-in `crm.zoho.com` tab, then ask `/agent` "Get me the next step for the Duraco deal." Expected trace: mirror search first, then live `zoho_get_record`, final answer labeled live. Negative paths to spot-check manually: extension disabled/offline, non-allowlisted `zoho_read_api`, Zoho logged out, and a timed-out job.
+## Phase B Runtime Test Fix: Extension Backend Errors
+
+During extension testing, Chrome surfaced stack traces at `extension/src/api.ts` instead of a useful root cause when the backend fetch failed or returned a non-OK response. `appFetch` now reports the concrete URL plus timeout/backend/host-permission guidance, the alarm-triggered dry poll catches failures instead of surfacing uncaught promise errors, and the manifest includes `http://127.0.0.1:3000/*` alongside `localhost`.
+
+Verified after this fix: `npm run typecheck`, `npm run lint`, and `npm run build:extension` pass.

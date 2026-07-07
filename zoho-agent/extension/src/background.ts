@@ -12,7 +12,12 @@ startJobPolling();
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
-    void dryPollOnce();
+    void dryPollOnce().catch(() => undefined);
+    // MV3 kills the service worker (and its setTimeout poll chain) after
+    // ~30s idle. The alarm both wakes the worker (module re-runs
+    // startJobPolling) and kicks one immediate job poll so pickup latency
+    // is bounded by the alarm period instead of stalling forever.
+    void pollAgentJobOnce().catch(() => undefined);
   }
 });
 
