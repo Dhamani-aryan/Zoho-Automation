@@ -87,3 +87,10 @@ Started Phase B with the transcript upgrade required before multi-step live Zoho
 Call IDs are persisted inside `agent_messages.tool_args._call_id` instead of adding a column. This keeps already-run V2 migrations compatible while preserving the required call_id round-trip for new tool calls. Legacy tool rows without `_call_id` are replayed as plain text fallback context rather than dropped.
 
 Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.
+## Phase B Checkpoint: Server Bridge Wait Loop
+
+Added `lib/agent/bridge.ts` for Tier-1 extension-backed tools. It fails before side effects if the user's extension has not handshaken within 60 seconds, enqueues one `tool_jobs` row, emits queued/running status updates, polls every 500ms, expires timed-out jobs, and converts `zoho_logged_out` failures into direct user guidance.
+
+Wired the agent loop so Tier-1 tool calls use the bridge while Tier-0 tools still run in-process. The chat UI now understands `tool_status` SSE events and labels the agent surface as Phase B read-only bridge work.
+
+Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass. Fake-job done/failed testing still needs a Supabase row or the extension executor from the next checkpoint.

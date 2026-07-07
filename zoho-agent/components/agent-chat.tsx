@@ -24,7 +24,16 @@ type AgentMessageRow = {
 
 type TimelineItem =
   | { id: string; kind: "user" | "assistant"; content: string }
-  | { id: string; kind: "tool"; name: string; args: unknown; result?: unknown; ok?: boolean; tier?: number | null };
+  | {
+      id: string;
+      kind: "tool";
+      name: string;
+      args: unknown;
+      result?: unknown;
+      ok?: boolean;
+      tier?: number | null;
+      status?: string;
+    };
 
 function rowsToTimeline(rows: AgentMessageRow[]): TimelineItem[] {
   const items: TimelineItem[] = [];
@@ -124,8 +133,16 @@ export function AgentChat({
       if (!id || !name) return;
       setTimeline((current) => [
         ...current,
-        { id, kind: "tool", name, args: call.args ?? {}, tier: Number(object.tier ?? 0) }
+        { id, kind: "tool", name, args: call.args ?? {}, tier: Number(object.tier ?? 0), status: "called" }
       ]);
+      return;
+    }
+    if (eventName === "tool_status") {
+      const callId = typeof object.call_id === "string" ? object.call_id : "";
+      const status = typeof object.status === "string" ? object.status : "";
+      setTimeline((current) =>
+        current.map((item) => (item.kind === "tool" && item.id === callId ? { ...item, status } : item))
+      );
       return;
     }
     if (eventName === "tool_result") {
@@ -133,7 +150,7 @@ export function AgentChat({
       setTimeline((current) =>
         current.map((item) =>
           item.kind === "tool" && item.id === callId
-            ? { ...item, result: object.result, ok: object.ok === true }
+            ? { ...item, result: object.result, ok: object.ok === true, status: object.ok === true ? "done" : "failed" }
             : item
         )
       );
@@ -238,7 +255,7 @@ export function AgentChat({
       <section className="flex min-h-[68vh] flex-col border border-line bg-white">
         <div className="border-b border-line px-5 py-4">
           <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
-          <div className="text-xs text-muted">Phase A: local DB tools only. No Zoho calls.</div>
+          <div className="text-xs text-muted">Phase B: local DB tools plus read-only live Zoho bridge.</div>
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto p-5">
@@ -253,6 +270,7 @@ export function AgentChat({
                   <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0] text-muted">
                     <Wrench className="h-3.5 w-3.5" />
                     Tier {item.tier ?? 0} tool: {item.name}
+                    {item.status ? <span className="text-[11px] normal-case text-muted">({item.status})</span> : null}
                   </div>
                   <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-xs text-ink">
                     {shortJson(item.result ?? item.args)}

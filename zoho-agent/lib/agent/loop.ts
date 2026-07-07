@@ -5,9 +5,11 @@ import {
   runTier0Tool,
   TIER0_TOOL_DEFINITIONS
 } from "@/lib/agent/tier0-tools";
+import { runBridgedTool } from "@/lib/agent/bridge";
 import { getLLMProviderForUser } from "@/lib/llm";
 import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
 import type { AuthorizedUser } from "@/lib/auth/guards";
+import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
 const MAX_TOOL_CALLS = 15;
 const TURN_TIMEOUT_MS = 3 * 60 * 1000;
@@ -16,6 +18,7 @@ const TOOL_RESULT_CHAR_LIMIT = 8000;
 export type AgentStreamEvent =
   | { type: "assistant_delta"; text: string }
   | { type: "tool_call"; call: AgentToolCall; tier: 0 | 1 | 2 }
+  | { type: "tool_status"; call_id: string; tool_name: string; status: "queued" | "running" }
   | { type: "tool_result"; call_id: string; tool_name: string; result: unknown; ok: boolean }
   | { type: "done" }
   | { type: "error"; error: string };
@@ -124,6 +127,7 @@ export async function runAgentTurn({
 }) {
   const started = Date.now();
   const provider = await getLLMProviderForUser(user.id);
+  const service = createServiceSupabaseClient();
 
   const { error: userMessageError } = await supabase.from("agent_messages").insert({
     session_id: sessionId,
@@ -211,10 +215,20 @@ export async function runAgentTurn({
       let ok = true;
       let result: unknown;
       try {
-        if (!isTier0Tool(call.name)) {
-          throw new Error(`Unknown or unavailable tool "${call.name}" in Phase A.`);
+        if (isTier0Tool(call.name)) {
+          result = await runTier0Tool({ call, supabase, userId: user.id });
+        } else if (tier === 1) {
+          if (!service) throw new Error("Supabase service role is not configured for extension jobs.");
+          result = await runBridgedTool({
+            service,
+            user,
+            sessionId,
+            call,
+            onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+          });
+        } else {
+          throw new Error(`Unknown or unavailable tool "${call.name}" in Phase B.`);
         }
-        result = await runTier0Tool({ call, supabase, userId: user.id });
       } catch (error) {
         ok = false;
         result = toolError(error);
