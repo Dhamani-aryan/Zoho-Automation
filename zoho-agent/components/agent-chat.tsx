@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Send, Trash2, Wrench } from "lucide-react";
+import { Plus, Send, Trash2, Wrench, X } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
 type AgentSession = {
@@ -80,6 +80,7 @@ export function AgentChat({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -114,16 +115,13 @@ export function AgentChat({
     if (!response.ok || !payload.session) throw new Error(payload.error ?? "Could not create agent session.");
     setSessions((current) => [payload.session!, ...current]);
     setActiveSessionId(payload.session.id);
+    setPendingDeleteSessionId(null);
     setTimeline([]);
     return payload.session.id;
   }
 
   async function deleteSession(sessionId: string) {
     if (loading) return;
-    const session = sessions.find((item) => item.id === sessionId);
-    const label = session ? titleFor(session) : "this chat";
-    if (!window.confirm(`Delete "${label}"?`)) return;
-
     setError(null);
     const response = await fetch(`/api/agent/sessions/${sessionId}`, { method: "DELETE" });
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -131,6 +129,7 @@ export function AgentChat({
 
     const remaining = sessions.filter((item) => item.id !== sessionId);
     setSessions(remaining);
+    setPendingDeleteSessionId(null);
     if (activeSessionId !== sessionId) return;
 
     const nextSessionId = remaining[0]?.id ?? "";
@@ -253,10 +252,13 @@ export function AgentChat({
           ) : (
             sessions.map((session) => {
               const active = session.id === activeSessionId;
+              const confirmingDelete = pendingDeleteSessionId === session.id;
               return (
                 <div
                   key={session.id}
-                  className={`mb-1 grid grid-cols-[minmax(0,1fr)_32px] items-center rounded-md ${
+                  className={`mb-1 grid ${
+                    confirmingDelete ? "grid-cols-[minmax(0,1fr)_68px]" : "grid-cols-[minmax(0,1fr)_32px]"
+                  } items-center rounded-md ${
                     active ? "bg-ink text-white" : "hover:bg-surface"
                   }`}
                 >
@@ -264,6 +266,7 @@ export function AgentChat({
                     type="button"
                     onClick={() => {
                       setActiveSessionId(session.id);
+                      setPendingDeleteSessionId(null);
                       setError(null);
                       loadSession(session.id).catch((err: unknown) => {
                         setError(err instanceof Error ? err.message : "Could not load agent session.");
@@ -274,23 +277,50 @@ export function AgentChat({
                     <div className="truncate">{titleFor(session)}</div>
                     <div className={`mt-1 text-xs ${active ? "text-white/70" : "text-muted"}`}>{session.status}</div>
                   </button>
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      deleteSession(session.id).catch((err: unknown) => {
-                        setError(err instanceof Error ? err.message : "Could not delete chat.");
-                      });
-                    }}
-                    className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                      active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
-                    } disabled:cursor-not-allowed disabled:opacity-40`}
-                    aria-label={`Delete ${titleFor(session)}`}
-                    title="Delete chat"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {confirmingDelete ? (
+                    <div className="mr-1 flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPendingDeleteSessionId(null)}
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                          active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
+                        }`}
+                        aria-label="Cancel delete"
+                        title="Cancel delete"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => {
+                          deleteSession(session.id).catch((err: unknown) => {
+                            setError(err instanceof Error ? err.message : "Could not delete chat.");
+                          });
+                        }}
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                          active ? "text-red-200 hover:bg-white/10 hover:text-red-100" : "text-red-600 hover:bg-red-50"
+                        } disabled:cursor-not-allowed disabled:opacity-40`}
+                        aria-label={`Confirm delete ${titleFor(session)}`}
+                        title="Confirm delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => setPendingDeleteSessionId(session.id)}
+                      className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                        active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
+                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                      aria-label={`Delete ${titleFor(session)}`}
+                      title="Delete chat"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               );
             })
