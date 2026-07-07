@@ -33,6 +33,7 @@ export default async function AgentPage() {
         .from("agent_sessions")
         .select("id,title,status,created_at,updated_at")
         .eq("user_id", user.id)
+        .eq("status", "active")
         .order("updated_at", { ascending: false })
         .limit(30);
       sessions = data ?? [];

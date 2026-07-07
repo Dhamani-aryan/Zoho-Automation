@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Send, Wrench } from "lucide-react";
+import { Plus, Send, Trash2, Wrench } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
 type AgentSession = {
@@ -118,6 +118,30 @@ export function AgentChat({
     return payload.session.id;
   }
 
+  async function deleteSession(sessionId: string) {
+    if (loading) return;
+    const session = sessions.find((item) => item.id === sessionId);
+    const label = session ? titleFor(session) : "this chat";
+    if (!window.confirm(`Delete "${label}"?`)) return;
+
+    setError(null);
+    const response = await fetch(`/api/agent/sessions/${sessionId}`, { method: "DELETE" });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Could not delete chat.");
+
+    const remaining = sessions.filter((item) => item.id !== sessionId);
+    setSessions(remaining);
+    if (activeSessionId !== sessionId) return;
+
+    const nextSessionId = remaining[0]?.id ?? "";
+    setActiveSessionId(nextSessionId);
+    if (nextSessionId) {
+      await loadSession(nextSessionId);
+    } else {
+      setTimeline([]);
+    }
+  }
+
   function handleStreamEvent(eventName: string, data: unknown) {
     const object = data as Record<string, unknown>;
     if (eventName === "assistant_delta") {
@@ -210,8 +234,8 @@ export function AgentChat({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="border border-line bg-white">
+    <div className="grid h-[calc(100vh-12rem)] min-h-[520px] gap-5 overflow-hidden xl:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="text-sm font-semibold">Chats</div>
           <button
@@ -223,42 +247,64 @@ export function AgentChat({
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        <div className="max-h-[68vh] overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {sessions.length === 0 ? (
             <div className="px-2 py-8 text-sm text-muted">No agent chats yet.</div>
           ) : (
-            sessions.map((session) => (
-              <button
-                key={session.id}
-                type="button"
-                onClick={() => {
-                  setActiveSessionId(session.id);
-                  setError(null);
-                  loadSession(session.id).catch((err: unknown) => {
-                    setError(err instanceof Error ? err.message : "Could not load agent session.");
-                  });
-                }}
-                className={`mb-1 w-full rounded-md px-3 py-2 text-left text-sm ${
-                  session.id === activeSessionId ? "bg-ink text-white" : "hover:bg-surface"
-                }`}
-              >
-                <div className="truncate">{titleFor(session)}</div>
-                <div className={`mt-1 text-xs ${session.id === activeSessionId ? "text-white/70" : "text-muted"}`}>
-                  {session.status}
+            sessions.map((session) => {
+              const active = session.id === activeSessionId;
+              return (
+                <div
+                  key={session.id}
+                  className={`mb-1 grid grid-cols-[minmax(0,1fr)_32px] items-center rounded-md ${
+                    active ? "bg-ink text-white" : "hover:bg-surface"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSessionId(session.id);
+                      setError(null);
+                      loadSession(session.id).catch((err: unknown) => {
+                        setError(err instanceof Error ? err.message : "Could not load agent session.");
+                      });
+                    }}
+                    className="min-w-0 px-3 py-2 text-left text-sm"
+                  >
+                    <div className="truncate">{titleFor(session)}</div>
+                    <div className={`mt-1 text-xs ${active ? "text-white/70" : "text-muted"}`}>{session.status}</div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteSession(session.id).catch((err: unknown) => {
+                        setError(err instanceof Error ? err.message : "Could not delete chat.");
+                      });
+                    }}
+                    className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                      active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={`Delete ${titleFor(session)}`}
+                    title="Delete chat"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-              </button>
-            ))
+              );
+            })
           )}
         </div>
       </aside>
 
-      <section className="flex min-h-[68vh] flex-col border border-line bg-white">
-        <div className="border-b border-line px-5 py-4">
+      <section className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
+        <div className="shrink-0 border-b border-line px-5 py-4">
           <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
           <div className="text-xs text-muted">Phase B: local DB tools plus read-only live Zoho bridge.</div>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
           {timeline.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted">
               Ask about mirrored Zoho records or request a missing capability.
@@ -292,7 +338,7 @@ export function AgentChat({
           {error ? <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
         </div>
 
-        <form onSubmit={sendMessage} className="border-t border-line p-4">
+        <form onSubmit={sendMessage} className="shrink-0 border-t border-line p-4">
           <div className="flex gap-3">
             <textarea
               value={input}

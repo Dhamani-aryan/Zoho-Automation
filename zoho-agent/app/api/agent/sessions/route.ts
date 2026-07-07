@@ -10,6 +10,7 @@ export async function GET() {
       .from("agent_sessions")
       .select("id,title,status,created_at,updated_at")
       .eq("user_id", auth.user.id)
+      .eq("status", "active")
       .order("updated_at", { ascending: false })
       .limit(30);
 
