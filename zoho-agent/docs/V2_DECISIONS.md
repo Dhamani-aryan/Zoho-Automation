@@ -108,3 +108,8 @@ Finished the Phase B extension executor for read-only agent jobs. Added a GET-on
 The options page now shows queued agent jobs from handshake plus a last-job status line, and the enable toggle is labeled as read-only Zoho session access. Logged-out Zoho detection reports `zoho_logged_out` back to the server.
 
 Verified after this checkpoint: `npm run typecheck`, `npm run lint`, and `npm run build:extension` pass. GET-only proof: `jobs.ts`/`zoho-api.ts` contain one CRM fetch path and it uses `method: "GET"`; no PUT/POST/PATCH/DELETE CRM path exists in the Phase B executor.
+## Phase B Verification Gate
+
+Automated verification passed after the extension executor checkpoint: `npm run typecheck`, `npm run lint`, `npm run build`, `npm run build:extension`, and `npm run test:orchestrator` (7/7). The production build still emits Next's middleware-to-proxy deprecation warning, but it completes successfully.
+
+Manual live acceptance remains: reload the unpacked extension, keep the toggle enabled with a logged-in `crm.zoho.com` tab, then ask `/agent` "Get me the next step for the Duraco deal." Expected trace: mirror search first, then live `zoho_get_record`, final answer labeled live. Negative paths to spot-check manually: extension disabled/offline, non-allowlisted `zoho_read_api`, Zoho logged out, and a timed-out job.
