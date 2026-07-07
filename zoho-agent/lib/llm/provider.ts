@@ -9,9 +9,11 @@ export type PlanParseInput = {
 };
 
 export type AgentPromptMessage = {
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "tool_call";
   content: string;
   toolName?: string;
+  callId?: string;
+  args?: Record<string, unknown>;
 };
 
 export type AgentToolDefinition = {

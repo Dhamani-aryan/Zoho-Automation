@@ -26,6 +26,7 @@ type AgentMessageRow = {
   role: "user" | "assistant" | "tool";
   content: string | null;
   tool_name: string | null;
+  tool_args: Record<string, unknown> | null;
   tool_result: unknown;
 };
 
@@ -56,21 +57,38 @@ function truncateToolResult(value: unknown) {
   };
 }
 
+function callIdFromArgs(args: Record<string, unknown> | null) {
+  return typeof args?._call_id === "string" ? args._call_id : undefined;
+}
+
 function messageRowsToPrompt(rows: AgentMessageRow[]): AgentPromptMessage[] {
   const prompt: AgentPromptMessage[] = [];
   for (const row of rows) {
+    const callId = callIdFromArgs(row.tool_args);
     if (row.role === "tool") {
       prompt.push({
         role: "tool",
         toolName: row.tool_name ?? undefined,
-        content: row.tool_result == null ? row.content ?? "" : stringifyForModel(row.tool_result)
+        content: row.tool_result == null ? row.content ?? "" : stringifyForModel(row.tool_result),
+        callId
       });
       continue;
     }
     // Skip assistant tool-call marker rows (tool_name set, no content) — they
     // exist for the UI trace/audit, but replaying them as empty assistant
     // messages just pollutes the prompt.
-    if (row.role === "assistant" && !row.content?.trim()) continue;
+    if (row.role === "assistant" && !row.content?.trim()) {
+      if (row.tool_name && callId) {
+        prompt.push({
+          role: "tool_call",
+          content: "",
+          toolName: row.tool_name,
+          callId,
+          args: row.tool_args ?? {}
+        });
+      }
+      continue;
+    }
     prompt.push({ role: row.role, content: row.content ?? "" });
   }
   return prompt;
@@ -122,7 +140,7 @@ export async function runAgentTurn({
 
   const { data: rows, error: loadError } = await supabase
     .from("agent_messages")
-    .select("role,content,tool_name,tool_result")
+    .select("role,content,tool_name,tool_args,tool_result")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true })
     .limit(80);
@@ -179,8 +197,15 @@ export async function runAgentTurn({
         session_id: sessionId,
         role: "assistant",
         tool_name: call.name,
-        tool_args: call.args,
+        tool_args: { ...call.args, _call_id: call.id },
         tool_tier: tier
+      });
+      transcript.push({
+        role: "tool_call",
+        content: "",
+        toolName: call.name,
+        callId: call.id,
+        args: call.args
       });
 
       let ok = true;
@@ -201,7 +226,7 @@ export async function runAgentTurn({
         role: "tool",
         content: ok ? null : (truncated as { error?: string }).error ?? "Tool failed.",
         tool_name: call.name,
-        tool_args: call.args,
+        tool_args: { ...call.args, _call_id: call.id },
         tool_result: truncated,
         tool_tier: tier
       });
@@ -214,7 +239,8 @@ export async function runAgentTurn({
       transcript.push({
         role: "tool",
         toolName: call.name,
-        content: stringifyForModel(truncated)
+        content: stringifyForModel(truncated),
+        callId: call.id
       });
       await emit({ type: "tool_result", call_id: call.id, tool_name: call.name, result: truncated, ok });
     }

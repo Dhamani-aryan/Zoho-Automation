@@ -16,11 +16,10 @@ import type {
   PlanParseInput
 } from "@/lib/llm/provider";
 import {
-  composeAgentInput,
   extractResponsesToolCalls,
   formatResponsesTools,
   parseToolArguments,
-  responsesInputFromText
+  responsesInputFromMessages
 } from "@/lib/llm/tool-calls";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 
@@ -338,7 +337,7 @@ export class OpenAICodexProvider implements LLMProvider {
           store: false,
           stream: true,
           instructions: input.instructions,
-          input: responsesInputFromText(composeAgentInput(input.messages)),
+          input: responsesInputFromMessages(input.messages),
           tools: formatResponsesTools(input.tools),
           tool_choice: "auto",
           parallel_tool_calls: false,

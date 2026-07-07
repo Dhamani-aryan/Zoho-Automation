@@ -7,6 +7,9 @@ import type {
 export function composeAgentInput(messages: AgentPromptMessage[]) {
   return messages
     .map((message) => {
+      if (message.role === "tool_call") {
+        return `ASSISTANT TOOL CALL${message.toolName ? ` (${message.toolName})` : ""}:\n${JSON.stringify(message.args ?? {}, null, 2)}`;
+      }
       if (message.role === "tool") {
         return `TOOL RESULT${message.toolName ? ` (${message.toolName})` : ""}:\n${message.content}`;
       }
@@ -23,6 +26,57 @@ export function responsesInputFromText(text: string) {
       content: [{ type: "input_text", text }]
     }
   ];
+}
+
+export function responsesInputFromMessages(messages: AgentPromptMessage[]) {
+  if (process.env.AGENT_FLAT_TRANSCRIPT === "1") {
+    return responsesInputFromText(composeAgentInput(messages));
+  }
+
+  const input: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (message.role === "tool_call") {
+      if (!message.toolName || !message.callId) continue;
+      input.push({
+        type: "function_call",
+        call_id: message.callId,
+        name: message.toolName,
+        arguments: JSON.stringify(message.args ?? {})
+      });
+      continue;
+    }
+
+    if (message.role === "tool") {
+      if (!message.callId) {
+        input.push({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: `TOOL RESULT${message.toolName ? ` (${message.toolName})` : ""}:\n${message.content}` }]
+        });
+        continue;
+      }
+      input.push({
+        type: "function_call_output",
+        call_id: message.callId,
+        output: message.content
+      });
+      continue;
+    }
+
+    input.push({
+      type: "message",
+      role: message.role,
+      content: [
+        {
+          type: message.role === "assistant" ? "output_text" : "input_text",
+          text: message.content
+        }
+      ]
+    });
+  }
+
+  if (input.length === 0) return responsesInputFromText("");
+  return input;
 }
 
 export function formatResponsesTools(tools: AgentToolDefinition[]) {

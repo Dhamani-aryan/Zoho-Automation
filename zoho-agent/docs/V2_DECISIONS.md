@@ -72,3 +72,10 @@ Fixes applied:
 Noted as a KNOWN Phase A limitation (fix scheduled first in Phase B): the transcript is flattened to one text block per model call (`composeAgentInput`) instead of item-based `function_call`/`function_call_output` pairing. Fine for Phase A's single-tier loop; must be upgraded before multi-step Zoho tool chains.
 
 Next: `workflows/SPEC_v2_phase_b_extension_bridge.md` — extension job bridge + live Zoho reads (GET-only), transcript upgrade first.
+## Phase B Checkpoint: Item-Based Tool Transcript
+
+Started Phase B with the transcript upgrade required before multi-step live Zoho tools. Both LLM providers now send item-based Responses input by default: text messages, assistant `function_call` items, and paired `function_call_output` items. `AGENT_FLAT_TRANSCRIPT=1` remains as a one-release fallback.
+
+Call IDs are persisted inside `agent_messages.tool_args._call_id` instead of adding a column. This keeps already-run V2 migrations compatible while preserving the required call_id round-trip for new tool calls. Legacy tool rows without `_call_id` are replayed as plain text fallback context rather than dropped.
+
+Verified after this checkpoint: `npm run typecheck` and `npm run lint` pass.

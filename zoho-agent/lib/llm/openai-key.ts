@@ -1,10 +1,9 @@
 import { composeUserInput, extractResponsesText, parsePlanJson } from "@/lib/llm/parse-json";
 import type { AgentModelResult, AgentRunToolsInput, LLMProvider, ParsedPlan, PlanParseInput } from "@/lib/llm/provider";
 import {
-  composeAgentInput,
   extractResponsesToolCalls,
   formatResponsesTools,
-  responsesInputFromText
+  responsesInputFromMessages
 } from "@/lib/llm/tool-calls";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -62,7 +61,7 @@ export class OpenAIKeyProvider implements LLMProvider {
       store: false,
       temperature: 0.1,
       instructions: input.instructions,
-      input: responsesInputFromText(composeAgentInput(input.messages)),
+      input: responsesInputFromMessages(input.messages),
       tools: formatResponsesTools(input.tools),
       tool_choice: "auto",
       parallel_tool_calls: false
