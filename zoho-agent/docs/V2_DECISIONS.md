@@ -1,5 +1,15 @@
 # V2 Decisions
 
+## Agent search resolution: interpret loose wording, fall back before giving up (2026-07-08, chat)
+
+Follow-on from the zoho_search fix below, same live session. Aryan asked for "the deal with the tag test search"; the agent searched the literal tag "test search", got zero results, and stopped - the real tag was "test". The tool worked once fixed; the gap was in the agent's instructions, which never told it to treat the user's wording as approximate intent or to do anything after an empty search besides report "not found".
+
+Fix (lib/agent/loop.ts AGENT_INSTRUCTIONS only - no code or tool-surface change): added two directives. (1) Treat wording as intent, not exact values - a phrase like "the tag test search" may mean the tag is "test", or a name/field match; infer and try. (2) On an empty search, do not stop after one attempt: retry with broader/alternative terms or a different approach (tag vs name vs criteria), use db_list_tags / db_list_by_tag / db_search_records to discover what actually exists and pick the closest, and only then, if still no confident match, say what was tried and offer closest candidates or ask one short question. Stays within the existing tool-call budget.
+
+Verified: npx tsc --noEmit clean. Same deploy note as the fix below - restart the server so the new instructions take effect; no extension rebuild.
+
+NOTE (process): both edits to this file and to loop.ts were first attempted with the inline edit tool, which truncated the files on writes containing non-ASCII characters (em-dashes, arrows, ellipsis). Recovered from git and rewritten as ASCII via script. Prefer ASCII in these files.
+
 ## Phase B defect fix: zoho_search rejected valid tag-only lookups (2026-07-08, chat)
 
 Symptom (Aryan, live): "find the deal tagged test search" → `zoho_search` failed validation repeatedly, alternating between two errors — `criteria`/`name` "Too small: expected string to have >=1 characters", and "zoho_search requires exactly one of criteria, name, or tag." The agent correctly refused to improvise and filed tool request `zoho_search_optional_fields_fix` (`daa578fe-…`).
