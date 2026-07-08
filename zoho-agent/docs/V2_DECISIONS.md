@@ -1,5 +1,25 @@
 # V2 Decisions
 
+## Phase B defect fix: zoho_search rejected valid tag-only lookups (2026-07-08, chat)
+
+Symptom (Aryan, live): "find the deal tagged test search" → `zoho_search` failed validation repeatedly, alternating between two errors — `criteria`/`name` "Too small: expected string to have >=1 characters", and "zoho_search requires exactly one of criteria, name, or tag." The agent correctly refused to improvise and filed tool request `zoho_search_optional_fields_fix` (`daa578fe-…`).
+
+Root cause (two, in `lib/agent/tier1-tools.ts`):
+1. The JSON schema exposed to the model had `criteria`/`name`/`tag` as three bare `{type:"string"}` fields with no descriptions and no expression of the "exactly one of" rule, so the model couldn't discover the correct shape. A clean `{module, tag}` call DID pass — the model just never produced one.
+2. The Zod schema hard-failed on empty strings (`.trim().min(1)`), so the model's common habit of sending `""` for unused fields tripped `min(1)` (error shape 1); swinging to zero/two provided fields tripped the refine (error shape 2). This is the same "omit unused keys, never send empty strings" lesson from Phase 2 that hadn't been applied to the Tier-1 schema.
+
+Fix: `criteria`/`name`/`tag` now go through an `optionalSearchTerm` preprocess that maps empty/whitespace-only strings to `undefined` (so they count as omitted, not invalid); the refine message now tells the model to provide one and omit the others; and the tool description + each field's JSON-schema `description` now state the one-of rule and how to search by tag. No behavior change for valid calls; invalid calls get one clear, actionable error instead of two confusing ones.
+
+Verified: `npx tsc --noEmit` clean. Still needs on the dev machine: `npm run lint && npm run build`, then redeploy/restart so the running `/agent` picks up the new tool schema (the model only sees the change after the server reloads). No extension rebuild needed (server-side only). Tool request `zoho_search_optional_fields_fix` can be closed once confirmed live. Suggested follow-up: a unit test asserting `{module,tag}` parses and `{module,criteria:"",name:"",tag:"x"}` normalizes to a tag-only search.
+
+## Phase C review (2026-07-08, chat review)
+
+Verdict: approved, one defect fixed. Verified independently: tsc clean, records tests 5/5 + orchestrator 7/7, spec-conformant (in-process db_sync_records; Zod before service client; FK resolution with warnings; stable-stringify change detection incl. raw_data; 200-cap; capped-names result; `mirror_sync` audit; CSV-mapper divergence documented; pagination guidance in prompt; still zero Zoho writes).
+
+Defect fixed (`lib/records/zoho-upsert.ts`): duplicate zoho ids within one batch (possible via paginated zoho_search overlap) hit Postgres "ON CONFLICT DO UPDATE command cannot affect row a second time" and failed the whole sync. Records now deduped by id (keep last) with a warning; invalid id-less rows still reach assertRecord for a clear error.
+
+Remaining before Phase D: Aryan runs the live scenario-2 test (fresh tag on 2–3 demo accounts → sync → re-run shows all-unchanged).
+
 Confirmed on 2026-07-06.
 
 1. V2 primary UX is a server-side tool-calling chat agent. The Phase 2 parse/validate/run pipeline remains for batch preset workflows.

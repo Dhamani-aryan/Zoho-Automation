@@ -19,16 +19,26 @@ const moduleSchema = z.preprocess(
 
 const pageSchema = z.preprocess((value) => (value == null ? 1 : Number(value)), z.number().int().min(1).max(50));
 
+// Models frequently send "" for the search fields they don't want to use instead
+// of omitting them. Treat empty/whitespace-only strings as omitted so a valid
+// single-field search (e.g. tag only) is not rejected by the min(1)/one-of checks.
+const optionalSearchTerm = z.preprocess((value) => {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}, z.string().min(1).optional());
+
 const zohoSearchSchema = z
   .object({
     module: moduleSchema,
-    criteria: z.string().trim().min(1).optional(),
-    name: z.string().trim().min(1).optional(),
-    tag: z.string().trim().min(1).optional(),
+    criteria: optionalSearchTerm,
+    name: optionalSearchTerm,
+    tag: optionalSearchTerm,
     page: pageSchema.default(1)
   })
   .refine((args) => [args.criteria, args.name, args.tag].filter(Boolean).length === 1, {
-    message: "zoho_search requires exactly one of criteria, name, or tag."
+    message:
+      "zoho_search requires exactly one of criteria, name, or tag. Provide only one and omit the others (do not send empty strings)."
   });
 
 const zohoGetRecordSchema = z.object({
@@ -74,16 +84,28 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "zoho_search",
     tier: 1,
     description:
-      "Read-only live Zoho search through the user's Chrome session. Use for current single-record lookups when the extension is connected.",
+      "Read-only live Zoho search through the user's Chrome session. Use for current lookups when the extension is connected. Provide EXACTLY ONE of `criteria`, `name`, or `tag`, and omit the other two entirely — never send empty strings. To find records by tag (e.g. deals tagged \"test search\"), pass `tag`.",
     parameters: {
       type: "object",
       additionalProperties: false,
       required: ["module"],
       properties: {
-        module: { type: "string", enum: modules },
-        criteria: { type: "string" },
-        name: { type: "string" },
-        tag: { type: "string" },
+        module: { type: "string", enum: modules, description: "Which module to search." },
+        criteria: {
+          type: "string",
+          description:
+            "Raw Zoho criteria expression, e.g. \"(Next_Step:equals:2nd Email)\". Provide only if searching by field criteria; otherwise omit this key."
+        },
+        name: {
+          type: "string",
+          description:
+            "A record name to resolve with the proven fallback (exact -> starts_with). Provide only if searching by name; otherwise omit this key."
+        },
+        tag: {
+          type: "string",
+          description:
+            "A single tag name to match, e.g. \"test search\". Provide only if searching by tag; otherwise omit this key."
+        },
         page: { type: "integer", minimum: 1, maximum: 50, default: 1 }
       }
     }

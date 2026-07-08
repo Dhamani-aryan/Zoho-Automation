@@ -329,6 +329,22 @@ export async function upsertZohoRecords({
 }): Promise<ZohoUpsertResult> {
   const config = MODULE_CONFIG[module];
   const warnings: string[] = [];
+
+  // Dedupe by zoho id (keep last occurrence). Paginated zoho_search results
+  // can overlap; duplicate keys in one upsert statement make Postgres fail
+  // with "ON CONFLICT DO UPDATE command cannot affect row a second time".
+  const byId = new Map<string, unknown>();
+  for (const value of records) {
+    const record = asObject(value);
+    const id = typeof record?.id === "string" ? record.id.trim() : "";
+    if (id) byId.set(id, value);
+    else byId.set(`__invalid_${byId.size}`, value); // keep invalid rows so assertRecord still reports them
+  }
+  if (byId.size < records.length) {
+    warnings.push(`${records.length - byId.size} duplicate record id(s) in the batch were deduplicated.`);
+  }
+  records = [...byId.values()];
+
   const accountIds =
     module === "contacts" || module === "deals"
       ? await fetchIdMap(db, "accounts", "zoho_account_id", collectLookupIds(records, "Account_Name"))
