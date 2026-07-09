@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
+import { createServiceSupabaseClient } from "@/lib/supabase/server";
+
+// A pending approval left undecided this long is swept to expired on load, so a
+// stale card can never be approved into a write after the fact.
+const APPROVAL_EXPIRY_MS = 15 * 60 * 1000;
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(["admin", "operator", "reviewer"]);
@@ -24,7 +29,32 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       .order("created_at", { ascending: true });
 
     if (messagesError) throw messagesError;
-    return NextResponse.json({ session, messages: messages ?? [] });
+
+    // Expiry sweep on load (status-guarded, owner-scoped): expire any pending
+    // approval older than the wait window before we read them back.
+    const service = createServiceSupabaseClient();
+    if (service) {
+      const cutoff = new Date(Date.now() - APPROVAL_EXPIRY_MS).toISOString();
+      const { error: sweepError } = await service
+        .from("pending_approvals")
+        .update({ status: "expired", decided_at: new Date().toISOString() })
+        .eq("session_id", id)
+        .eq("user_id", auth.user.id)
+        .eq("status", "pending")
+        .lt("created_at", cutoff);
+      if (sweepError) throw sweepError;
+    }
+
+    // Approval cards are rebuilt from the DB on load so a reconnect shows the
+    // correct state (pending / approved / rejected / expired).
+    const { data: approvals, error: approvalsError } = await auth.supabase
+      .from("pending_approvals")
+      .select("id,tool_name,summary,status,created_at,decided_at")
+      .eq("session_id", id)
+      .order("created_at", { ascending: true });
+
+    if (approvalsError) throw approvalsError;
+    return NextResponse.json({ session, messages: messages ?? [], approvals: approvals ?? [] });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent session failed to load.";
     console.error("[agent-session-detail]", message, error);

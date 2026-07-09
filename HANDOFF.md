@@ -31,10 +31,9 @@ Codex (the coding agent) writes the code locally; the chat writes specs, reviews
 ## Immediate next steps (updated 2026-07-08)
 **PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes (Phase D, not built yet). Batch run pipeline retained for presets. CRM writes keep the human approval gate — always.
 
-State: **Phases A, B, C built by Codex and chat-reviewed** (fixes applied each round — see V2_DECISIONS review sections). Live reads work end to end (CSP fix: MAIN-world executeScript).
-1. Aryan: live scenario-2 sync test (fresh tag on demo accounts → agent pulls them in → re-run shows unchanged).
-2. Then Codex builds Phase D from `workflows/SPEC_v2_phase_d_gated_writes.md`; chat reviews (expect hard scrutiny on the approval gate).
-3. Then Phases E, F per their specs.
+State: **Phases A, B, C built, chat-reviewed, and LIVE-TESTED** (scenario-2 sync test passed 2026-07-09). **Phase D (approval-gated writes) BUILT 2026-07-09 (Opus) and INDEPENDENTLY CHAT-REVIEWED 2026-07-09: approved pending live acceptance.** Two review fixes applied: expiry-race in `waitForApprovalOutcome` (late decision honored instead of falsely reporting expired while the write executed) and lookup-typed fields blocked in `zoho_update_fields` (raw-string Owner id bypassed zoho_change_owner). Gate verified: writes only via an approved `pending_approvals` row, three-point enforcement, grep-proven; sandbox tsc clean; tier2 tests 13/13, orchestrator 7/7, records 5/5. See V2_DECISIONS "Phase D review". NOT yet done: dev-machine lint/build/build:extension, DB migration, live scenario-3 acceptance + negative proofs.
+1. Aryan: apply `zoho-agent/supabase/2026_phase_d_writes.sql` FIRST, run lint/build/build:extension + test:tier2 in PowerShell, reload the extension, then run live scenario 3 (approve, reject, identity-mismatch via mid-flight edit, verify-failure, logged-out) starting with ONE demo deal Next_Step, plus the spec §5.5 negative proofs.
+2. Then Phases E, F per their specs.
 
 Chat's role: write/maintain specs, review every Codex phase for defects/races/slop (verify independently — `git show` + typecheck from the sandbox via /tmp copies; the mount's view of fresh writes lags), fix small defects directly, keep V2_DECISIONS + this file current. Sandbox CANNOT run git writes or Windows-installed binaries (esbuild/SWC) — builds and commits happen in Aryan's PowerShell; always end reviews with the exact `git add/commit` commands.
 

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:orchestrator": "tsc -p tsconfig.orchestrator-test.json && node --test .tmp/orchestrator-test/tests/orchestrator-state.test.js",
     "test:records": "tsc -p tsconfig.records-test.json && node --test .tmp/records-test/tests/zoho-upsert.test.js",
+    "test:tier2": "tsc -p tsconfig.tier2-test.json && node --test .tmp/tier2-test/tests/tier2-tools.test.js",
     "build:extension": "node extension/build.mjs",
     "import:masters": "node scripts/import-masters.mjs",
     "import:fieldmeta": "node scripts/import-fieldmeta.mjs"

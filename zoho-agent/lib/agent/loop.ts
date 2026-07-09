@@ -13,6 +13,20 @@ import {
   validateTier1ToolCall
 } from "@/lib/agent/tier1-tools";
 import { runBridgedTool } from "@/lib/agent/bridge";
+import {
+  isTier2Tool,
+  TIER2_TOOL_DEFINITIONS,
+  validateTier2Call,
+  type Tier2Module
+} from "@/lib/agent/tier2-tools";
+import {
+  buildApprovalRequest,
+  createPendingApproval,
+  resolvedFromLiveRecord,
+  waitForApprovalJob,
+  waitForApprovalOutcome,
+  type LiveRecordFetch
+} from "@/lib/agent/tier2";
 import { getLLMProviderForUser } from "@/lib/llm";
 import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
 import type { AuthorizedUser } from "@/lib/auth/guards";
@@ -26,6 +40,13 @@ export type AgentStreamEvent =
   | { type: "assistant_delta"; text: string }
   | { type: "tool_call"; call: AgentToolCall; tier: 0 | 1 | 2 }
   | { type: "tool_status"; call_id: string; tool_name: string; status: "queued" | "running" }
+  | {
+      type: "approval_required";
+      call_id: string;
+      approval_id: string;
+      tool_name: string;
+      summary: unknown;
+    }
   | { type: "tool_result"; call_id: string; tool_name: string; result: unknown; ok: boolean }
   | { type: "done" }
   | { type: "error"; error: string };
@@ -50,11 +71,11 @@ For tag-driven pull/sync requests, use zoho_search with the tag, paginate until 
 Treat the user's wording as intent, not exact values - users will be approximate and should not have to phrase things precisely. A phrase like "the deal with the tag test search" may mean the tag is "test", or that the deal name or a field contains those words; infer the most likely meaning and try it.
 When a search returns no results, do NOT stop after one attempt and report "not found". Work the request: (1) retry with a broader or alternative term - try each significant word on its own, or switch approach (tag vs name vs criteria); (2) discover what actually exists - use db_list_tags to see real tag names and pick the closest, or db_list_by_tag / db_search_records to find records whose name or fields contain the words; (3) only if there is still no confident match, briefly say what you tried and either offer the closest candidates or ask one short clarifying question. Prefer resolving it yourself over making the user restate it. Stay within the tool-call budget.
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
-Do not invent Zoho writes, deletes, record creation, or UI actions. CRM writes require later approval-gated tools and are unavailable in Phase C.
+CRM writes are available through approval-gated tools: zoho_update_fields, zoho_change_owner, zoho_add_tags, zoho_remove_tags. Every such call pauses for the user to approve a before/after card in chat before anything is written; nothing is written until they approve. Only propose a write the user actually asked for, resolve the exact record(s) first (search the mirror or read live Zoho), and put the smallest correct change in the tool call. If the user rejects the card, acknowledge it and do not retry the same write unless they ask. Stage edits are admin-only and Deal_Name cannot be changed. Never claim a write succeeded until the tool result confirms it (verified read-back). Deletes, record creation, and UI actions remain unavailable.
 When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
 Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
-const AGENT_TOOL_DEFINITIONS = [...TIER0_TOOL_DEFINITIONS, ...TIER1_TOOL_DEFINITIONS];
+const AGENT_TOOL_DEFINITIONS = [...TIER0_TOOL_DEFINITIONS, ...TIER1_TOOL_DEFINITIONS, ...TIER2_TOOL_DEFINITIONS];
 
 function titleFromMessage(content: string) {
   return content.replace(/\s+/g, " ").trim().slice(0, 80) || "Agent chat";
@@ -126,6 +147,122 @@ function toolError(error: unknown) {
   };
 }
 
+function normalizeModule(value: unknown): Tier2Module | "" {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "accounts") return "Accounts";
+  if (raw === "contacts") return "Contacts";
+  if (raw === "deals") return "Deals";
+  return "";
+}
+
+function liveNameField(module: Tier2Module): string {
+  if (module === "Accounts") return "Account_Name";
+  if (module === "Contacts") return "Full_Name";
+  return "Deal_Name";
+}
+
+// Live-fetch fallback for the approval summary, backed by the Phase B read
+// bridge. Best-effort: if the extension is offline the bridge throws and the
+// summary shows "unknown - verify in card".
+function makeLiveFetch(service: SupabaseClient, user: AuthorizedUser, sessionId: string): LiveRecordFetch {
+  return async ({ module, zohoIds, fields }) => {
+    const out = new Map<string, ReturnType<typeof resolvedFromLiveRecord>>();
+    const requested = [...new Set([...fields, liveNameField(module)])];
+    for (const zohoId of zohoIds) {
+      try {
+        const body = (await runBridgedTool({
+          service,
+          user,
+          sessionId,
+          call: { id: `approval-summary-${zohoId}`, name: "zoho_get_record", args: { module, zoho_id: zohoId, fields: requested } }
+        })) as { data?: Array<Record<string, unknown>> } | null;
+        const record = Array.isArray(body?.data) ? body?.data[0] : undefined;
+        if (record) out.set(zohoId, resolvedFromLiveRecord(module, record));
+      } catch {
+        // Skip this record; the summary will mark it unknown.
+      }
+    }
+    return out;
+  };
+}
+
+// Runs the full approval gate for one validated Tier-2 call and returns the
+// observation to feed back to the model. Validation errors throw (never reach a
+// card); reject/expire are normal observations, not exceptions.
+async function handleTier2Call({
+  supabase,
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  supabase: SupabaseClient;
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const moduleGuess = normalizeModule((call.args as { module?: unknown })?.module);
+  const { data: metaRows } = moduleGuess
+    ? await service
+        .from("zoho_field_meta")
+        .select("module,api_name,data_type,picklist_values")
+        .eq("module", moduleGuess)
+    : { data: [] as Array<{ module: string; api_name: string; data_type: string | null; picklist_values: unknown }> };
+
+  // Throws on invalid args/rules -> caught by the caller as an error observation.
+  const prepared = validateTier2Call(call, { fieldMeta: metaRows ?? [], role: user.role });
+
+  const liveFetch = makeLiveFetch(service, user, sessionId);
+  const { summary, snapshot } = await buildApprovalRequest({ supabase, prepared, liveFetch });
+  const approvalId = await createPendingApproval({
+    service,
+    sessionId,
+    userId: user.id,
+    snapshot,
+    summary
+  });
+
+  await emit({
+    type: "approval_required",
+    call_id: call.id,
+    approval_id: approvalId,
+    tool_name: call.name,
+    summary
+  });
+
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: "rejected", error: "The user rejected this action." },
+      pausedMs: decision.waitedMs
+    };
+  }
+  if (decision.outcome === "expired") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: "expired", error: "The approval expired before the user decided." },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
+  const pausedMs = decision.waitedMs + job.waitedMs;
+  const jobResult = job.result as Record<string, unknown> | null;
+  return {
+    ok: job.ok,
+    result: {
+      approval_id: approvalId,
+      status: job.ok ? "executed" : "failed",
+      ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult })
+    },
+    pausedMs
+  };
+}
+
 export async function runAgentTurn({
   supabase,
   user,
@@ -166,8 +303,11 @@ export async function runAgentTurn({
 
   const transcript = messageRowsToPrompt((rows ?? []) as AgentMessageRow[]);
   let toolCallCount = 0;
+  // Time spent blocked on a Tier-2 approval card does NOT count against the
+  // turn budget (a human may take minutes to decide). We subtract it.
+  let pausedMs = 0;
 
-  while (Date.now() - started < TURN_TIMEOUT_MS) {
+  while (Date.now() - started - pausedMs < TURN_TIMEOUT_MS) {
     const model = await provider.runTools({
       instructions: AGENT_INSTRUCTIONS,
       messages: transcript,
@@ -245,8 +385,14 @@ export async function runAgentTurn({
               onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
             });
           }
+        } else if (isTier2Tool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for approvals.");
+          const gated = await handleTier2Call({ supabase, service, user, sessionId, call, emit });
+          ok = gated.ok;
+          result = gated.result;
+          pausedMs += gated.pausedMs;
         } else {
-          throw new Error(`Unknown or unavailable tool "${call.name}" in Phase C.`);
+          throw new Error(`Unknown or unavailable tool "${call.name}".`);
         }
       } catch (error) {
         ok = false;

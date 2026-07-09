@@ -2,6 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedPlan } from "@/lib/llm/provider";
 import { resolveOwner } from "@/lib/constants";
 import {
+  buildPicklistIndex,
+  EMAIL_RE,
+  isFutureDate,
+  type FieldMetaRow
+} from "@/lib/plan/field-rules";
+import {
   crmFieldToColumn,
   fetchModuleRecords,
   MIRROR_MODULES,
@@ -39,40 +45,11 @@ export type ValidationResult = {
   missing_info: string[];
 };
 
-export type FieldMetaRow = {
-  module: string;
-  api_name: string;
-  data_type?: string | null;
-  picklist_values?: unknown;
-};
+export type { FieldMetaRow };
 
 const MODULE_CONFIG = MIRROR_MODULES;
 
 type ModuleKey = MirrorModuleKey;
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function isFutureDate(dateStr: string, timeStr?: string) {
-  const iso = timeStr ? `${dateStr}T${timeStr}` : dateStr;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.getTime() > Date.now();
-}
-
-function buildPicklistIndex(fieldMeta: FieldMetaRow[]) {
-  const index = new Map<string, Set<string>>();
-  for (const field of fieldMeta) {
-    if (!Array.isArray(field.picklist_values) || field.picklist_values.length === 0) continue;
-    const values = new Set<string>();
-    for (const picklistValue of field.picklist_values as Array<Record<string, unknown>>) {
-      const value =
-        picklistValue?.actual_value ?? picklistValue?.display_value ?? picklistValue?.value ?? picklistValue;
-      if (typeof value === "string" && value.trim()) values.add(value.trim().toLowerCase());
-    }
-    if (values.size > 0) index.set(`${field.module}:${field.api_name}`, values);
-  }
-  return index;
-}
 
 type BlockCtx = {
   module: ModuleKey;

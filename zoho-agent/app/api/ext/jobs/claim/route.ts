@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
+import { isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
 
 const QUEUED_EXPIRE_MS = 10 * 60 * 1000;
 const RUNNING_STALE_MS = 5 * 60 * 1000;
@@ -11,6 +12,7 @@ type ToolJobRow = {
   args: Record<string, unknown>;
   status: "queued" | "running" | "done" | "failed" | "expired";
   created_at: string;
+  approval_id: string | null;
 };
 
 async function sweepStaleJobs(auth: Awaited<ReturnType<typeof requireExtensionAuth>>) {
@@ -56,7 +58,7 @@ export async function POST(request: Request) {
 
     const { data: nextJob, error: nextError } = await auth.service
       .from("tool_jobs")
-      .select("id,tool_name,args,status,created_at")
+      .select("id,tool_name,args,status,created_at,approval_id")
       .eq("user_id", auth.user.id)
       .eq("status", "queued")
       .order("created_at", { ascending: true })
@@ -70,6 +72,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ job: null });
     }
 
+    // Belt-and-braces (2 of 3): a Tier-2 write job is only handed out when its
+    // linked approval row exists and is 'approved'. Any other state means it
+    // must never run, so we terminally fail it (keeps the queue moving) and do
+    // not claim it.
+    if (isTier2WriteTool(nextJob.tool_name)) {
+      const { data: approval, error: approvalError } = await auth.service
+        .from("pending_approvals")
+        .select("status")
+        .eq("id", nextJob.approval_id ?? "")
+        .maybeSingle();
+      if (approvalError) {
+        return NextResponse.json({ error: approvalError.message }, { status: 500 });
+      }
+      const decision = tier2ClaimDecision(
+        { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
+        (approval?.status as string) ?? null
+      );
+      if (!decision.claimable) {
+        await auth.service
+          .from("tool_jobs")
+          .update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            error_message: `Refused to run Tier-2 write without an approved approval (${decision.reason}).`
+          })
+          .eq("id", nextJob.id)
+          .eq("user_id", auth.user.id)
+          .eq("status", "queued");
+        return NextResponse.json({ job: null });
+      }
+    }
+
     const claimedAt = new Date().toISOString();
     const { data: claimed, error: claimError } = await auth.service
       .from("tool_jobs")
@@ -77,7 +111,7 @@ export async function POST(request: Request) {
       .eq("id", nextJob.id)
       .eq("user_id", auth.user.id)
       .eq("status", "queued")
-      .select("id,tool_name,args,status,created_at")
+      .select("id,tool_name,args,status,created_at,approval_id")
       .maybeSingle();
 
     if (claimError) {
@@ -92,7 +126,8 @@ export async function POST(request: Request) {
       job: {
         id: row.id,
         tool_name: row.tool_name,
-        args: row.args
+        args: row.args,
+        approval_id: row.approval_id
       },
       context: {
         org_id: ZOHO_ORG_ID,

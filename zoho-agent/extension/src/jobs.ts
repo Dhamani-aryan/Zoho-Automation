@@ -1,6 +1,12 @@
 import { claimJob, handshake, reportJobDone, reportJobFailed, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
+import { zohoWritePageRunner } from "./page-runner-write";
 import { loadSettings, saveLastJobStatus } from "./storage";
+
+// Tier-2 write tools. Kept in sync with lib/agent/tier2-tools.ts
+// TIER2_WRITE_TOOL_NAMES; the lib-side extensionAcceptsWriteJob() encodes the
+// same rule and is unit-tested.
+const WRITE_TOOLS = new Set(["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"]);
 
 const ACTIVE_POLL_MS = 1500;
 const IDLE_POLL_MS = 15000;
@@ -24,11 +30,18 @@ async function crmTab() {
 // Runs the read-only executor in the page's MAIN world via chrome.scripting.
 // Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
+  const isWrite = WRITE_TOOLS.has(job.tool_name);
+  // Belt-and-braces (3 of 3): a write job must carry an approval_id. Even if the
+  // server checks were somehow bypassed, the extension refuses to write without
+  // one.
+  if (isWrite && !job.approval_id) {
+    return { ok: false, error_message: "write without approval refused by extension" };
+  }
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: zohoPageRunner,
+      func: isWrite ? zohoWritePageRunner : zohoPageRunner,
       args: [{ tool_name: job.tool_name, args: job.args }]
     });
     const result = results?.[0]?.result as PageResult | undefined;
