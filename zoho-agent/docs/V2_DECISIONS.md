@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase F follow-up: dedicated visible Chrome window (2026-07-10, build)
+
+Observed during live testing: with multiple CRM tabs/windows, the extension could claim the first crm.zoho.com tab returned by Chrome and the user could not reliably see which page was being driven. Added a dedicated Zoho Agent Chrome window: the first extension-backed browser job creates a normal focused CRM window in the same Chrome profile, stores its window/tab ids, and later jobs reuse/focus that window. UI clicks now prefer visible exact text matches, scroll targets into view before clicking/reading/filling, and use a native HTMLElement click after mouse events.
+
+Verification for this follow-up: npm run typecheck passed; npm run build:extension passed after rerunning unsandboxed for the known extension/dist write restriction.
+
 ## Phase F follow-up: expose teach_mode to the model (2026-07-10, build)
 
 Observed during live testing: even with Teach a workflow enabled, asking "open this deal" could still get a cautionary response asking the user to enable teach mode. Root cause: the loop enforced teach_mode server-side, but the model prompt did not include the current session's teach_mode value. Added a per-turn DB read of agent_sessions.teach_mode and appended explicit state to the tool prompt: when ON, crm.zoho.com open/navigate requests should call ui_step open_url; when OFF, ui_step must not be called.

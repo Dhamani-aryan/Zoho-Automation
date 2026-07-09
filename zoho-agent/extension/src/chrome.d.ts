@@ -48,9 +48,11 @@ declare namespace chrome {
     type Tab = {
       id?: number;
       url?: string;
+      windowId?: number;
+      active?: boolean;
     };
 
-    function query(queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
+    function query(queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean; windowId?: number }, callback: (tabs: Tab[]) => void): void;
     function get(tabId: number): Promise<Tab>;
     function update(tabId: number, updateProperties: { url?: string; active?: boolean }): Promise<Tab>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
@@ -59,5 +61,17 @@ declare namespace chrome {
       addListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
       removeListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
     };
+  }
+
+  namespace windows {
+    type Window = {
+      id?: number;
+      focused?: boolean;
+      tabs?: tabs.Tab[];
+    };
+
+    function create(createData: { url?: string; focused?: boolean; type?: "normal" | "popup" }): Promise<Window>;
+    function get(windowId: number, getInfo?: { populate?: boolean }): Promise<Window>;
+    function update(windowId: number, updateInfo: { focused?: boolean; state?: "normal" | "minimized" | "maximized" | "fullscreen" }): Promise<Window>;
   }
 }

@@ -12,6 +12,8 @@ const WRITE_TOOLS = new Set(["zoho_update_fields", "zoho_change_owner", "zoho_ad
 const ACTIVE_POLL_MS = 1500;
 const IDLE_POLL_MS = 15000;
 const IDLE_BACKOFF_AFTER_MS = 5 * 60 * 1000;
+const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org890324941/tab/Potentials/custom-view/6834250000000087545/list";
+const AGENT_WINDOW_KEYS = { agentWindowId: null as number | null, agentTabId: null as number | null };
 
 let inFlight = false;
 let idleSince = Date.now();
@@ -23,9 +25,90 @@ function crmTabs(): Promise<chrome.tabs.Tab[]> {
   });
 }
 
-async function crmTab() {
+function storedAgentTarget(): Promise<{ agentWindowId: number | null; agentTabId: number | null }> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(AGENT_WINDOW_KEYS, (items) => {
+      resolve({
+        agentWindowId: typeof items.agentWindowId === "number" ? items.agentWindowId : null,
+        agentTabId: typeof items.agentTabId === "number" ? items.agentTabId : null
+      });
+    });
+  });
+}
+
+function saveAgentTarget(agentWindowId: number | null, agentTabId: number | null): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ agentWindowId, agentTabId }, resolve);
+  });
+}
+
+function isCrmUrl(url: unknown) {
+  if (typeof url !== "string") return false;
+  try {
+    return new URL(url).hostname === "crm.zoho.com";
+  } catch {
+    return false;
+  }
+}
+
+function initialUrlForJob(job: ToolJob) {
+  if (job.tool_name === "ui_step") {
+    const step = (job.args.step ?? {}) as Record<string, unknown>;
+    if (step.type === "open_url" && isCrmUrl(step.url)) return String(step.url);
+  }
+  if (job.tool_name === "ui_workflow") {
+    const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
+    const firstOpen = steps.find((step) => step?.type === "open_url" && isCrmUrl(step.url));
+    if (firstOpen) return String(firstOpen.url);
+  }
+  return AGENT_WINDOW_HOME;
+}
+
+async function usableStoredTab() {
+  const stored = await storedAgentTarget();
+  if (typeof stored.agentTabId !== "number") return null;
+  try {
+    const tab = await chrome.tabs.get(stored.agentTabId);
+    if (typeof tab.id === "number" && isCrmUrl(tab.url)) return tab;
+  } catch {
+    // The user may have closed the dedicated window; create a fresh one below.
+  }
+  await saveAgentTarget(null, null);
+  return null;
+}
+
+async function createAgentWindow(url: string) {
+  const created = await chrome.windows.create({ url, focused: true, type: "normal" });
+  const tab = created.tabs?.find((item) => typeof item.id === "number") ?? null;
+  const tabId = tab?.id ?? null;
+  await saveAgentTarget(created.id ?? null, tabId);
+  if (tabId) await waitForTabComplete(tabId);
+  return tabId ? await chrome.tabs.get(tabId) : null;
+}
+
+async function crmTabForJob(job: ToolJob) {
+  const stored = await usableStoredTab();
+  if (stored?.id) {
+    if (typeof stored.windowId === "number") {
+      await chrome.windows.update(stored.windowId, { focused: true, state: "normal" }).catch(() => undefined);
+    }
+    await chrome.tabs.update(stored.id, { active: true });
+    return stored;
+  }
+
+  const created = await createAgentWindow(initialUrlForJob(job));
+  if (created?.id) return created;
+
   const tabs = await crmTabs();
-  return tabs.find((tab) => typeof tab.id === "number") ?? null;
+  const existing = tabs.find((tab) => typeof tab.id === "number") ?? null;
+  if (existing?.id) {
+    await saveAgentTarget(existing.windowId ?? null, existing.id);
+    if (typeof existing.windowId === "number") {
+      await chrome.windows.update(existing.windowId, { focused: true, state: "normal" }).catch(() => undefined);
+    }
+    await chrome.tabs.update(existing.id, { active: true });
+  }
+  return existing;
 }
 
 function waitForTabComplete(tabId: number): Promise<void> {
@@ -242,16 +325,16 @@ async function pollOnce() {
     // Tab check AFTER claim: a missing CRM tab now reports an actionable
     // failure within seconds instead of leaving the job queued until the
     // backend's 90s wait expires.
-    const tab = await crmTab();
+    const tab = await crmTabForJob(claimed.job);
     if (!tab?.id) {
       const message =
-        "No crm.zoho.com tab is open in this Chrome profile. Open Zoho CRM in a tab and ask again.";
+        "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again.";
       await reportJobFailed(settings, claimed.job.id, message);
-      await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com tab open.`);
+      await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com agent window.`);
       return;
     }
 
-    await saveLastJobStatus(`Running ${claimed.job.tool_name} in tab ${tab.id}.`);
+    await saveLastJobStatus(`Running ${claimed.job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
     const response = await executeInTab(tab.id, claimed.job);
 
     if (response.ok) {

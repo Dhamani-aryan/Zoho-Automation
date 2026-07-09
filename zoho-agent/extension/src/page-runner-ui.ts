@@ -17,16 +17,30 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     return textOf(element);
   }
 
+  function isVisible(element: Element) {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
   function findByText(text: string) {
     const wanted = text.trim().toLowerCase();
     const all = [...document.querySelectorAll("button,a,input,textarea,[role='button'],span,div")];
-    return all.find((element) => textOf(element).toLowerCase().includes(wanted)) ?? null;
+    const visible = all.filter(isVisible);
+    return (
+      visible.find((element) => textOf(element).toLowerCase() === wanted) ??
+      visible.find((element) => textOf(element).toLowerCase().includes(wanted)) ??
+      null
+    );
   }
 
   function target() {
     const selector = typeof step.selector === "string" ? step.selector : "";
     const text = typeof step.text === "string" ? step.text : "";
-    if (selector) return document.querySelector(selector);
+    if (selector) {
+      const element = document.querySelector(selector);
+      return element && isVisible(element) ? element : null;
+    }
     if (text) return findByText(text);
     return null;
   }
@@ -42,6 +56,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
   }
 
   function mouseClick(element: Element) {
+    element.scrollIntoView({ block: "center", inline: "center" });
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
@@ -56,6 +71,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
         })
       );
     }
+    if (element instanceof HTMLElement) element.click();
   }
 
   function pressKey(key: string) {
@@ -96,6 +112,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     if (type === "fill_field") {
       const element = await waitForTarget(5000);
       if (!element) return { ok: false, error_message: "UI field was not found." };
+      element.scrollIntoView({ block: "center", inline: "center" });
       setNativeValue(element, String(step.value ?? ""));
       if (step.press_enter === true) pressKey("Enter");
       return { ok: true, result: { observed: valueOf(element) } };
@@ -103,6 +120,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     if (type === "read_field") {
       const element = await waitForTarget(5000);
       if (!element) return { ok: false, error_message: "UI field was not found." };
+      element.scrollIntoView({ block: "center", inline: "center" });
       return { ok: true, result: { observed: valueOf(element) } };
     }
     if (type === "press_key") {
@@ -119,6 +137,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     if (type === "verify_field") {
       const element = await waitForTarget(5000);
       if (!element) return { ok: false, error_message: "UI field was not found." };
+      element.scrollIntoView({ block: "center", inline: "center" });
       const observed = valueOf(element);
       const expected = String(step.equals ?? "");
       return observed === expected
