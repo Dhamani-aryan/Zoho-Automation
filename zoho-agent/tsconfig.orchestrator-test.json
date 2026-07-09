@@ -14,6 +14,7 @@
     "lib/orchestrator/state.ts",
     "lib/agent/sweeps.ts",
     "lib/agent/turn-lock.ts",
+    "lib/agent/ui-tools.ts",
     "tests/orchestrator-state.test.ts"
   ]
 }

@@ -20,6 +20,12 @@ import {
   type Tier2Module
 } from "@/lib/agent/tier2-tools";
 import {
+  isUiTool,
+  UI_TOOL_DEFINITIONS,
+  uiStepTeachModeDecision,
+  validateUiToolCall
+} from "@/lib/agent/ui-tools";
+import {
   buildApprovalRequest,
   createPendingApproval,
   resolvedFromLiveRecord,
@@ -72,10 +78,16 @@ When a search returns no results, do NOT stop after one attempt and report "not 
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
 You CAN give direct Zoho record links; never say you lack a tool for them. Mirror rows from db_get_record / db_search_records include zoho_url - prefer it. Otherwise compose the canonical URL from the record's Zoho id: https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id} - note Deals use "Potentials" in URLs even though the API module is Deals.
 CRM writes are available through approval-gated tools: zoho_update_fields, zoho_change_owner, zoho_add_tags, zoho_remove_tags. Every such call pauses for the user to approve a before/after card in chat before anything is written; nothing is written until they approve. Only propose a write the user actually asked for, resolve the exact record(s) first (search the mirror or read live Zoho), and put the smallest correct change in the tool call. If the user rejects the card, acknowledge it and do not retry the same write unless they ask. Stage edits are admin-only and Deal_Name cannot be changed. Never claim a write succeeded until the tool result confirms it (verified read-back). Deletes, record creation, and UI actions remain unavailable.
+When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. Outside teach mode, do not call ui_step. UI workflow saving and replay are not available until later Phase F steps.
 When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
 Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
-const AGENT_TOOL_DEFINITIONS = [...TIER0_TOOL_DEFINITIONS, ...TIER1_TOOL_DEFINITIONS, ...TIER2_TOOL_DEFINITIONS];
+const AGENT_TOOL_DEFINITIONS = [
+  ...TIER0_TOOL_DEFINITIONS,
+  ...TIER1_TOOL_DEFINITIONS,
+  ...TIER2_TOOL_DEFINITIONS,
+  ...UI_TOOL_DEFINITIONS
+];
 
 function titleFromMessage(content: string) {
   return content.replace(/\s+/g, " ").trim().slice(0, 80) || "Agent chat";
@@ -387,6 +399,26 @@ export async function runAgentTurn({
               onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
             });
           }
+        } else if (isUiTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for UI steps.");
+          const { data: sessionRow, error: teachModeError } = await service
+            .from("agent_sessions")
+            .select("teach_mode")
+            .eq("id", sessionId)
+            .eq("user_id", user.id)
+            .single();
+          if (teachModeError) throw teachModeError;
+          const decision = uiStepTeachModeDecision((sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true);
+          if (!decision.allowed) throw new Error(decision.reason);
+
+          const validatedCall = validateUiToolCall(call);
+          result = await runBridgedTool({
+            service,
+            user,
+            sessionId,
+            call: validatedCall,
+            onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+          });
         } else if (isTier2Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for approvals.");
           const gated = await handleTier2Call({ supabase, service, user, sessionId, call, emit });

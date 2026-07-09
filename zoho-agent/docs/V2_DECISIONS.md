@@ -25,6 +25,19 @@ No UI workflow tools execute in this step. Server-side ui_step gating comes in S
 
 Verification for this step: npm run typecheck passed.
 
+## Phase F Step 2 Checkpoint: ui_step executor gated by teach mode (2026-07-10, build)
+
+Implemented the first UI execution surface, limited to guided teach mode:
+- Added lib/agent/ui-tools.ts with the UI step vocabulary and Zod validation for open_url, wait_for, click, fill_field, read_field, press_key, confirm_text_present, verify_field, and screenshot.
+- Added ui_step to the agent tool definitions with tier 2 display, but it is not a CRM write tool and does not alter the Phase D write gate.
+- runAgentTurn checks agent_sessions.teach_mode immediately before queueing ui_step. If teach mode is off, the call becomes an error observation and no extension job is inserted.
+- Added extension/src/page-runner-ui.ts as a MAIN-world, self-contained runner for one UI step per call.
+- extension/src/jobs.ts routes ui_step jobs, enforces crm.zoho.com for open_url before dispatch, and handles screenshot in the background with a 500 KB cap.
+- Added the activeTab permission and local chrome.d.ts entries for tab update, tab completion, and screenshot capture.
+- Added pure tests for ui_step schema and teach-mode gate.
+
+Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 10/10 after rerunning unsandboxed for the known Windows .tmp write restriction; npm run build:extension passed after rerunning unsandboxed for the known extension/dist write restriction.
+
 ## Phase E review (2026-07-09, chat review)
 
 Verdict: approved with ONE required follow-up before the Phase E done gate; no slop found. Verified independently from the committed tree (git archive of 15bb0c9 into /tmp; the mount served NUL-padded stale working-tree copies, so the object store was the review source): tsc --noEmit clean; tier2 14/14, orchestrator 8/8, records 5/5 - matching the build log's claims exactly. Grep-proofs re-run and hold: page-runner-write.ts is still the only CRM PUT/actions path; still exactly two tool_jobs INSERT sites, both calling assertTier2JobInsertAllowed; claim-route approval check intact; purge is reachable ONLY from the admin button behind window.confirm, never on load.

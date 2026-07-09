@@ -1,5 +1,6 @@
 import { claimJob, reportJobDone, reportJobFailed, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
+import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
@@ -27,10 +28,62 @@ async function crmTab() {
   return tabs.find((tab) => typeof tab.id === "number") ?? null;
 }
 
+function waitForTabComplete(tabId: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 10000);
+    function listener(updatedTabId: number, info: chrome.tabs.TabChangeInfo) {
+      if (updatedTabId === tabId && info.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function runBackgroundUiStep(tabId: number, job: ToolJob): Promise<PageResult | null> {
+  if (job.tool_name !== "ui_step") return null;
+  const step = (job.args.step ?? {}) as Record<string, unknown>;
+  const type = String(step.type ?? "");
+
+  if (type === "open_url") {
+    const url = String(step.url ?? "");
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, error_message: "open_url requires a valid URL." };
+    }
+    if (parsed.hostname !== "crm.zoho.com") {
+      return { ok: false, error_message: "open_url is limited to crm.zoho.com." };
+    }
+    await chrome.tabs.update(tabId, { url: parsed.toString(), active: true });
+    await waitForTabComplete(tabId);
+    return { ok: true, result: { observed: parsed.toString() } };
+  }
+
+  if (type === "screenshot") {
+    const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+    if (dataUrl.length > 500 * 1024) {
+      return { ok: false, error_message: "Screenshot exceeded the 500 KB cap." };
+    }
+    return { ok: true, result: { screenshot_data_url: dataUrl } };
+  }
+
+  return null;
+}
+
 // Runs the read-only executor in the page's MAIN world via chrome.scripting.
 // Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
+  const backgroundUiResult = await runBackgroundUiStep(tabId, job);
+  if (backgroundUiResult) return backgroundUiResult;
+
   // Belt-and-braces (3 of 3): a write job must carry an approval_id. Even if the
   // server checks were somehow bypassed, the extension refuses to write without
   // one.
@@ -41,7 +94,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: isWrite ? zohoWritePageRunner : zohoPageRunner,
+      func: job.tool_name === "ui_step" ? zohoUiPageRunner : isWrite ? zohoWritePageRunner : zohoPageRunner,
       args: [{ tool_name: job.tool_name, args: job.args }]
     });
     const result = results?.[0]?.result as PageResult | undefined;

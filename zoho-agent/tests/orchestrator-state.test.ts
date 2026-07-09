@@ -19,6 +19,7 @@ import {
   sweepCutoffs
 } from "../lib/agent/sweeps";
 import { turnActiveUntil, turnClaimDecision } from "../lib/agent/turn-lock";
+import { uiStepTeachModeDecision, validateUiToolCall } from "../lib/agent/ui-tools";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -172,5 +173,36 @@ test("agent turn lock claims empty or expired sessions only", () => {
       approvalWaitMs
     }),
     { claimable: false, activeUntilIso: "2026-07-10T09:05:00.000Z" }
+  );
+});
+
+test("ui_step validation and teach-mode gate are strict", () => {
+  assert.deepEqual(uiStepTeachModeDecision(true), { allowed: true, reason: "teach_mode" });
+  assert.deepEqual(uiStepTeachModeDecision(false), { allowed: false, reason: "ui_step requires teach mode" });
+
+  const validated = validateUiToolCall({
+    id: "call-ui-1",
+    name: "ui_step",
+    args: { step: { type: "wait_for", selector: "#task_subject", timeout_ms: 10000 } }
+  });
+  assert.deepEqual(validated.args, { step: { type: "wait_for", selector: "#task_subject", timeout_ms: 10000 } });
+
+  assert.throws(
+    () =>
+      validateUiToolCall({
+        id: "call-ui-2",
+        name: "ui_step",
+        args: { step: { type: "wait_for", selector: "#x", text: "x" } }
+      }),
+    /exactly one/
+  );
+  assert.throws(
+    () =>
+      validateUiToolCall({
+        id: "call-ui-3",
+        name: "ui_step",
+        args: { step: { type: "open_url", url: "https://example.com/" } }
+      }),
+    /crm\.zoho\.com/
   );
 });

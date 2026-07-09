@@ -41,12 +41,22 @@ declare namespace chrome {
   }
 
   namespace tabs {
+    type TabChangeInfo = {
+      status?: "loading" | "complete";
+    };
+
     type Tab = {
       id?: number;
       url?: string;
     };
 
     function query(queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
+    function update(tabId: number, updateProperties: { url?: string; active?: boolean }): Promise<Tab>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
+    function captureVisibleTab(options: { format: "png" | "jpeg" }): Promise<string>;
+    const onUpdated: {
+      addListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
+      removeListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
+    };
   }
 }
