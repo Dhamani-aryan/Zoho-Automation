@@ -328,7 +328,7 @@ async function listUiWorkflows(service: SupabaseClient) {
   };
 }
 
-async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
+async function currentTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
   const { data: sessionRow, error } = await service
     .from("agent_sessions")
     .select("teach_mode")
@@ -336,7 +336,21 @@ async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, se
     .eq("user_id", user.id)
     .single();
   if (error) throw error;
-  const decision = uiStepTeachModeDecision((sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true);
+  return (sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true;
+}
+
+function instructionsForTurn(teachMode: boolean) {
+  return `${AGENT_INSTRUCTIONS}
+
+Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. ${
+    teachMode
+      ? "For a user request to open or navigate to a crm.zoho.com URL, call ui_step with an open_url step now."
+      : "Do not call ui_step; tell the user to turn on Teach a workflow before UI navigation."
+  }`;
+}
+
+async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
+  const decision = uiStepTeachModeDecision(await currentTeachMode(service, user, sessionId));
   if (!decision.allowed) throw new Error(decision.reason);
 }
 
@@ -633,8 +647,9 @@ export async function runAgentTurn({
   const maxToolCalls = agentMaxToolCalls();
 
   while (Date.now() - started - pausedMs < turnTimeoutMs) {
+    const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const model = await provider.runTools({
-      instructions: AGENT_INSTRUCTIONS,
+      instructions: instructionsForTurn(teachMode),
       messages: transcript,
       tools: AGENT_TOOL_DEFINITIONS
     });

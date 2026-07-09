@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase F follow-up: expose teach_mode to the model (2026-07-10, build)
+
+Observed during live testing: even with Teach a workflow enabled, asking "open this deal" could still get a cautionary response asking the user to enable teach mode. Root cause: the loop enforced teach_mode server-side, but the model prompt did not include the current session's teach_mode value. Added a per-turn DB read of agent_sessions.teach_mode and appended explicit state to the tool prompt: when ON, crm.zoho.com open/navigate requests should call ui_step open_url; when OFF, ui_step must not be called.
+
+Verification for this follow-up: npm run typecheck passed.
+
 ## Phase F follow-up: teach-mode open_url instruction (2026-07-10, build)
 
 Observed during live testing: asking the agent to "open this deal" returned the CRM link instead of calling ui_step. Root cause was stale wording in AGENT_INSTRUCTIONS that said "UI actions remain unavailable" immediately before the teach-mode ui_step guidance. Updated the prompt to keep deletes/record creation unavailable while explicitly telling the model to use ui_step open_url for crm.zoho.com URLs when teach mode is on.
