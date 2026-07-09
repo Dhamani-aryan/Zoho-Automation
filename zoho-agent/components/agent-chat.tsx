@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, Send, Trash2, Wrench, X } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type AgentSession = {
   id: string;
@@ -81,6 +81,12 @@ export function AgentChat({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [timeline, loading]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -334,7 +340,7 @@ export function AgentChat({
           <div className="text-xs text-muted">Phase C: local DB tools, live Zoho reads, and mirror sync.</div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
           {timeline.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted">
               Ask about mirrored Zoho records or request a missing capability.
