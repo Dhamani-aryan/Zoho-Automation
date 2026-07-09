@@ -23,7 +23,8 @@ import {
   prepareUiWorkflow,
   prepareUiWorkflowReplay,
   uiStepTeachModeDecision,
-  validateUiToolCall
+  validateUiToolCall,
+  workflowEffectForSteps
 } from "../lib/agent/ui-tools";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
@@ -253,6 +254,24 @@ test("save_ui_workflow validation preserves read/write and selector safety", () 
         steps: [{ type: "fill_field", frame_selector: "#{composer_frame}", selector: "#editorDiv", value: "Hello" }]
       }),
     /params cannot be used in selectors/
+  );
+});
+
+test("workflow edits re-derive write effect from mutating steps", () => {
+  assert.equal(
+    workflowEffectForSteps([
+      { type: "open_url", url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123" },
+      { type: "confirm_text_present", text: "Next Step" },
+      { type: "read_field", selector: "input[name='Next_Step']" }
+    ]),
+    "read"
+  );
+  assert.equal(
+    workflowEffectForSteps([
+      { type: "open_url", url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123" },
+      { type: "fill_field", selector: "input[name='Next_Step']", value: "Call" }
+    ]),
+    "write"
   );
 });
 

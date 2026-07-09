@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase F follow-up: workflows management surface (2026-07-10, build)
+
+Built the workflow library UI from spec 4.6:
+- Added /workflows for admin/operator users with saved workflow list, effect/trusted badges, version, params, updated_at, detail steps, run param form, edit form, and typed-name delete.
+- Run handoff goes to /agent?draft=... and pre-fills the chat composer. Execution still happens only through the existing agent tools, replay path, teach-mode checks, trusted replay handling, and write approval gate.
+- Added /api/workflows list plus /api/workflows/[id] update/delete. Updates reuse prepareUiWorkflow validation and re-derive effect server-side with workflowEffectForSteps. Step/effect edits bump version and reset trusted=false; metadata edits keep the current trust/version.
+- Delete is local-row only, role/ownership checked, service-role backed, and requires the exact workflow name.
+- Added audit events for workflow_saved, workflow_updated, and workflow_deleted. Agent instructions now call list_ui_workflows for "what workflows do I have" / "how do I run X" and answer with names, params, and an example run phrase.
+
+Verification for this follow-up: npm run typecheck passed; npm run lint passed; npm run build passed after rerunning unsandboxed for the known Windows .next trace write restriction; npm run build:extension passed; npm run test:orchestrator passed 14/14 after rerunning unsandboxed for the known Windows .tmp write restriction.
+
 ## Phase F follow-up: CDP-trusted UI input (2026-07-10, build)
 
 Built the blocking live-teach fix from the diagnosis entry:

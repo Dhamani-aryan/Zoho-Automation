@@ -6,9 +6,9 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 export default async function AgentPage({
   searchParams
 }: {
-  searchParams: Promise<{ session?: string }>;
+  searchParams: Promise<{ session?: string; draft?: string }>;
 }) {
-  const { session: requestedSession } = await searchParams;
+  const { session: requestedSession, draft } = await searchParams;
   const supabase = await createServerSupabaseClient();
   let sessions: Array<{
     id: string;
@@ -72,6 +72,7 @@ export default async function AgentPage({
         initialSessions={sessions}
         initialMessages={messages}
         initialActiveSessionId={activeSessionId}
+        initialDraft={draft ?? ""}
       />
     </AppShell>
   );

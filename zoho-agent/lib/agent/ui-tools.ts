@@ -320,6 +320,10 @@ function stepLooksMutating(step: PreparedUiWorkflow["steps"][number]) {
   return step.type === "click" || step.type === "fill_field" || step.type === "press_key";
 }
 
+export function workflowEffectForSteps(steps: PreparedUiWorkflow["steps"]): "read" | "write" {
+  return steps.some(stepLooksMutating) ? "write" : "read";
+}
+
 export function prepareUiWorkflow(args: unknown): PreparedUiWorkflow {
   const prepared = saveUiWorkflowSchema.parse(args);
   if (prepared.effect === "read" && prepared.steps.some(stepLooksMutating)) {

@@ -5,24 +5,32 @@ import {
   Database,
   FileUp,
   LayoutDashboard,
+  ListChecks,
   Settings,
   Settings2
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { UserRole } from "@/lib/types";
 
-const navItems = [
+const navItems: Array<{
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  roles?: UserRole[];
+}> = [
   { href: "/agent", label: "Agent", icon: BotMessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/records", label: "Records", icon: Database },
+  { href: "/workflows", label: "Workflows", icon: ListChecks, roles: ["admin", "operator"] },
   { href: "/imports", label: "Imports", icon: FileUp },
   { href: "/runs", label: "Runs", icon: ClipboardList },
   { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/admin/agent-activity", label: "Agent Activity", icon: ChartNoAxesColumnIncreasing },
-  { href: "/admin/field-meta", label: "Field Meta", icon: Settings2 }
+  { href: "/admin/agent-activity", label: "Agent Activity", icon: ChartNoAxesColumnIncreasing, roles: ["admin"] },
+  { href: "/admin/field-meta", label: "Field Meta", icon: Settings2, roles: ["admin"] }
 ];
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
@@ -47,7 +55,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const visibleNavItems = navItems.filter((item) => !item.href.startsWith("/admin") || role === "admin");
+  const visibleNavItems = navItems.filter((item) => !item.roles || (role && item.roles.includes(role)));
 
   return (
     <div className="min-h-screen bg-surface text-ink">

@@ -247,18 +247,20 @@ function ToolTrace({
 export function AgentChat({
   initialSessions,
   initialMessages,
-  initialActiveSessionId
+  initialActiveSessionId,
+  initialDraft = ""
 }: {
   initialSessions: AgentSession[];
   initialMessages: AgentMessageRow[];
   initialActiveSessionId?: string;
+  initialDraft?: string;
 }) {
   const [sessions, setSessions] = useState(initialSessions);
   const [activeSessionId, setActiveSessionId] = useState(
     initialActiveSessionId ?? initialSessions[0]?.id ?? ""
   );
   const [timeline, setTimeline] = useState<TimelineItem[]>(buildTimeline(initialMessages, []));
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialDraft);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
@@ -270,6 +272,14 @@ export function AgentChat({
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [timeline, loading]);
+
+  useEffect(() => {
+    if (!initialDraft) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(initialDraft.length, initialDraft.length);
+  }, [initialDraft]);
 
   // Hydrate the active session on mount so approval cards rebuild from the DB
   // after a reload/reconnect.
