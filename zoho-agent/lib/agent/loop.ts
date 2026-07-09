@@ -544,11 +544,16 @@ async function runUiWorkflowTool({
 
     const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
     const verified = await markWorkflowTrusted(service, replay, job.result);
+    // The job may report "done" while the workflow itself failed mid-step
+    // (inner ok:false with failed_step_index). Only a fully verified replay
+    // counts as an executed success; anything else is reported as failed so
+    // the trace and the model cannot claim success for a failed replay.
+    const replayOk = job.ok && verified;
     return {
-      ok: job.ok,
+      ok: replayOk,
       result: {
         approval_id: approvalId,
-        status: job.ok ? "executed" : "failed",
+        status: replayOk ? "executed" : "failed",
         ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
         trusted_before: replay.trusted,
         trusted_after: verified ? true : replay.trusted
@@ -567,8 +572,10 @@ async function runUiWorkflowTool({
 
   const verified = await markWorkflowTrusted(service, replay, bridgedResult);
 
+  // Same honesty rule as the write path: a bridged job can complete while the
+  // workflow failed mid-step. Report ok only for a fully verified replay.
   return {
-    ok: true,
+    ok: verified,
     result: {
       ...(bridgedResult && typeof bridgedResult === "object" ? (bridgedResult as Record<string, unknown>) : { result: bridgedResult }),
       trusted_before: replay.trusted,

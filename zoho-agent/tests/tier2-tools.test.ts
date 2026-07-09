@@ -6,6 +6,7 @@ import {
   TIER2_WRITE_TOOL_NAMES,
   validateTier2Call,
   tier2RecordIds,
+  approvalGatedClaimDecision,
   assertTier2JobInsertAllowed,
   tier2ClaimDecision,
   extensionAcceptsWriteJob,
@@ -186,6 +187,14 @@ test("tier2ClaimDecision only clears Tier-2 jobs whose approval is approved", ()
   assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "pending").claimable, false);
   assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "rejected").claimable, false);
   assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "approved").claimable, true);
+});
+
+test("approvalGatedClaimDecision gates write-effect ui_workflow jobs like Tier-2 writes", () => {
+  assert.equal(approvalGatedClaimDecision({ approval_id: null }, null).claimable, false);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "pending").claimable, false);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "rejected").claimable, false);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, null).claimable, false);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "approved").claimable, true);
 });
 
 test("extensionAcceptsWriteJob refuses a write job lacking approval_id", () => {

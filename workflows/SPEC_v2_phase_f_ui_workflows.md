@@ -1,7 +1,9 @@
 # V2 Phase F Build Spec — UI Navigation + Teachable Workflows
 
-Version 1.0 (2026-07-08). For Codex. Prereq: Phase E reviewed.
+Version 1.1 (2026-07-09). For Codex. Prereq: Phase E reviewed (done 2026-07-09) AND the Phase E required follow-up (server-side one-turn-per-session lock, design in V2_DECISIONS "Phase E review") built FIRST — it is step 0 of this phase.
 Read first: SPEC_v2_tool_agent_migration.md §3b (the requirement + storage, already migrated), workflows/SPEC_kd_blitz_email_scheduling.md §9 (proven Zoho selector map + interaction quirks), docs/V2_DECISIONS.md.
+
+**HOSTING BOUNDARY (Aryan, 2026-07-09): localhost ONLY.** Everything in this phase runs and is accepted on the local dev server (`http://localhost:3000` / `127.0.0.1:3000`) against cloud Supabase. Do NOT do any Vercel/deploy work: no vercel.json, no deploy scripts, no production URLs in the extension manifest or env, no "works on Vercel" refactors. Hosting is a separate, later step after the app is proven locally.
 
 ## 0. Goal & boundary
 
@@ -30,6 +32,7 @@ Migration `2026_v2_phase_f.sql`: `alter table agent_sessions add column if not e
 
 ## 4. Build order
 
+0. **Phase E carry-over (blocking):** server-side one-turn-per-session lock per V2_DECISIONS "Phase E review" design (`agent_sessions.turn_active_until`, guarded claim on message POST → 409 when an unexpired turn is active, cleared in a finally block, self-healing expiry = turn budget + max approval wait); label the Stop button so users know the agent finishes in the background. Unit-test the claim/expiry decision as a pure function.
 1. Migration + teach-mode toggle + banner.
 2. UI step vocabulary types + Zod; `page-runner-ui.ts` + jobs routing; `ui_step` tool behind teach mode. Live-teach test: "open the Duraco deal, read Next Step" step by step.
 3. `save_ui_workflow` + confirmation card + `list_ui_workflows`.

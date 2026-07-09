@@ -126,12 +126,20 @@ async function executeUiStep(tabId: number, step: Record<string, unknown>): Prom
   }
 }
 
+// Step types that can mutate CRM state. Kept in sync with the server-side
+// save-time classification in lib/agent/ui-tools.ts stepLooksMutating().
+const MUTATING_UI_STEPS = new Set(["click", "fill_field", "press_key"]);
+
 async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
-  if (job.args.effect === "write" && !job.approval_id) {
+  const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
+  // Refuse unapproved replays when EITHER the declared effect is write OR any
+  // step could mutate state (defense in depth: do not trust the effect label
+  // alone if the two ever disagree).
+  const hasMutatingStep = steps.some((step) => MUTATING_UI_STEPS.has(String(step?.type ?? "")));
+  if ((job.args.effect === "write" || hasMutatingStep) && !job.approval_id) {
     return { ok: false, error_message: "write workflow without approval refused by extension" };
   }
 
-  const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
   const workflowName = String(job.args.name ?? "ui workflow");
   const outcomes: Array<{ index: number; step_type: string; ok: boolean; observed?: unknown; error_message?: string }> = [];
 

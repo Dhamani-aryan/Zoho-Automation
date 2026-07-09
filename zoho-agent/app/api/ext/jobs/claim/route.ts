@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
-import { isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
+import { approvalGatedClaimDecision, isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
 import {
   queuedJobExpiryPatch,
   runningJobStalePatch,
@@ -67,8 +67,12 @@ export async function POST(request: Request) {
     // Belt-and-braces (2 of 3): a Tier-2 write job is only handed out when its
     // linked approval row exists and is 'approved'. Any other state means it
     // must never run, so we terminally fail it (keeps the queue moving) and do
-    // not claim it.
-    if (isTier2WriteTool(nextJob.tool_name)) {
+    // not claim it. Write-effect ui_workflow replays are held to the same rule
+    // (their effect is fixed server-side from the saved workflow row).
+    const isWriteEffectUiWorkflow =
+      nextJob.tool_name === "ui_workflow" &&
+      (nextJob.args as { effect?: unknown } | null)?.effect === "write";
+    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow) {
       const { data: approval, error: approvalError } = await auth.service
         .from("pending_approvals")
         .select("status")
@@ -77,10 +81,12 @@ export async function POST(request: Request) {
       if (approvalError) {
         return NextResponse.json({ error: approvalError.message }, { status: 500 });
       }
-      const decision = tier2ClaimDecision(
-        { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
-        (approval?.status as string) ?? null
-      );
+      const decision = isWriteEffectUiWorkflow
+        ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
+        : tier2ClaimDecision(
+            { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
+            (approval?.status as string) ?? null
+          );
       if (!decision.claimable) {
         await auth.service
           .from("tool_jobs")

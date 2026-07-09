@@ -336,6 +336,17 @@ export function assertTier2JobInsertAllowed(
 
 export type ClaimDecision = { claimable: boolean; reason: string };
 
+// Shared approval-linkage rule for any job that must not run unapproved
+// (Tier-2 CRM writes AND write-effect ui_workflow replays).
+export function approvalGatedClaimDecision(
+  job: { approval_id: string | null },
+  approvalStatus: string | null
+): ClaimDecision {
+  if (!job.approval_id) return { claimable: false, reason: "no_approval_link" };
+  if (approvalStatus !== "approved") return { claimable: false, reason: `approval_${approvalStatus ?? "missing"}` };
+  return { claimable: true, reason: "approved" };
+}
+
 // (2) The extension claim route only hands a Tier-2 write job to the extension
 // when the linked approval row exists and is 'approved'. Tier-1 reads are
 // always claimable.
@@ -344,9 +355,7 @@ export function tier2ClaimDecision(
   approvalStatus: string | null
 ): ClaimDecision {
   if (!isTier2WriteTool(job.tool_name)) return { claimable: true, reason: "tier1" };
-  if (!job.approval_id) return { claimable: false, reason: "no_approval_link" };
-  if (approvalStatus !== "approved") return { claimable: false, reason: `approval_${approvalStatus ?? "missing"}` };
-  return { claimable: true, reason: "approved" };
+  return approvalGatedClaimDecision(job, approvalStatus);
 }
 
 // (3) The extension write executor refuses any write job that arrives without
