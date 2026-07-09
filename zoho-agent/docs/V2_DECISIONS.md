@@ -13,6 +13,18 @@ Implemented server-side one-turn-per-session locking:
 
 Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 9/9 after rerunning unsandboxed for the known Windows .tmp write restriction.
 
+## Phase F Step 1 Checkpoint: teach mode toggle and banner (2026-07-10, build)
+
+Implemented the first Phase F feature step after committing Step 0:
+- Extended supabase/2026_v2_phase_f.sql with agent_sessions.teach_mode boolean not null default false.
+- Session list/detail/create payloads now include teach_mode.
+- Added PATCH /api/agent/sessions/[id] for owner-only teach_mode toggling. Archived sessions cannot be toggled.
+- /agent now hydrates teach_mode and AgentChat shows a "Teach a workflow" toolbar button plus a visible banner when teach mode is active.
+
+No UI workflow tools execute in this step. Server-side ui_step gating comes in Step 2.
+
+Verification for this step: npm run typecheck passed.
+
 ## Phase E review (2026-07-09, chat review)
 
 Verdict: approved with ONE required follow-up before the Phase E done gate; no slop found. Verified independently from the committed tree (git archive of 15bb0c9 into /tmp; the mount served NUL-padded stale working-tree copies, so the object store was the review source): tsc --noEmit clean; tier2 14/14, orchestrator 8/8, records 5/5 - matching the build log's claims exactly. Grep-proofs re-run and hold: page-runner-write.ts is still the only CRM PUT/actions path; still exactly two tool_jobs INSERT sites, both calling assertTier2JobInsertAllowed; claim-route approval check intact; purge is reachable ONLY from the admin button behind window.confirm, never on load.

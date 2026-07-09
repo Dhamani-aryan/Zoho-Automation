@@ -14,6 +14,7 @@ export default async function AgentPage({
     id: string;
     title: string | null;
     status: string;
+    teach_mode: boolean;
     created_at: string;
     updated_at: string;
   }> = [];
@@ -37,7 +38,7 @@ export default async function AgentPage({
     if (user) {
       const { data } = await supabase
         .from("agent_sessions")
-        .select("id,title,status,created_at,updated_at")
+        .select("id,title,status,teach_mode,created_at,updated_at")
         .eq("user_id", user.id)
         .eq("status", "active")
         .order("updated_at", { ascending: false })

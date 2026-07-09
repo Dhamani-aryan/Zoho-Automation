@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  GraduationCap,
   Loader2,
   Pencil,
   Plus,
@@ -21,6 +22,7 @@ type AgentSession = {
   id: string;
   title: string | null;
   status: string;
+  teach_mode: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -321,12 +323,33 @@ export function AgentChat({
     }
     const response = await fetch(`/api/agent/sessions/${sessionId}`);
     const payload = (await response.json().catch(() => ({}))) as {
+      session?: AgentSession;
       messages?: AgentMessageRow[];
       approvals?: ApprovalRow[];
       error?: string;
     };
     if (!response.ok) throw new Error(payload.error ?? "Could not load agent session.");
+    if (payload.session) {
+      setSessions((current) =>
+        current.map((session) => (session.id === payload.session?.id ? payload.session : session))
+      );
+    }
     setTimeline(buildTimeline(payload.messages ?? [], payload.approvals ?? []));
+  }
+
+  async function toggleTeachMode() {
+    const sessionId = activeSessionId || (await createSession());
+    const next = !sessions.find((session) => session.id === sessionId)?.teach_mode;
+    const response = await fetch(`/api/agent/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teach_mode: next })
+    });
+    const payload = (await response.json().catch(() => ({}))) as { session?: AgentSession; error?: string };
+    if (!response.ok || !payload.session) throw new Error(payload.error ?? "Could not update teach mode.");
+    setSessions((current) =>
+      current.map((session) => (session.id === payload.session?.id ? payload.session : session))
+    );
   }
 
   async function createSession() {
@@ -606,8 +629,37 @@ export function AgentChat({
 
       <section className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
         <div className="shrink-0 border-b border-line px-5 py-4">
-          <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
-          <div className="text-xs text-muted">Phase D: local DB tools, live Zoho reads, mirror sync, and approval-gated writes.</div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
+              <div className="text-xs text-muted">
+                Phase F: local DB tools, live Zoho tools, approval-gated writes, and teachable UI workflows.
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                toggleTeachMode().catch((err: unknown) => {
+                  setError(err instanceof Error ? err.message : "Could not update teach mode.");
+                });
+              }}
+              className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${
+                activeSession?.teach_mode
+                  ? "border-amber-300 bg-amber-50 text-amber-900"
+                  : "border-line bg-white text-ink hover:bg-surface"
+              } disabled:cursor-not-allowed disabled:opacity-50`}
+              title="Teach a workflow"
+            >
+              <GraduationCap className="h-4 w-4" aria-hidden="true" />
+              {activeSession?.teach_mode ? "Teaching" : "Teach a workflow"}
+            </button>
+          </div>
+          {activeSession?.teach_mode ? (
+            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Teach mode is on. The agent may execute one watched UI step per instruction in your open Zoho tab.
+            </div>
+          ) : null}
         </div>
 
         <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">

@@ -8,7 +8,7 @@ export async function GET() {
   try {
     const { data, error } = await auth.supabase
       .from("agent_sessions")
-      .select("id,title,status,created_at,updated_at")
+      .select("id,title,status,teach_mode,created_at,updated_at")
       .eq("user_id", auth.user.id)
       .eq("status", "active")
       .order("updated_at", { ascending: false })
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
         user_id: auth.user.id,
         title
       })
-      .select("id,title,status,created_at,updated_at")
+      .select("id,title,status,teach_mode,created_at,updated_at")
       .single();
 
     if (error) throw error;
