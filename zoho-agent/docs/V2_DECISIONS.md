@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase F follow-up: CDP-trusted UI input (2026-07-10, build)
+
+Built the blocking live-teach fix from the diagnosis entry:
+- Added the Chrome debugger permission and a background-worker CDP input path for ui_step click, fill_field commit, and press_key.
+- Trusted click/fill/keypress uses Input.dispatchMouseEvent, Input.dispatchKeyEvent, and Input.insertText at CSS-pixel coordinates derived from the visible target. The debugger attaches for the input operation and detaches in finally.
+- DOM-event execution remains as an explicit fallback and reports input_method=dom_fallback plus the CDP error in the result.
+- Click results report input dispatched with verified=false/needs_verification=true; teach instructions now tell the model to propose a wait_for/confirm_text_present/verify_field step after every click instead of claiming the UI changed from the click alone.
+- Added optional frame_selector for UI steps so the Zoho email composer iframe (#z_editor) can be targeted. Server validation still blocks params in selector and frame_selector fields.
+
+Verification for this follow-up: npm run typecheck passed; npm run build:extension passed; npm run test:orchestrator passed 13/13 after rerunning unsandboxed for the known Windows .tmp write restriction.
+
 ## Live-teach diagnosis: Zoho ignores untrusted clicks; CDP input required (2026-07-10, chat)
 
 Aryan's first real teach session: open_url worked, but click steps ("Emails section", "Compose Email") reported ok with no visible effect. Two root causes. (1) Synthetic MouseEvents + element.click() have isTrusted=false and Zoho's UI ignores untrusted input on many controls - exactly what reference/ZOHO_SESSION_API_REFERENCE.md section 6 warned about ("use CDP-level input for hover-reveal controls, exact-coordinate clicks, Enter-to-commit"; learned originally from HeySnap, which drives pages through chrome.debugger / CDP trusted input). (2) The click step reports success when events dispatch, without verifying any effect, so failures look like "Worked".

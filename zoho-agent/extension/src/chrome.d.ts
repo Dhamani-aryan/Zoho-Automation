@@ -23,6 +23,13 @@ declare namespace chrome {
     };
   }
 
+  type Debuggee = { tabId?: number };
+  type DebuggerApi = {
+    attach(target: Debuggee, requiredVersion: string): Promise<void>;
+    detach(target: Debuggee): Promise<void>;
+    sendCommand(target: Debuggee, method: string, commandParams?: Record<string, unknown>): Promise<unknown>;
+  };
+
   namespace storage {
     const local: {
       get(keys: Record<string, unknown>, callback: (items: Record<string, unknown>) => void): void;

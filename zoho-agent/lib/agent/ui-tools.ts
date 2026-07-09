@@ -4,7 +4,8 @@ import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 const selectorOrText = z
   .object({
     selector: z.string().trim().min(1).optional(),
-    text: z.string().trim().min(1).optional()
+    text: z.string().trim().min(1).optional(),
+    frame_selector: z.string().trim().min(1).optional()
   })
   .refine((value) => Boolean(value.selector) !== Boolean(value.text), {
     message: "Provide exactly one of selector or text."
@@ -23,12 +24,14 @@ const fillFieldStep = z.object({
   type: z.literal("fill_field"),
   selector: z.string().trim().min(1),
   value: z.string(),
+  frame_selector: z.string().trim().min(1).optional(),
   press_enter: z.boolean().optional()
 });
 
 const readFieldStep = z.object({
   type: z.literal("read_field"),
-  selector: z.string().trim().min(1)
+  selector: z.string().trim().min(1),
+  frame_selector: z.string().trim().min(1).optional()
 });
 
 const pressKeyStep = z.object({
@@ -44,6 +47,7 @@ const confirmTextStep = z.object({
 const verifyFieldStep = z.object({
   type: z.literal("verify_field"),
   selector: z.string().trim().min(1),
+  frame_selector: z.string().trim().min(1).optional(),
   equals: z.string()
 });
 
@@ -71,9 +75,13 @@ export const uiStepSchema = z.discriminatedUnion("type", [
 ]);
 
 function noSelectorParams(value: unknown) {
-  if (!value || typeof value !== "object" || !("selector" in value)) return true;
+  if (!value || typeof value !== "object") return true;
   const selector = (value as { selector?: unknown }).selector;
-  return typeof selector !== "string" || (!selector.includes("{") && !selector.includes("}"));
+  const frameSelector = (value as { frame_selector?: unknown }).frame_selector;
+  const selectorSafe = typeof selector !== "string" || (!selector.includes("{") && !selector.includes("}"));
+  const frameSafe =
+    typeof frameSelector !== "string" || (!frameSelector.includes("{") && !frameSelector.includes("}"));
+  return selectorSafe && frameSafe;
 }
 
 const parameterizedOpenUrlStep = z.object({
@@ -162,6 +170,7 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
                 type: { const: "wait_for" },
                 selector: { type: "string" },
                 text: { type: "string" },
+                frame_selector: { type: "string" },
                 timeout_ms: { type: "integer", minimum: 250, maximum: 10000 }
               }
             },
@@ -169,7 +178,12 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
               type: "object",
               additionalProperties: false,
               required: ["type"],
-              properties: { type: { const: "click" }, selector: { type: "string" }, text: { type: "string" } }
+              properties: {
+                type: { const: "click" },
+                selector: { type: "string" },
+                text: { type: "string" },
+                frame_selector: { type: "string" }
+              }
             },
             {
               type: "object",
@@ -179,6 +193,7 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
                 type: { const: "fill_field" },
                 selector: { type: "string" },
                 value: { type: "string" },
+                frame_selector: { type: "string" },
                 press_enter: { type: "boolean" }
               }
             },
@@ -186,7 +201,7 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
               type: "object",
               additionalProperties: false,
               required: ["type", "selector"],
-              properties: { type: { const: "read_field" }, selector: { type: "string" } }
+              properties: { type: { const: "read_field" }, selector: { type: "string" }, frame_selector: { type: "string" } }
             },
             {
               type: "object",
@@ -204,7 +219,12 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
               type: "object",
               additionalProperties: false,
               required: ["type", "selector", "equals"],
-              properties: { type: { const: "verify_field" }, selector: { type: "string" }, equals: { type: "string" } }
+              properties: {
+                type: { const: "verify_field" },
+                selector: { type: "string" },
+                frame_selector: { type: "string" },
+                equals: { type: "string" }
+              }
             },
             {
               type: "object",

@@ -19,6 +19,10 @@ let inFlight = false;
 let idleSince = Date.now();
 let timer: number | undefined;
 
+function debuggerApi() {
+  return (chrome as unknown as { "debugger": chrome.DebuggerApi })["debugger"];
+}
+
 function crmTabs(): Promise<chrome.tabs.Tab[]> {
   return new Promise((resolve) => {
     chrome.tabs.query({ url: "https://crm.zoho.com/*" }, resolve);
@@ -171,6 +175,194 @@ async function captureEvidence() {
   }
 }
 
+type LocatedUiTarget =
+  | { ok: true; x: number; y: number; observed: string; tag_name: string }
+  | { ok: false; error_message: string };
+
+async function locateUiTarget(tabId: number, step: Record<string, unknown>): Promise<LocatedUiTarget> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (rawStep: Record<string, unknown>) => {
+      function textOf(element: Element) {
+        return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+      }
+      function valueOf(element: Element) {
+        if (
+          element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement
+        ) {
+          return element.value;
+        }
+        return textOf(element);
+      }
+      function isVisible(element: Element) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      function frameContext() {
+        const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
+        if (!frameSelector) return { doc: document, offsetX: 0, offsetY: 0 };
+        const frame = document.querySelector(frameSelector);
+        if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
+          return { error: `Frame was not found: ${frameSelector}` };
+        }
+        const rect = frame.getBoundingClientRect();
+        return { doc: frame.contentDocument, offsetX: rect.left, offsetY: rect.top };
+      }
+      const ctx = frameContext();
+      if ("error" in ctx) return { ok: false, error_message: ctx.error };
+
+      const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
+      const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
+      let element: Element | null = null;
+      if (selector) {
+        const selected = ctx.doc.querySelector(selector);
+        element = selected && isVisible(selected) ? selected : null;
+      } else if (text) {
+        const all = [...ctx.doc.querySelectorAll("button,a,input,textarea,[role='button'],span,div")].filter(isVisible);
+        element =
+          all.find((candidate) => textOf(candidate).toLowerCase() === text) ??
+          all.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
+          null;
+      }
+      if (!element) return { ok: false, error_message: "UI target was not found." };
+
+      element.scrollIntoView({ block: "center", inline: "center" });
+      const rect = element.getBoundingClientRect();
+      return {
+        ok: true,
+        x: Math.round(ctx.offsetX + rect.left + rect.width / 2),
+        y: Math.round(ctx.offsetY + rect.top + rect.height / 2),
+        observed: valueOf(element),
+        tag_name: element.tagName.toLowerCase()
+      };
+    },
+    args: [step]
+  });
+  const located = results?.[0]?.result as LocatedUiTarget | undefined;
+  return located ?? { ok: false, error_message: "UI locator returned no result." };
+}
+
+async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => Promise<T>) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await debuggerApi().attach(target, "1.3");
+    attached = true;
+    return await run(target);
+  } finally {
+    if (attached) {
+      await debuggerApi().detach(target).catch(() => undefined);
+    }
+  }
+}
+
+async function dispatchTrustedClick(target: chrome.Debuggee, x: number, y: number) {
+  await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    clickCount: 1
+  });
+  await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1
+  });
+}
+
+function keyParams(key: string) {
+  if (key === "Enter") return { key, code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  if (key === "Tab") return { key, code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 };
+  if (key === "Escape") return { key, code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+  if (key.length === 1) {
+    const upper = key.toUpperCase();
+    return { key, code: `Key${upper}`, windowsVirtualKeyCode: upper.charCodeAt(0), nativeVirtualKeyCode: upper.charCodeAt(0) };
+  }
+  return { key, code: key, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
+}
+
+async function dispatchTrustedKey(target: chrome.Debuggee, key: string) {
+  const params = keyParams(key);
+  await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...params });
+  await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
+}
+
+async function replaceFocusedText(target: chrome.Debuggee, value: string) {
+  await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    key: "a",
+    code: "KeyA",
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "a",
+    code: "KeyA",
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    modifiers: 2
+  });
+  await debuggerApi().sendCommand(target, "Input.insertText", { text: value });
+}
+
+function usesTrustedInput(step: Record<string, unknown>) {
+  const type = String(step.type ?? "");
+  return type === "click" || type === "fill_field" || type === "press_key";
+}
+
+async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
+  const type = String(step.type ?? "");
+  if (type === "press_key") {
+    const key = String(step.key ?? "");
+    await withDebugger(tabId, async (target) => {
+      await dispatchTrustedKey(target, key);
+    });
+    return { ok: true, result: { observed: `trusted key ${key}`, input_method: "cdp", trusted: true } };
+  }
+
+  const located = await locateUiTarget(tabId, step);
+  if (!located.ok) return { ok: false, error_message: located.error_message };
+
+  return withDebugger(tabId, async (target) => {
+    await dispatchTrustedClick(target, located.x, located.y);
+    if (type === "fill_field") {
+      await replaceFocusedText(target, String(step.value ?? ""));
+      if (step.press_enter === true) await dispatchTrustedKey(target, "Enter");
+      return {
+        ok: true,
+        result: {
+          observed: String(step.value ?? ""),
+          input_method: "cdp",
+          trusted: true,
+          coordinates: { x: located.x, y: located.y }
+        }
+      };
+    }
+
+    return {
+      ok: true,
+      result: {
+        observed: located.observed,
+        input_method: "cdp",
+        trusted: true,
+        verified: false,
+        needs_verification: true,
+        coordinates: { x: located.x, y: located.y }
+      }
+    };
+  });
+}
+
 async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult | null> {
   const type = String(step.type ?? "");
 
@@ -205,6 +397,39 @@ async function executeUiStep(tabId: number, step: Record<string, unknown>): Prom
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
 
+    if (usesTrustedInput(step)) {
+      try {
+        return await runTrustedUiStep(tabId, step);
+      } catch (error) {
+        const fallback = await runDomUiStep(tabId, step);
+        if (fallback.ok) {
+          return {
+            ok: true,
+            result: {
+              ...(fallback.result && typeof fallback.result === "object" ? (fallback.result as Record<string, unknown>) : { result: fallback.result }),
+              input_method: "dom_fallback",
+              trusted: false,
+              cdp_error: error instanceof Error ? error.message : "CDP trusted input failed."
+            }
+          };
+        }
+        return fallback;
+      }
+    }
+
+    return runDomUiStep(tabId, step);
+  } catch (error) {
+    return {
+      ok: false,
+      error_message: `Could not run UI step in the Zoho tab${
+        error instanceof Error ? `: ${error.message}` : ""
+      }. If the extension was just reloaded, refresh the crm.zoho.com tab and try again.`
+    };
+  }
+}
+
+async function runDomUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
+  try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
@@ -222,7 +447,7 @@ async function executeUiStep(tabId: number, step: Record<string, unknown>): Prom
   } catch (error) {
     return {
       ok: false,
-      error_message: `Could not run UI step in the Zoho tab${
+      error_message: `Could not run DOM UI step in the Zoho tab${
         error instanceof Error ? `: ${error.message}` : ""
       }. If the extension was just reloaded, refresh the crm.zoho.com tab and try again.`
     };

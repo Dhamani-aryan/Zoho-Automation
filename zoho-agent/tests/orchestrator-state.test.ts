@@ -245,6 +245,15 @@ test("save_ui_workflow validation preserves read/write and selector safety", () 
       }),
     /params cannot be used in selectors/
   );
+  assert.throws(
+    () =>
+      prepareUiWorkflow({
+        name: "Bad Frame Selector",
+        effect: "read",
+        steps: [{ type: "fill_field", frame_selector: "#{composer_frame}", selector: "#editorDiv", value: "Hello" }]
+      }),
+    /params cannot be used in selectors/
+  );
 });
 
 test("run_ui_workflow replay substitutes only safe slots", () => {

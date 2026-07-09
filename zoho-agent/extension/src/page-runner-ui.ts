@@ -23,9 +23,17 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
 
+  function rootDocument() {
+    const frameSelector = typeof step.frame_selector === "string" ? step.frame_selector : "";
+    if (!frameSelector) return document;
+    const frame = document.querySelector(frameSelector);
+    if (frame instanceof HTMLIFrameElement && frame.contentDocument) return frame.contentDocument;
+    return document;
+  }
+
   function findByText(text: string) {
     const wanted = text.trim().toLowerCase();
-    const all = [...document.querySelectorAll("button,a,input,textarea,[role='button'],span,div")];
+    const all = [...rootDocument().querySelectorAll("button,a,input,textarea,[role='button'],span,div")];
     const visible = all.filter(isVisible);
     return (
       visible.find((element) => textOf(element).toLowerCase() === wanted) ??
@@ -38,7 +46,7 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     const selector = typeof step.selector === "string" ? step.selector : "";
     const text = typeof step.text === "string" ? step.text : "";
     if (selector) {
-      const element = document.querySelector(selector);
+      const element = rootDocument().querySelector(selector);
       return element && isVisible(element) ? element : null;
     }
     if (text) return findByText(text);
