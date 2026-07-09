@@ -1,5 +1,23 @@
 # V2 Decisions
 
+## Live-teach diagnosis: Zoho ignores untrusted clicks; CDP input required (2026-07-10, chat)
+
+Aryan's first real teach session: open_url worked, but click steps ("Emails section", "Compose Email") reported ok with no visible effect. Two root causes. (1) Synthetic MouseEvents + element.click() have isTrusted=false and Zoho's UI ignores untrusted input on many controls - exactly what reference/ZOHO_SESSION_API_REFERENCE.md section 6 warned about ("use CDP-level input for hover-reveal controls, exact-coordinate clicks, Enter-to-commit"; learned originally from HeySnap, which drives pages through chrome.debugger / CDP trusted input). (2) The click step reports success when events dispatch, without verifying any effect, so failures look like "Worked".
+
+Follow-up specced to Codex (chat prompt, 2026-07-10): chrome.debugger-based Input.dispatchMouseEvent/dispatchKeyEvent for click/fill-commit/press_key (attach per job, detach in finally, DOM-event fallback, CSS-px coordinates, tolerate the debugging infobar), honest click results (unverified until a wait_for/confirm passes; teach instructions updated accordingly), and iframe targeting for the email composer. Localhost-only and all gates unchanged.
+
+## Review of Phase F follow-ups (2026-07-10, chat review)
+
+Reviewed 2d97ea3 (teach-mode prompt wording), aa17891 (per-turn teach_mode state in the prompt), 4a17c7b (dedicated Chrome window + UI targeting improvements). Verdict: first two approved as-is (per-iteration DB re-read of teach_mode keeps the prompt current mid-turn; server-side enforcement untouched). Third approved with two reviewer fixes; its targeting improvements (visible-elements-only, exact-text-match preferred, scrollIntoView) close the earlier findByText review note.
+
+Fix 1 (extension/src/jobs.ts): focus stealing on every job. crmTabForJob focused the dedicated window and activated its tab for ALL claimed jobs, so every background Tier-1/2 API session call would yank Chrome focus from whatever the user was doing. Now only UI jobs (ui_step / ui_workflow) focus the window (they drive the visible page, and captureVisibleTab needs the active tab of the focused window); API jobs reuse the stored agent tab or any open CRM tab QUIETLY, and if no CRM tab exists anywhere the dedicated window is created unfocused. UI-job precedence is preserved: dedicated window first, arbitrary tabs only as fallback.
+
+Fix 2 (extension/src/page-runner-ui.ts): double-click. mouseClick dispatched a synthetic "click" MouseEvent AND then called element.click(), firing every click handler twice - toggles/menus/checkboxes would open-then-close or check-then-uncheck. Now: synthetic mouseover/mousedown/mouseup for hover-reveal behavior, then exactly ONE click (native HTMLElement.click(), or a single synthetic click for non-HTML elements).
+
+Notes: AGENT_WINDOW_HOME hardcodes a deals custom-view URL - harmless (initial page only), simplify to the plain tab URL if the view id ever changes. The isVisible filter means selectors matching hover-hidden elements now fail instead of clicking invisibly; taught flows should add a hover/click step to reveal such controls first (playbook-consistent).
+
+Verified: tsc --noEmit clean with both fixes over 4a17c7b. Requires npm run build:extension on the dev machine + extension reload; no server or DB change.
+
 ## Phase F follow-up: dedicated visible Chrome window (2026-07-10, build)
 
 Observed during live testing: with multiple CRM tabs/windows, the extension could claim the first crm.zoho.com tab returned by Chrome and the user could not reliably see which page was being driven. Added a dedicated Zoho Agent Chrome window: the first extension-backed browser job creates a normal focused CRM window in the same Chrome profile, stores its window/tab ids, and later jobs reuse/focus that window. UI clicks now prefer visible exact text matches, scroll targets into view before clicking/reading/filling, and use a native HTMLElement click after mouse events.

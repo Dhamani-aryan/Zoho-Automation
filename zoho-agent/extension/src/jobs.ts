@@ -77,8 +77,8 @@ async function usableStoredTab() {
   return null;
 }
 
-async function createAgentWindow(url: string) {
-  const created = await chrome.windows.create({ url, focused: true, type: "normal" });
+async function createAgentWindow(url: string, focus: boolean) {
+  const created = await chrome.windows.create({ url, focused: focus, type: "normal" });
   const tab = created.tabs?.find((item) => typeof item.id === "number") ?? null;
   const tabId = tab?.id ?? null;
   await saveAgentTarget(created.id ?? null, tabId);
@@ -86,29 +86,49 @@ async function createAgentWindow(url: string) {
   return tabId ? await chrome.tabs.get(tabId) : null;
 }
 
+// UI jobs drive the visible page (and screenshots need the active tab of the
+// focused window), so they focus the dedicated window. API session jobs only
+// need SOME crm.zoho.com page context - they reuse a tab QUIETLY and never
+// steal the user's focus mid-typing.
+function isUiJob(job: ToolJob) {
+  return job.tool_name === "ui_step" || job.tool_name === "ui_workflow";
+}
+
+async function focusTab(tab: chrome.tabs.Tab) {
+  if (typeof tab.windowId === "number") {
+    await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => undefined);
+  }
+  if (typeof tab.id === "number") await chrome.tabs.update(tab.id, { active: true });
+}
+
 async function crmTabForJob(job: ToolJob) {
+  const focus = isUiJob(job);
   const stored = await usableStoredTab();
   if (stored?.id) {
-    if (typeof stored.windowId === "number") {
-      await chrome.windows.update(stored.windowId, { focused: true, state: "normal" }).catch(() => undefined);
-    }
-    await chrome.tabs.update(stored.id, { active: true });
+    if (focus) await focusTab(stored);
     return stored;
   }
 
-  const created = await createAgentWindow(initialUrlForJob(job));
-  if (created?.id) return created;
+  if (focus) {
+    // UI jobs: the dedicated window is the point - the user must always know
+    // which page is being driven. Create it before falling back to arbitrary
+    // existing tabs.
+    const created = await createAgentWindow(initialUrlForJob(job), true);
+    if (created?.id) return created;
+  }
 
+  // API jobs (and UI fallback if window creation failed): reuse any open CRM
+  // tab quietly - no focus/activation, the session call runs in the background.
   const tabs = await crmTabs();
   const existing = tabs.find((tab) => typeof tab.id === "number") ?? null;
   if (existing?.id) {
     await saveAgentTarget(existing.windowId ?? null, existing.id);
-    if (typeof existing.windowId === "number") {
-      await chrome.windows.update(existing.windowId, { focused: true, state: "normal" }).catch(() => undefined);
-    }
-    await chrome.tabs.update(existing.id, { active: true });
+    if (focus) await focusTab(existing);
+    return existing;
   }
-  return existing;
+
+  // No CRM tab anywhere: open the dedicated window (quietly for API jobs).
+  return createAgentWindow(initialUrlForJob(job), focus);
 }
 
 function waitForTabComplete(tabId: number): Promise<void> {

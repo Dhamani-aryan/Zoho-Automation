@@ -1,6 +1,6 @@
 # V2 Phase F Build Spec — UI Navigation + Teachable Workflows
 
-Version 1.1 (2026-07-09). For Codex. Prereq: Phase E reviewed (done 2026-07-09) AND the Phase E required follow-up (server-side one-turn-per-session lock, design in V2_DECISIONS "Phase E review") built FIRST — it is step 0 of this phase.
+Version 1.2 (2026-07-10; adds §4.6 workflows management surface). For Codex. Prereq: Phase E reviewed (done 2026-07-09) AND the Phase E required follow-up (server-side one-turn-per-session lock, design in V2_DECISIONS "Phase E review") built FIRST — it is step 0 of this phase.
 Read first: SPEC_v2_tool_agent_migration.md §3b (the requirement + storage, already migrated), workflows/SPEC_kd_blitz_email_scheduling.md §9 (proven Zoho selector map + interaction quirks), docs/V2_DECISIONS.md.
 
 **HOSTING BOUNDARY (Aryan, 2026-07-09): localhost ONLY.** Everything in this phase runs and is accepted on the local dev server (`http://localhost:3000` / `127.0.0.1:3000`) against cloud Supabase. Do NOT do any Vercel/deploy work: no vercel.json, no deploy scripts, no production URLs in the extension manifest or env, no "works on Vercel" refactors. Hosting is a separate, later step after the app is proven locally.
@@ -38,7 +38,12 @@ Migration `2026_v2_phase_f.sql`: `alter table agent_sessions add column if not e
 3. `save_ui_workflow` + confirmation card + `list_ui_workflows`.
 4. `run_ui_workflow` read-effect replay + trusted flag + evidence. Done-when test 1: teach once on record A, replay unaided on record B.
 5. Write-effect replay through the Phase D approval path. Done-when test 2: a task-complete workflow replays only via card.
-6. Recorder mode (stretch — defer without guilt if time-boxed out; log the deferral).
+6. **Workflows management surface (added v1.2, 2026-07-10 — Aryan's requirement from live use):**
+   - `/workflows` page (admin + operator): list saved workflows (name, description, effect badge, trusted badge, version, param names, updated_at); detail view showing the ordered steps and params; run button that pre-fills a param form and hands off to `/agent` as a chat message ("run <name> with <param>=<value>") so execution stays in the agent with its gates.
+   - Edit: name, description, param descriptions/examples freely. Editing STEPS is allowed but any step or effect change bumps `version`, resets `trusted=false`, and write-effect classification is re-derived server-side from the steps (client cannot set effect=read on mutating steps). Server routes validate with the same `uiWorkflowStepSchema`/`prepareUiWorkflow` used at save time — one validation path.
+   - Delete with a typed-name confirm (local library rows only — the no-deletes rule applies to Zoho data, not local config). Audit `workflow_saved` / `workflow_updated` / `workflow_deleted`.
+   - Chat discoverability: agent instructions gain "when the user asks what workflows exist or how to run one, call list_ui_workflows and show name + params + an example run phrase"; the `/agent` page links to `/workflows`.
+7. Recorder mode (stretch — defer without guilt if time-boxed out; log the deferral).
 
 ## 5. Done-when
 

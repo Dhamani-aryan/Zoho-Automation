@@ -60,7 +60,11 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
-    for (const eventType of ["mouseover", "mousedown", "mouseup", "click"]) {
+    // Simulate the hover/press sequence, then fire exactly ONE click event:
+    // HTMLElement.click() for HTML targets, a synthetic click otherwise.
+    // Dispatching a synthetic "click" AND calling element.click() double-fires
+    // every click handler (toggles/menus would open-then-close).
+    for (const eventType of ["mouseover", "mousedown", "mouseup"]) {
       element.dispatchEvent(
         new MouseEvent(eventType, {
           bubbles: true,
@@ -71,7 +75,13 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
         })
       );
     }
-    if (element instanceof HTMLElement) element.click();
+    if (element instanceof HTMLElement) {
+      element.click();
+    } else {
+      element.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y })
+      );
+    }
   }
 
   function pressKey(key: string) {
