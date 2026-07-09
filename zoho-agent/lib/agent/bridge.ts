@@ -2,10 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AuthorizedUser } from "@/lib/auth/guards";
 import type { AgentToolCall } from "@/lib/llm/provider";
 import { assertTier2JobInsertAllowed } from "@/lib/agent/tier2-tools";
+import { agentJobTimeoutMs, extensionLiveMs } from "@/lib/agent/runtime-config";
 
-const DEFAULT_TIMEOUT_MS = 90 * 1000;
 const POLL_INTERVAL_MS = 500;
-const EXTENSION_LIVE_MS = 120 * 1000;
 
 type ToolJobStatus = "queued" | "running" | "done" | "failed" | "expired";
 
@@ -38,7 +37,7 @@ function jobErrorMessage(job: ToolJobRow) {
 }
 
 async function assertExtensionLive(service: SupabaseClient, userId: string) {
-  const liveAfter = new Date(Date.now() - EXTENSION_LIVE_MS).toISOString();
+  const liveAfter = new Date(Date.now() - extensionLiveMs()).toISOString();
   const { data, error } = await service
     .from("user_extension_tokens")
     .select("last_seen_at,status")
@@ -60,7 +59,7 @@ export async function runBridgedTool({
   user,
   sessionId,
   call,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  timeoutMs = agentJobTimeoutMs(),
   onStatus
 }: {
   service: SupabaseClient;

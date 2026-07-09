@@ -12,6 +12,12 @@ import {
   statusAfterClaim,
   statusAfterReport
 } from "../lib/orchestrator/state";
+import {
+  approvalExpiryPatch,
+  queuedJobExpiryPatch,
+  runningJobStalePatch,
+  sweepCutoffs
+} from "../lib/agent/sweeps";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -118,4 +124,21 @@ test("run status after report pauses, completes, or keeps running", () => {
     statusAfterReport({ currentRunStatus: "running", pendingCount: 2, runningCount: 0, pause: true }),
     "paused"
   );
+});
+
+test("agent sweep cutoffs preserve Phase E retention windows", () => {
+  const nowMs = Date.parse("2026-07-09T12:30:00.000Z");
+  assert.deepEqual(sweepCutoffs(nowMs), {
+    nowIso: "2026-07-09T12:30:00.000Z",
+    pendingApprovalBeforeIso: "2026-07-09T12:15:00.000Z",
+    queuedJobBeforeIso: "2026-07-09T12:20:00.000Z",
+    runningJobBeforeIso: "2026-07-09T12:25:00.000Z"
+  });
+
+  assert.deepEqual(approvalExpiryPatch("2026-07-09T12:30:00.000Z"), {
+    status: "expired",
+    decided_at: "2026-07-09T12:30:00.000Z"
+  });
+  assert.equal(queuedJobExpiryPatch("2026-07-09T12:30:00.000Z").status, "expired");
+  assert.equal(runningJobStalePatch("2026-07-09T12:30:00.000Z").status, "failed");
 });

@@ -5,9 +5,10 @@ import {
   formatResponsesTools,
   responsesInputFromMessages
 } from "@/lib/llm/tool-calls";
+import { DEFAULT_OPENAI_MODEL, llmModel } from "@/lib/agent/runtime-config";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const LLM_MODEL = process.env.LLM_MODEL ?? "gpt-4.1-mini";
+const LLM_MODEL = llmModel(DEFAULT_OPENAI_MODEL);
 const OPENAI_TIMEOUT_MS = 90000;
 
 async function postResponses(apiKey: string, body: Record<string, unknown>) {

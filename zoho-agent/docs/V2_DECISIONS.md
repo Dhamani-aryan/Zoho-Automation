@@ -1,5 +1,49 @@
 # V2 Decisions
 
+## Phase E Checkpoint: Hardening backlog burn-down (2026-07-09, build)
+
+Started Phase E from workflows/SPEC_v2_phase_e_hardening.md v1.1 after the Phase D live-acceptance note. Scope remains hardening only; no new agent tool surface.
+
+Closed review backlog items in build order:
+- Bridge liveness remains at the Phase B hotfix value of 120s and is now env-tunable through EXTENSION_LIVE_MS without changing the default.
+- Removed the per-cycle extension handshake from extension/src/jobs.ts; /api/ext/jobs/claim already refreshes last_seen_at through requireExtensionAuth.
+- Added extension-side zoho_read_api GET allowlist re-check in page-runner.ts as defense in depth.
+- Extracted approval/job sweep constants and patches into lib/agent/sweeps.ts with pure tests added to the orchestrator test target.
+- Moved shared Accounts/Contacts/Deals table, id, URL tab, compare-column, and CSV-column metadata into lib/records/module-map.json, used by both live upsert and the CSV master import script. Shape-specific parsing stays separate because live Zoho rows and cleaned CSV rows are different input contracts.
+- Fixed page-runner-write.ts PUT response handling to match rows by row.details.id instead of array position.
+- Failed write/verify responses now carry partial per-record results in the failure payload so reports can show records already read, skipped, written, or verified before the abort.
+- Added a test-time assertion that extension/src/jobs.ts WRITE_TOOLS matches lib/agent/tier2-tools.ts TIER2_WRITE_TOOL_NAMES.
+
+Sweeps and rollout hardening in progress:
+- Session load now sweeps both stale pending approvals (>15 min) and stale queued tool_jobs (>10 min), matching claim-time behavior.
+- AGENT_MAX_TOOL_CALLS, AGENT_TURN_TIMEOUT_MS, AGENT_JOB_TIMEOUT_MS, CODEX_RESPONSES_URL, and LLM_MODEL are env-tunable. Defaults preserve existing behavior: 15 tool calls, 180000ms turn budget, 90000ms job wait, Codex Responses URL https://chatgpt.com/backend-api/codex/responses, Codex model gpt-5.4, OpenAI API-key model gpt-4.1-mini.
+- Added /admin/agent-activity with admin page guard, filtered audit activity, per-user counts, latest failures, and a confirmed admin-only purge for archived agent_sessions older than 30 days. Purge is never automatic.
+- /agent is now the root and post-login landing page. /run/new remains routable but is removed from primary nav.
+- Extension options now stores and renders the last 10 agent job status messages.
+
+## Phase E Checkpoint: Automated verification before chat review (2026-07-09, build)
+
+Automated verification passed on the Windows workspace:
+- npm run typecheck
+- npm run lint
+- npm run build (passes; Next still warns that middleware file convention is deprecated in favor of proxy)
+- npm run build:extension
+- npm run test:orchestrator: 8/8
+- npm run test:records: 5/5
+- npm run test:tier2: 14/14
+
+Sandbox note: the first test/build attempts hit the known Windows EPERM artifact-write issue under .tmp, .next, and extension/dist. Rerunning the same commands unsandboxed passed.
+
+Docs added/updated:
+- zoho-agent/docs/V2_USER_GUIDE.md
+- zoho-agent/docs/V2_TEST_CHECKLIST.md
+- HANDOFF.md
+- ZOHO_AGENT_WORK_PLAN.md
+- zoho-agent/README.md
+- zoho-agent/.env.example
+
+Not declaring Phase E done yet. Per the spec, stop for chat review first; final done-when still requires the rendered/manual checklist in zoho-agent/docs/V2_TEST_CHECKLIST.md, including the browser-click approval-card approve/reject tests and Aryan's one full day of real usage with zero unexplained failures.
+
 ## Agent instructions: direct record links (2026-07-09, chat)
 
 Live testing (post-write): asked for a direct deal link, the agent said it lacked a tool and offered request_new_tool. Wrong - the URL is deterministic (https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id}, Deals = Potentials in URLs) and mirror rows already carry zoho_url. Instruction-only fix in lib/agent/loop.ts AGENT_INSTRUCTIONS: prefer zoho_url from db_get_record/db_search_records, else compose the canonical URL; never claim links need a new tool. tsc clean. Restart the dev server to pick up the new instructions; no extension rebuild. The stray tool_requests row from this exchange can be closed in Supabase if one was filed.

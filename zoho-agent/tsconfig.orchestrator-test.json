@@ -10,5 +10,5 @@
     "types": ["node"],
     "isolatedModules": false
   },
-  "include": ["lib/orchestrator/state.ts", "tests/orchestrator-state.test.ts"]
+  "include": ["lib/orchestrator/state.ts", "lib/agent/sweeps.ts", "tests/orchestrator-state.test.ts"]
 }

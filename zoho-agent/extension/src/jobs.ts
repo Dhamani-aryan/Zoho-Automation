@@ -1,4 +1,4 @@
-import { claimJob, handshake, reportJobDone, reportJobFailed, type ToolJob } from "./api";
+import { claimJob, reportJobDone, reportJobFailed, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoWritePageRunner } from "./page-runner-write";
 import { loadSettings, saveLastJobStatus } from "./storage";
@@ -69,9 +69,6 @@ async function pollOnce() {
 
   inFlight = true;
   try {
-    const status = await handshake(settings);
-    await saveLastJobStatus(`Connected. ${status.queued_jobs ?? 0} queued agent job(s).`);
-
     const claimed = await claimJob(settings);
     if (!claimed.job) {
       idleSince = idleSince || Date.now();
@@ -104,7 +101,8 @@ async function pollOnce() {
         settings,
         claimed.job.id,
         response.error_message ?? "Zoho job failed.",
-        response.error_code
+        response.error_code,
+        response.result
       );
       await saveLastJobStatus(`Failed ${claimed.job.tool_name}: ${response.error_message ?? "unknown error"}`);
     }

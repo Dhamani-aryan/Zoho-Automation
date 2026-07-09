@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
-
-// A pending approval left undecided this long is swept to expired on load, so a
-// stale card can never be approved into a write after the fact.
-const APPROVAL_EXPIRY_MS = 15 * 60 * 1000;
+import {
+  approvalExpiryPatch,
+  queuedJobExpiryPatch,
+  sweepCutoffs
+} from "@/lib/agent/sweeps";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(["admin", "operator", "reviewer"]);
@@ -31,18 +32,29 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     if (messagesError) throw messagesError;
 
     // Expiry sweep on load (status-guarded, owner-scoped): expire any pending
-    // approval older than the wait window before we read them back.
+    // approval older than the wait window and old unclaimed jobs before we read
+    // them back. This mirrors claim-time sweeping so a reopened session cannot
+    // show stale pending work.
     const service = createServiceSupabaseClient();
     if (service) {
-      const cutoff = new Date(Date.now() - APPROVAL_EXPIRY_MS).toISOString();
+      const cutoffs = sweepCutoffs();
       const { error: sweepError } = await service
         .from("pending_approvals")
-        .update({ status: "expired", decided_at: new Date().toISOString() })
+        .update(approvalExpiryPatch(cutoffs.nowIso))
         .eq("session_id", id)
         .eq("user_id", auth.user.id)
         .eq("status", "pending")
-        .lt("created_at", cutoff);
+        .lt("created_at", cutoffs.pendingApprovalBeforeIso);
       if (sweepError) throw sweepError;
+
+      const { error: jobSweepError } = await service
+        .from("tool_jobs")
+        .update(queuedJobExpiryPatch(cutoffs.nowIso))
+        .eq("session_id", id)
+        .eq("user_id", auth.user.id)
+        .eq("status", "queued")
+        .lt("created_at", cutoffs.queuedJobBeforeIso);
+      if (jobSweepError) throw jobSweepError;
     }
 
     // Approval cards are rebuilt from the DB on load so a reconnect shows the

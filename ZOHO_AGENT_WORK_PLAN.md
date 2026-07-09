@@ -2,12 +2,14 @@
 
 Version 2.1 — 2026-07-04
 Owner: Aryan Dhamani (aryan@klouddata.com), KloudData
-Status: **Phases 0, 1, 2 COMPLETE (2026-07-04).**
+Status: **V2 Phases A-D live-accepted; Phase E hardening in build (2026-07-09).**
 
 - **Phase 1:** App running locally, hardened auth (@supabase/ssr + middleware + role guards); Supabase live with full schema/RLS/seeds. Data loaded via `npm run import:masters`: **315 accounts, 833 contacts (all account-linked), 179 deals (all account-linked, 161 contact-linked)**; cleaning via `imports\clean_exports.py`. Field metadata synced (`npm run import:fieldmeta`): Accounts 64, Contacts 73, Deals 29, Tasks 19 incl. picklists.
 - **Phase 2:** Per-user LLM credentials — each user connects via any of three methods (ChatGPT device-code flow, paste `~/.codex/auth.json` credential, or OpenAI API key), AES-256-GCM encrypted, table `user_llm_credentials`. Command → parse (`/api/plan/parse`) → validate (`/api/plan/validate`) → preview → approved run (`/api/runs`) pipeline. Per-block validation with tag selection, picklist/email/opt-out/future-date checks, name-match fallback. Reviewed, fixed, `npm run build` passes. **No Zoho calls / no CRM writes yet, by design.** See `docs/PHASE_2_DECISIONS.md` + `workflows/SPEC_phase2_parser_validation_preview.md`.
 
-Vercel deploy deferred until team onboarding. **ARCHITECTURE PIVOT (2026-07-05, Aryan's decision): the primary UX migrates from the one-shot parse→validate pipeline to a tool-calling agent (chat + tools: DB search, live Zoho reads via the extension, DB sync, approval-gated Zoho writes). Full migration plan: `workflows/SPEC_v2_tool_agent_migration.md` — that document is now the build roadmap. The run pipeline is RETAINED for batch preset workflows; Phase 3 extension infrastructure (steps 1–5, built and reviewed) is reused as the agent's tool bridge. CRM writes keep the preview/approve gate — that rule survives the pivot.**
+Vercel deploy deferred until team onboarding. **ARCHITECTURE PIVOT (2026-07-05, Aryan's decision): the primary UX is now the `/agent` tool-calling chat (DB search, live Zoho reads via the extension, DB sync, approval-gated Zoho writes). Full migration plan: `workflows/SPEC_v2_tool_agent_migration.md` - that document is now the build roadmap. The run pipeline is RETAINED for batch preset workflows. CRM writes keep the preview/approve gate - that rule survives the pivot.**
+
+Phase E status (2026-07-09): hardening build is underway. Scope is backlog burn-down, stale approval/job sweeps, archived-session purge for admins, env-tunable budgets with existing defaults, `/admin/agent-activity`, `/agent` as landing page, extension job history, user guide, and the full `zoho-agent/docs/V2_TEST_CHECKLIST.md`. Phase E is not allowed to add new tool surface. Team rollout remains after Phase F.
 
 This document is self-contained: a new chat or developer can execute the project from this file alone. Companion files (same folder) hold deeper detail and are referenced where relevant.
 

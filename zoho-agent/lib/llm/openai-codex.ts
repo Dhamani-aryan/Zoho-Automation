@@ -22,12 +22,12 @@ import {
   responsesInputFromMessages
 } from "@/lib/llm/tool-calls";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { codexResponsesUrl, DEFAULT_CODEX_MODEL, llmModel } from "@/lib/agent/runtime-config";
 
-const CODEX_RESPONSES_URL =
-  process.env.CODEX_RESPONSES_URL ?? "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_RESPONSES_URL = codexResponsesUrl();
 // Must be a model id from the pi reference's openai-codex.models.ts registry.
 // "gpt-5-codex" is NOT in the current registry and the backend rejects it.
-const CODEX_MODEL = process.env.LLM_MODEL ?? "gpt-5.4";
+const CODEX_MODEL = llmModel(DEFAULT_CODEX_MODEL);
 const CODEX_TIMEOUT_MS = 90000;
 const refreshLocks = new Map<string, Promise<CodexToken>>();
 

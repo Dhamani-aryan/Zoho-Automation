@@ -28,12 +28,13 @@ Work = small toggleable "action blocks" (create_task, complete_task, update_deal
 ## Working method
 Codex (the coding agent) writes the code locally; the chat writes specs, reviews Codex's output for quality/"slop," fixes issues, and keeps docs updated. Git commits must be authored as Aryan Dhamani (his personal email `dhamaniaryan4@gmail.com` is the one in use — confirmed 2026-07-05) with NO AI co-author. Note: the repo's `.git` is on a Windows drive, so git often must be run in Aryan's PowerShell, not the agent sandbox.
 
-## Immediate next steps (updated 2026-07-08)
-**PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes (Phase D, not built yet). Batch run pipeline retained for presets. CRM writes keep the human approval gate — always.
+## Immediate next steps (updated 2026-07-09)
+**PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes. Batch run pipeline retained for presets. CRM writes keep the human approval gate - always.
 
-State: **Phases A, B, C built, chat-reviewed, and LIVE-TESTED** (scenario-2 sync test passed 2026-07-09). **Phase D (approval-gated writes) BUILT 2026-07-09 (Opus) and INDEPENDENTLY CHAT-REVIEWED 2026-07-09: approved pending live acceptance.** Two review fixes applied: expiry-race in `waitForApprovalOutcome` (late decision honored instead of falsely reporting expired while the write executed) and lookup-typed fields blocked in `zoho_update_fields` (raw-string Owner id bypassed zoho_change_owner). Gate verified: writes only via an approved `pending_approvals` row, three-point enforcement, grep-proven; sandbox tsc clean; tier2 tests 13/13, orchestrator 7/7, records 5/5. See V2_DECISIONS "Phase D review". NOT yet done: dev-machine lint/build/build:extension, DB migration, live scenario-3 acceptance + negative proofs.
-1. Aryan: apply `zoho-agent/supabase/2026_phase_d_writes.sql` FIRST, run lint/build/build:extension + test:tier2 in PowerShell, reload the extension, then run live scenario 3 (approve, reject, identity-mismatch via mid-flight edit, verify-failure, logged-out) starting with ONE demo deal Next_Step, plus the spec §5.5 negative proofs.
-2. Then Phases E, F per their specs.
+State: **Phases A, B, C, and D are built, chat-reviewed, and live-accepted. Phase E hardening is in build.** Phase E is hardening only: review backlog burn-down, sweeps/retention, env budgets, `/admin/agent-activity`, `/agent` landing, extension job history, one-page guide, and `zoho-agent/docs/V2_TEST_CHECKLIST.md`. No new agent tool surface. Purge is admin-only, confirmed, and never automatic.
+1. Finish Phase E verification: typecheck, lint, build, build:extension, orchestrator/records/tier2 tests, then complete every item in `zoho-agent/docs/V2_TEST_CHECKLIST.md`.
+2. Stop for chat review before declaring Phase E done.
+3. Phase F remains next: UI navigation and teachable workflows.
 
 Chat's role: write/maintain specs, review every Codex phase for defects/races/slop (verify independently — `git show` + typecheck from the sandbox via /tmp copies; the mount's view of fresh writes lags), fix small defects directly, keep V2_DECISIONS + this file current. Sandbox CANNOT run git writes or Windows-installed binaries (esbuild/SWC) — builds and commits happen in Aryan's PowerShell; always end reviews with the exact `git add/commit` commands.
 

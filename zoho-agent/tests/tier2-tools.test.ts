@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
+  TIER2_WRITE_TOOL_NAMES,
   validateTier2Call,
   tier2RecordIds,
   assertTier2JobInsertAllowed,
@@ -191,4 +194,12 @@ test("extensionAcceptsWriteJob refuses a write job lacking approval_id", () => {
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_search" }), true);
   assert.equal(isTier2WriteTool("zoho_change_owner"), true);
   assert.equal(isTier2WriteTool("zoho_get_record"), false);
+});
+
+test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
+  const source = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  const match = source.match(/const WRITE_TOOLS = new Set\(\[([^\]]+)\]\)/);
+  assert.ok(match, "extension WRITE_TOOLS literal was not found");
+  const extensionNames = [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
+  assert.deepEqual(extensionNames, [...TIER2_WRITE_TOOL_NAMES].sort());
 });

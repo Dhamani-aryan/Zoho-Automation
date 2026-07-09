@@ -5,7 +5,7 @@ export type PageJob = {
 
 export type PageResult =
   | { ok: true; result: unknown }
-  | { ok: false; error_message: string; error_code?: string };
+  | { ok: false; error_message: string; error_code?: string; result?: unknown };
 
 // Executed via chrome.scripting.executeScript({ world: "MAIN" }) — runs in the
 // real crm.zoho.com page context, immune to the page's CSP for inline
@@ -15,9 +15,7 @@ export type PageResult =
 export async function zohoPageRunner(job: {
   tool_name: string;
   args: Record<string, unknown>;
-}): Promise<
-  { ok: true; result: unknown } | { ok: false; error_message: string; error_code?: string }
-> {
+}): Promise<PageResult> {
   const ZOHO_BASE = "https://crm.zoho.com";
   const ORG_ID = "890324941";
   const REQUEST_TIMEOUT_MS = 15000;
@@ -47,6 +45,15 @@ export async function zohoPageRunner(job: {
     if (moduleName === "Accounts") return "Account_Name";
     if (moduleName === "Contacts") return "Full_Name";
     return "Deal_Name";
+  }
+
+  function allowlistedReadPath(path: string) {
+    return [
+      /^\/crm\/v3\/(Accounts|Contacts|Deals)(\/[A-Za-z0-9]+)?(\/(Contacts|Deals))?$/,
+      /^\/crm\/v3\/(Accounts|Contacts|Deals)\/search$/,
+      /^\/crm\/v3\/settings\/fields$/,
+      /^\/crm\/v3\/users$/
+    ].some((pattern) => pattern.test(path));
   }
 
   async function getJson(path: string, params: Record<string, string> = {}) {
@@ -130,11 +137,15 @@ export async function zohoPageRunner(job: {
   }
 
   function rawGet(args: Record<string, unknown>) {
+    const path = String(args.path);
+    if (!allowlistedReadPath(path)) {
+      throw new Error("zoho_read_api path is not in the extension GET allowlist.");
+    }
     const params =
       args.params && typeof args.params === "object" && !Array.isArray(args.params)
         ? (args.params as Record<string, string>)
         : {};
-    return getJson(String(args.path), params);
+    return getJson(path, params);
   }
 
   try {

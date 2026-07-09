@@ -1,6 +1,6 @@
 export type WritePageResult =
   | { ok: true; result: unknown }
-  | { ok: false; error_message: string; error_code?: string };
+  | { ok: false; error_message: string; error_code?: string; result?: unknown };
 
 // Executed via chrome.scripting.executeScript({ world: "MAIN" }) in the real
 // crm.zoho.com page context. MUST stay fully self-contained: no imports, no
@@ -136,6 +136,18 @@ export async function zohoWritePageRunner(job: {
     };
   }
 
+  function responseRowId(row: Record<string, unknown>) {
+    const details = row.details;
+    if (details && typeof details === "object" && typeof (details as { id?: unknown }).id === "string") {
+      return (details as { id: string }).id;
+    }
+    return typeof row.id === "string" ? row.id : null;
+  }
+
+  function failureResult(tool: string, moduleName: string, records: RecordResult[], extra: Record<string, unknown> = {}) {
+    return { tool, module: moduleName, records, ...extra };
+  }
+
   function chunk<T>(items: T[], size: number): T[][] {
     const out: T[][] = [];
     for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -200,14 +212,24 @@ export async function zohoWritePageRunner(job: {
     for (const group of chunk(toPut, 100)) {
       const body = await request("PUT", `/crm/v2.2/${moduleName}`, {}, { data: group });
       const rows = Array.isArray(body.data) ? (body.data as Array<Record<string, unknown>>) : [];
-      for (let i = 0; i < group.length; i += 1) {
-        const id = String(group[i].id);
-        const row = rows[i] ?? {};
+      const rowsById = new Map<string, Record<string, unknown>>();
+      for (const row of rows) {
+        const id = responseRowId(row);
+        if (id) rowsById.set(id, row);
+      }
+      for (const entry of group) {
+        const id = String(entry.id);
+        const row = rowsById.get(id) ?? {};
         const code = typeof row.code === "string" ? row.code : "UNKNOWN";
         const target = putIndex.get(id);
         if (target) target.code = code;
         if (code !== "SUCCESS") {
-          return { ok: false, error_code: "write_failed", error_message: `Zoho did not accept the write for ${id} (code ${code}).` };
+          return {
+            ok: false,
+            error_code: "write_failed",
+            error_message: `Zoho did not accept the write for ${id} (code ${code}).`,
+            result: failureResult("zoho_update_fields", moduleName, results, { failed_record_id: id, failed_code: code })
+          };
         }
       }
     }
@@ -223,7 +245,8 @@ export async function zohoWritePageRunner(job: {
         return {
           ok: false,
           error_code: "verify_failed",
-          error_message: `Read-back verification failed for ${result.zoho_id}; the field did not hold the new value.`
+          error_message: `Read-back verification failed for ${result.zoho_id}; the field did not hold the new value.`,
+          result: failureResult("zoho_update_fields", moduleName, results, { failed_record_id: result.zoho_id })
         };
       }
     }
@@ -263,12 +286,22 @@ export async function zohoWritePageRunner(job: {
         continue;
       }
 
+      results.push(result);
+
       const putBody = await request("PUT", `/crm/v2.2/${moduleName}`, {}, { data: [{ id: entry.zoho_id, Owner: { id: owner.id } }] });
       const row = (Array.isArray(putBody.data) ? putBody.data[0] : {}) as Record<string, unknown>;
       const code = typeof row.code === "string" ? row.code : "UNKNOWN";
       result.code = code;
       if (code !== "SUCCESS") {
-        return { ok: false, error_code: "write_failed", error_message: `Zoho did not accept the owner change for ${entry.zoho_id} (code ${code}).` };
+        return {
+          ok: false,
+          error_code: "write_failed",
+          error_message: `Zoho did not accept the owner change for ${entry.zoho_id} (code ${code}).`,
+          result: failureResult("zoho_change_owner", moduleName, results, {
+            failed_record_id: entry.zoho_id,
+            failed_code: code
+          })
+        };
       }
 
       const verifyBody = await getRecord(moduleName, entry.zoho_id, [nameField(moduleName), "Owner"]);
@@ -276,9 +309,13 @@ export async function zohoWritePageRunner(job: {
       const newOwner = verifyRecord.Owner as { id?: string } | undefined;
       result.verified = Boolean(newOwner?.id && valuesEqual(newOwner.id, owner.id));
       if (!result.verified) {
-        return { ok: false, error_code: "verify_failed", error_message: `Read-back verification failed for ${entry.zoho_id}; owner did not update.` };
+        return {
+          ok: false,
+          error_code: "verify_failed",
+          error_message: `Read-back verification failed for ${entry.zoho_id}; owner did not update.`,
+          result: failureResult("zoho_change_owner", moduleName, results, { failed_record_id: entry.zoho_id })
+        };
       }
-      results.push(result);
     }
 
     return { ok: true, result: { tool: "zoho_change_owner", module: moduleName, records: results } };
@@ -317,6 +354,7 @@ export async function zohoWritePageRunner(job: {
         verified: false,
         code: "PENDING"
       };
+      results.push(result);
 
       const putBody = await request(
         "POST",
@@ -328,7 +366,12 @@ export async function zohoWritePageRunner(job: {
       const code = typeof row.code === "string" ? row.code : "SUCCESS";
       result.code = code;
       if (code !== "SUCCESS") {
-        return { ok: false, error_code: "write_failed", error_message: `Zoho did not accept the tag change for ${entry.zoho_id} (code ${code}).` };
+        return {
+          ok: false,
+          error_code: "write_failed",
+          error_message: `Zoho did not accept the tag change for ${entry.zoho_id} (code ${code}).`,
+          result: failureResult(action, moduleName, results, { failed_record_id: entry.zoho_id, failed_code: code })
+        };
       }
 
       const verifyBody = await getRecord(moduleName, entry.zoho_id, [nameField(moduleName), "Tag"]);
@@ -340,9 +383,13 @@ export async function zohoWritePageRunner(job: {
       result.verified = verified;
       (result.after as Record<string, unknown>).tags_after = after;
       if (!verified) {
-        return { ok: false, error_code: "verify_failed", error_message: `Read-back verification failed for ${entry.zoho_id}; tags did not update as expected.` };
+        return {
+          ok: false,
+          error_code: "verify_failed",
+          error_message: `Read-back verification failed for ${entry.zoho_id}; tags did not update as expected.`,
+          result: failureResult(action, moduleName, results, { failed_record_id: entry.zoho_id })
+        };
       }
-      results.push(result);
     }
 
     return { ok: true, result: { tool: action, module: moduleName, records: results } };

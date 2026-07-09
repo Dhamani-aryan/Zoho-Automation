@@ -1,0 +1,85 @@
+{
+  "accounts": {
+    "table": "accounts",
+    "sourceFile": "master_accounts_clean.csv",
+    "zohoIdColumn": "zoho_account_id",
+    "nameColumn": "account_name",
+    "urlTab": "Accounts",
+    "compareColumns": ["zoho_url", "account_name", "website", "phone", "industry", "owner", "source", "raw_data"],
+    "csvColumns": {
+      "zohoId": "zoho_account_id",
+      "zohoUrl": "zoho_url",
+      "name": "account_name",
+      "website": "website",
+      "phone": "phone",
+      "industry": "industry",
+      "owner": "owner_name"
+    }
+  },
+  "contacts": {
+    "table": "contacts",
+    "sourceFile": "master_contacts_clean.csv",
+    "zohoIdColumn": "zoho_contact_id",
+    "nameColumn": "full_name",
+    "urlTab": "Contacts",
+    "compareColumns": [
+      "zoho_url",
+      "account_id",
+      "first_name",
+      "last_name",
+      "full_name",
+      "email",
+      "title",
+      "phone",
+      "mobile",
+      "owner",
+      "source",
+      "raw_data"
+    ],
+    "csvColumns": {
+      "zohoId": "zoho_contact_id",
+      "zohoUrl": "zoho_url",
+      "accountZohoId": "zoho_account_id",
+      "firstName": "first_name",
+      "lastName": "last_name",
+      "fullName": "full_name",
+      "email": "email",
+      "title": "title",
+      "phone": "phone",
+      "mobile": "mobile",
+      "owner": "owner_name"
+    }
+  },
+  "deals": {
+    "table": "deals",
+    "sourceFile": "master_deals_clean.csv",
+    "zohoIdColumn": "zoho_deal_id",
+    "nameColumn": "deal_name",
+    "urlTab": "Potentials",
+    "compareColumns": [
+      "zoho_url",
+      "account_id",
+      "primary_contact_id",
+      "deal_name",
+      "stage",
+      "next_step",
+      "owner",
+      "closing_date",
+      "amount",
+      "source",
+      "raw_data"
+    ],
+    "csvColumns": {
+      "zohoId": "zoho_deal_id",
+      "zohoUrl": "zoho_url",
+      "accountZohoId": "zoho_account_id",
+      "primaryContactZohoId": "primary_contact_id",
+      "name": "deal_name",
+      "stage": "stage",
+      "nextStep": "next_step",
+      "owner": "owner_name",
+      "closingDate": "closing_date",
+      "amount": "amount"
+    }
+  }
+}

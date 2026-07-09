@@ -19,6 +19,7 @@ const enabled = input("enabled");
 const message = text("message");
 const status = text("status");
 const jobStatus = text("jobStatus");
+const jobHistory = text("jobHistory");
 let currentSettings: ExtensionSettings | null = null;
 
 function readForm(): ExtensionSettings {
@@ -26,7 +27,8 @@ function readForm(): ExtensionSettings {
     backendUrl: backendUrl.value.trim() || "http://localhost:3000",
     token: token.value.trim(),
     enabled: enabled.checked,
-    lastJobStatus: currentSettings?.lastJobStatus ?? "No agent jobs yet."
+    lastJobStatus: currentSettings?.lastJobStatus ?? "No agent jobs yet.",
+    jobHistory: currentSettings?.jobHistory ?? []
   };
 }
 
@@ -36,6 +38,14 @@ function writeForm(settings: ExtensionSettings) {
   token.value = settings.token;
   enabled.checked = settings.enabled;
   jobStatus.textContent = settings.lastJobStatus;
+  jobHistory.innerHTML = "";
+  const list = document.createElement("ol");
+  for (const item of settings.jobHistory.slice(0, 10)) {
+    const li = document.createElement("li");
+    li.textContent = item;
+    list.appendChild(li);
+  }
+  jobHistory.appendChild(list);
 }
 
 async function save() {
@@ -46,7 +56,12 @@ async function save() {
 async function runHandshake() {
   await save();
   const result = await handshake(readForm());
-  const nextSettings = { ...readForm(), lastJobStatus: `Connected. ${result.queued_jobs ?? 0} queued agent job(s).` };
+  const lastJobStatus = `Connected. ${result.queued_jobs ?? 0} queued agent job(s).`;
+  const nextSettings = {
+    ...readForm(),
+    lastJobStatus,
+    jobHistory: [`${new Date().toLocaleString()} - ${lastJobStatus}`, ...(currentSettings?.jobHistory ?? [])].slice(0, 10)
+  };
   await saveSettings(nextSettings);
   writeForm(nextSettings);
   status.textContent = JSON.stringify(result, null, 2);

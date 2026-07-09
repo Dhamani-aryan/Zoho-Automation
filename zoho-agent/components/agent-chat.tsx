@@ -1,6 +1,20 @@
 "use client";
 
-import { Check, ChevronDown, ChevronRight, Loader2, Plus, Send, ShieldAlert, Trash2, Wrench, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Send,
+  ShieldAlert,
+  Square,
+  Trash2,
+  Wrench,
+  X
+} from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 type AgentSession = {
@@ -247,6 +261,8 @@ export function AgentChat({
   const [error, setError] = useState<string | null>(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -410,13 +426,13 @@ export function AgentChat({
     }
   }
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const content = input.trim();
+  async function runTurn(rawContent: string) {
+    const content = rawContent.trim();
     if (!content || loading) return;
-    setInput("");
     setError(null);
     setLoading(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const sessionId = activeSessionId || (await createSession());
@@ -425,7 +441,8 @@ export function AgentChat({
       const response = await fetch(`/api/agent/sessions/${sessionId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content })
+        body: JSON.stringify({ content }),
+        signal: controller.signal
       });
       if (!response.ok || !response.body) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -452,9 +469,42 @@ export function AgentChat({
       }
       await refreshSessions();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Agent request failed.");
+      // A user-initiated stop aborts the fetch; that is not an error.
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (!aborted) setError(err instanceof Error ? err.message : "Agent request failed.");
     } finally {
       setLoading(false);
+      abortRef.current = null;
+    }
+  }
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content || loading) return;
+    setInput("");
+    await runTurn(content);
+  }
+
+  // Stop the current turn (client-side abort; the input re-enables immediately).
+  function stopStreaming() {
+    abortRef.current?.abort();
+  }
+
+  // Resend an earlier message as a new turn (ChatGPT-style regenerate).
+  function resend(content: string) {
+    if (loading) return;
+    void runTurn(content);
+  }
+
+  // Load a message back into the composer to edit and send again.
+  function editMessage(content: string) {
+    if (loading) return;
+    setInput(content);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(content.length, content.length);
     }
   }
 
@@ -576,18 +626,45 @@ export function AgentChat({
                 // card while loading would deadlock approvals forever.
                 return <ApprovalCard key={item.id} item={item} onDecide={decideApproval} />;
               }
+              if (item.kind === "user") {
+                return (
+                  <div key={item.id} className="group flex flex-col items-end gap-1">
+                    <div className="max-w-3xl whitespace-pre-wrap rounded-md bg-ink px-4 py-3 text-sm text-white">
+                      {linkifyContent(item.content, "underline underline-offset-2 hover:opacity-80 break-all")}
+                    </div>
+                    <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => editMessage(item.content)}
+                        disabled={loading}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Edit message"
+                        aria-label="Edit message"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => resend(item.content)}
+                        disabled={loading}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Resend message"
+                        aria-label="Resend message"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div
                   key={item.id}
-                  className={`max-w-3xl whitespace-pre-wrap rounded-md px-4 py-3 text-sm ${
-                    item.kind === "user" ? "ml-auto bg-ink text-white" : "bg-surface text-ink"
-                  }`}
+                  className="max-w-3xl whitespace-pre-wrap rounded-md bg-surface px-4 py-3 text-sm text-ink"
                 >
                   {linkifyContent(
                     item.content,
-                    item.kind === "user"
-                      ? "underline underline-offset-2 hover:opacity-80 break-all"
-                      : "text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all"
+                    "text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all"
                   )}
                 </div>
               );
@@ -600,26 +677,40 @@ export function AgentChat({
         <form onSubmit={sendMessage} className="shrink-0 border-t border-line p-4">
           <div className="flex gap-3">
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
+                  if (!loading) event.currentTarget.form?.requestSubmit();
                 }
               }}
               rows={2}
               className="min-h-12 flex-1 resize-none rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-ink"
               placeholder="Ask about a deal, contact, account, tag, or missing tool... (Enter to send, Shift+Enter for a new line)"
             />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-ink text-white disabled:cursor-not-allowed disabled:opacity-50"
-              title="Send"
-            >
-              <Send className="h-4 w-4" />
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={stopStreaming}
+                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
+                title="Stop"
+                aria-label="Stop generating"
+              >
+                <Square className="h-4 w-4" fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-ink text-white disabled:cursor-not-allowed disabled:opacity-50"
+                title="Send"
+                aria-label="Send message"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </form>
       </section>

@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
 import { isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
-
-const QUEUED_EXPIRE_MS = 10 * 60 * 1000;
-const RUNNING_STALE_MS = 5 * 60 * 1000;
+import {
+  queuedJobExpiryPatch,
+  runningJobStalePatch,
+  sweepCutoffs
+} from "@/lib/agent/sweeps";
 
 type ToolJobRow = {
   id: string;
@@ -18,33 +20,23 @@ type ToolJobRow = {
 async function sweepStaleJobs(auth: Awaited<ReturnType<typeof requireExtensionAuth>>) {
   if ("error" in auth) return;
 
-  const now = new Date().toISOString();
-  const queuedBefore = new Date(Date.now() - QUEUED_EXPIRE_MS).toISOString();
-  const runningBefore = new Date(Date.now() - RUNNING_STALE_MS).toISOString();
+  const cutoffs = sweepCutoffs();
 
   const { error: queuedError } = await auth.service
     .from("tool_jobs")
-    .update({
-      status: "expired",
-      completed_at: now,
-      error_message: "Extension did not claim the job within 10 minutes."
-    })
+    .update(queuedJobExpiryPatch(cutoffs.nowIso))
     .eq("user_id", auth.user.id)
     .eq("status", "queued")
-    .lt("created_at", queuedBefore);
+    .lt("created_at", cutoffs.queuedJobBeforeIso);
 
   if (queuedError) throw queuedError;
 
   const { error: runningError } = await auth.service
     .from("tool_jobs")
-    .update({
-      status: "failed",
-      completed_at: now,
-      error_message: "Extension went away mid-job."
-    })
+    .update(runningJobStalePatch(cutoffs.nowIso))
     .eq("user_id", auth.user.id)
     .eq("status", "running")
-    .lt("claimed_at", runningBefore);
+    .lt("claimed_at", cutoffs.runningJobBeforeIso);
 
   if (runningError) throw runningError;
 }

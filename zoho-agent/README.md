@@ -79,4 +79,4 @@ The initial Phase 2 build was reviewed and corrected. Full list in `docs/PHASE_2
 
 - `update_account_fields` / `update_contact_fields` currently preview a single `field_api_name` + `value`; multi-field `field_values` batches are not yet expanded.
 - Duplicate-scheduled-email and duplicate-task checks are **deferred to Phase 3** (they need live Zoho); Phase 2 only flags what our own DB can see.
-- Env knobs: `LLM_MODEL` (default `gpt-5-codex` for Codex, `gpt-4.1-mini` for API key), `CODEX_RESPONSES_URL`. The Codex chat request headers should be reconciled against the pi reference (`openai-codex-responses.ts`) during first live test — minor header diffs can cause 403s.
+- Env knobs: `AGENT_MAX_TOOL_CALLS` (default 15), `AGENT_TURN_TIMEOUT_MS` (default 180000), `AGENT_JOB_TIMEOUT_MS` (default 90000), `EXTENSION_LIVE_MS` (default 120000), `LLM_MODEL` (default `gpt-5.4` for Codex, `gpt-4.1-mini` for API key), `CODEX_RESPONSES_URL`. The Codex chat request headers should be reconciled against the pi reference (`openai-codex-responses.ts`) during live tests because minor header diffs can cause 403s.

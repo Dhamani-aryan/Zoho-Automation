@@ -1,4 +1,5 @@
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "../constants";
+import moduleMap from "./module-map.json";
 
 export const SYNC_MODULES = ["accounts", "contacts", "deals"] as const;
 export type SyncModule = (typeof SYNC_MODULES)[number];
@@ -31,54 +32,7 @@ type ModuleConfig = {
   compareColumns: string[];
 };
 
-const MODULE_CONFIG: Record<SyncModule, ModuleConfig> = {
-  accounts: {
-    table: "accounts",
-    zohoIdColumn: "zoho_account_id",
-    nameColumn: "account_name",
-    urlTab: "Accounts",
-    compareColumns: ["zoho_url", "account_name", "website", "phone", "industry", "owner", "source", "raw_data"]
-  },
-  contacts: {
-    table: "contacts",
-    zohoIdColumn: "zoho_contact_id",
-    nameColumn: "full_name",
-    urlTab: "Contacts",
-    compareColumns: [
-      "zoho_url",
-      "account_id",
-      "first_name",
-      "last_name",
-      "full_name",
-      "email",
-      "title",
-      "phone",
-      "mobile",
-      "owner",
-      "source",
-      "raw_data"
-    ]
-  },
-  deals: {
-    table: "deals",
-    zohoIdColumn: "zoho_deal_id",
-    nameColumn: "deal_name",
-    urlTab: "Potentials",
-    compareColumns: [
-      "zoho_url",
-      "account_id",
-      "primary_contact_id",
-      "deal_name",
-      "stage",
-      "next_step",
-      "owner",
-      "closing_date",
-      "amount",
-      "source",
-      "raw_data"
-    ]
-  }
-};
+const MODULE_CONFIG = moduleMap as Record<SyncModule, ModuleConfig>;
 
 export type SyncRecordSummary = {
   zoho_id: string;
@@ -316,8 +270,8 @@ async function upsertChangedRows(db: MirrorDbClient, config: ModuleConfig, rows:
   }
 }
 
-// Live Zoho API rows are not the same shape as scripts/import-masters.mjs CSV
-// rows. Keep this mapper separate until Phase E's planned field-map unification.
+// Live Zoho API rows are not the same shape as CSV exports, but module/table
+// metadata and CSV column mappings are shared through module-map.json.
 export async function upsertZohoRecords({
   db,
   module,

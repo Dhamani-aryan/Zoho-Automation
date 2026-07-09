@@ -31,9 +31,8 @@ import { getLLMProviderForUser } from "@/lib/llm";
 import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
 import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 
-const MAX_TOOL_CALLS = 15;
-const TURN_TIMEOUT_MS = 3 * 60 * 1000;
 const TOOL_RESULT_CHAR_LIMIT = 8000;
 
 export type AgentStreamEvent =
@@ -307,8 +306,10 @@ export async function runAgentTurn({
   // Time spent blocked on a Tier-2 approval card does NOT count against the
   // turn budget (a human may take minutes to decide). We subtract it.
   let pausedMs = 0;
+  const turnTimeoutMs = agentTurnTimeoutMs();
+  const maxToolCalls = agentMaxToolCalls();
 
-  while (Date.now() - started - pausedMs < TURN_TIMEOUT_MS) {
+  while (Date.now() - started - pausedMs < turnTimeoutMs) {
     const model = await provider.runTools({
       instructions: AGENT_INSTRUCTIONS,
       messages: transcript,
@@ -337,8 +338,8 @@ export async function runAgentTurn({
     }
 
     for (const call of model.toolCalls) {
-      if (toolCallCount >= MAX_TOOL_CALLS) {
-        const message = `Stopped after reaching the ${MAX_TOOL_CALLS} tool-call budget.`;
+      if (toolCallCount >= maxToolCalls) {
+        const message = `Stopped after reaching the ${maxToolCalls} tool-call budget.`;
         await supabase.from("agent_messages").insert({
           session_id: sessionId,
           role: "assistant",
@@ -426,7 +427,7 @@ export async function runAgentTurn({
     }
   }
 
-  const message = "Stopped after reaching the 3 minute turn budget.";
+  const message = `Stopped after reaching the ${Math.round(turnTimeoutMs / 1000)} second turn budget.`;
   await supabase.from("agent_messages").insert({
     session_id: sessionId,
     role: "assistant",

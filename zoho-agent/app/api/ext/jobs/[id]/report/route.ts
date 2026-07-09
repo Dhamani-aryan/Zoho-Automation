@@ -27,7 +27,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       errorMessage || errorCode
         ? {
             status: "failed",
-            result: errorCode ? { error_code: errorCode } : null,
+            result:
+              body != null && Object.hasOwn(body, "result")
+                ? { error_code: errorCode || null, result: body.result ?? null }
+                : errorCode
+                  ? { error_code: errorCode }
+                  : null,
             error_message: errorMessage || errorCode,
             completed_at: completedAt
           }

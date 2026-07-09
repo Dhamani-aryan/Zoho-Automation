@@ -1,10 +1,10 @@
 import {
   BotMessageSquare,
+  ChartNoAxesColumnIncreasing,
   ClipboardList,
   Database,
   FileUp,
   LayoutDashboard,
-  PlayCircle,
   Settings,
   Settings2
 } from "lucide-react";
@@ -19,9 +19,9 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/records", label: "Records", icon: Database },
   { href: "/imports", label: "Imports", icon: FileUp },
-  { href: "/run/new", label: "New Run", icon: PlayCircle },
   { href: "/runs", label: "Runs", icon: ClipboardList },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/admin/agent-activity", label: "Agent Activity", icon: ChartNoAxesColumnIncreasing },
   { href: "/admin/field-meta", label: "Field Meta", icon: Settings2 }
 ];
 
@@ -47,7 +47,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const visibleNavItems = navItems.filter((item) => item.label !== "Field Meta" || role === "admin");
+  const visibleNavItems = navItems.filter((item) => !item.href.startsWith("/admin") || role === "admin");
 
   return (
     <div className="min-h-screen bg-surface text-ink">

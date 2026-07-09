@@ -125,7 +125,8 @@ export function reportJobFailed(
   settings: ExtensionSettings,
   jobId: string,
   errorMessage: string,
-  errorCode?: string
+  errorCode?: string,
+  result?: unknown
 ) {
   return appFetch<{ ok: boolean }>(
     settings,
@@ -134,7 +135,8 @@ export function reportJobFailed(
       method: "POST",
       body: JSON.stringify({
         error_message: errorMessage,
-        ...(errorCode ? { error_code: errorCode } : {})
+        ...(errorCode ? { error_code: errorCode } : {}),
+        ...(result !== undefined ? { result } : {})
       })
     },
     15000

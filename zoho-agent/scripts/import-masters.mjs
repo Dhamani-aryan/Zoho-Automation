@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "..");
 const importsDir = process.argv[2] ?? resolve(projectRoot, "..", "imports");
+const moduleMap = JSON.parse(readFileSync(join(projectRoot, "lib", "records", "module-map.json"), "utf8"));
 
 // --- env ---------------------------------------------------------------
 function loadEnvLocal() {
@@ -74,52 +75,81 @@ async function audit(message, metadata) {
 }
 
 // --- main ---------------------------------------------------------------
-const accountsCsv = load("master_accounts_clean.csv");
-const contactsCsv = load("master_contacts_clean.csv");
-const dealsCsv = load("master_deals_clean.csv");
+const accountsConfig = moduleMap.accounts;
+const contactsConfig = moduleMap.contacts;
+const dealsConfig = moduleMap.deals;
+const accountsCsv = load(accountsConfig.sourceFile);
+const contactsCsv = load(contactsConfig.sourceFile);
+const dealsCsv = load(dealsConfig.sourceFile);
 console.log(`read: ${accountsCsv.length} accounts, ${contactsCsv.length} contacts, ${dealsCsv.length} deals`);
 
 // accounts
+const accCol = accountsConfig.csvColumns;
 const accRows = accountsCsv.map(r => ({
-  zoho_account_id: nn(r.zoho_account_id), zoho_url: nn(r.zoho_url),
-  account_name: r.account_name, website: nn(r.website), phone: nn(r.phone),
-  industry: nn(r.industry), owner: nn(r.owner_name), source: "master_import", raw_data: r
-})).filter(r => r.zoho_account_id && r.account_name);
-const acc = await upsert("accounts", accRows, "zoho_account_id", "zoho_account_id");
+  [accountsConfig.zohoIdColumn]: nn(r[accCol.zohoId]),
+  zoho_url: nn(r[accCol.zohoUrl]),
+  [accountsConfig.nameColumn]: r[accCol.name],
+  website: nn(r[accCol.website]),
+  phone: nn(r[accCol.phone]),
+  industry: nn(r[accCol.industry]),
+  owner: nn(r[accCol.owner]),
+  source: "master_import",
+  raw_data: r
+})).filter(r => r[accountsConfig.zohoIdColumn] && r[accountsConfig.nameColumn]);
+const acc = await upsert(accountsConfig.table, accRows, accountsConfig.zohoIdColumn, accountsConfig.zohoIdColumn);
 console.log(`accounts: stored ${acc.stored}`);
-await audit(`Imported ${acc.stored} accounts from master_accounts_clean.csv`, { module: "accounts", stored: acc.stored });
+await audit(`Imported ${acc.stored} accounts from ${accountsConfig.sourceFile}`, { module: "accounts", stored: acc.stored });
 
 // contacts
 let cLinked = 0;
+const conCol = contactsConfig.csvColumns;
 const conRows = contactsCsv.map(r => {
-  const account_id = acc.map.get(r.zoho_account_id) ?? null;
+  const account_id = acc.map.get(r[conCol.accountZohoId]) ?? null;
   if (account_id) cLinked++;
   return {
-    zoho_contact_id: nn(r.zoho_contact_id), zoho_url: nn(r.zoho_url), account_id,
-    first_name: nn(r.first_name), last_name: nn(r.last_name), full_name: r.full_name,
-    email: nn(r.email), title: nn(r.title), phone: nn(r.phone), mobile: nn(r.mobile),
-    owner: nn(r.owner_name), source: "master_import", raw_data: r
+    [contactsConfig.zohoIdColumn]: nn(r[conCol.zohoId]),
+    zoho_url: nn(r[conCol.zohoUrl]),
+    account_id,
+    first_name: nn(r[conCol.firstName]),
+    last_name: nn(r[conCol.lastName]),
+    [contactsConfig.nameColumn]: r[conCol.fullName],
+    email: nn(r[conCol.email]),
+    title: nn(r[conCol.title]),
+    phone: nn(r[conCol.phone]),
+    mobile: nn(r[conCol.mobile]),
+    owner: nn(r[conCol.owner]),
+    source: "master_import",
+    raw_data: r
   };
-}).filter(r => r.zoho_contact_id && r.full_name);
-const con = await upsert("contacts", conRows, "zoho_contact_id", "zoho_contact_id");
+}).filter(r => r[contactsConfig.zohoIdColumn] && r[contactsConfig.nameColumn]);
+const con = await upsert(contactsConfig.table, conRows, contactsConfig.zohoIdColumn, contactsConfig.zohoIdColumn);
 console.log(`contacts: stored ${con.stored}, account-linked ${cLinked}, unlinked ${conRows.length - cLinked}`);
 await audit(`Imported ${con.stored} contacts (${cLinked} linked to accounts)`, { module: "contacts", stored: con.stored, linked: cLinked });
 
 // deals
 let dAcc = 0, dCon = 0;
+const dealCol = dealsConfig.csvColumns;
 const dealRows = dealsCsv.map(r => {
-  const account_id = acc.map.get(r.zoho_account_id) ?? null;
-  const primary_contact_id = con.map.get(r.primary_contact_id) ?? null;
+  const account_id = acc.map.get(r[dealCol.accountZohoId]) ?? null;
+  const primary_contact_id = con.map.get(r[dealCol.primaryContactZohoId]) ?? null;
   if (account_id) dAcc++;
   if (primary_contact_id) dCon++;
   return {
-    zoho_deal_id: nn(r.zoho_deal_id), zoho_url: nn(r.zoho_url), account_id, primary_contact_id,
-    deal_name: r.deal_name, stage: nn(r.stage), next_step: nn(r.next_step),
-    owner: nn(r.owner_name), closing_date: nn(r.closing_date), amount: num(r.amount),
-    source: "master_import", raw_data: r
+    [dealsConfig.zohoIdColumn]: nn(r[dealCol.zohoId]),
+    zoho_url: nn(r[dealCol.zohoUrl]),
+    account_id,
+    primary_contact_id,
+    [dealsConfig.nameColumn]: r[dealCol.name],
+    stage: nn(r[dealCol.stage]),
+    next_step: nn(r[dealCol.nextStep]),
+    owner: nn(r[dealCol.owner]),
+    closing_date: nn(r[dealCol.closingDate]),
+    amount: num(r[dealCol.amount]),
+    source: "master_import",
+    raw_data: r
   };
-}).filter(r => r.zoho_deal_id && r.deal_name);
-const dl = await upsert("deals", dealRows, "zoho_deal_id", "zoho_deal_id");
+}).filter(r => r[dealsConfig.zohoIdColumn] && r[dealsConfig.nameColumn]);
+const dl = await upsert(dealsConfig.table, dealRows, dealsConfig.zohoIdColumn, dealsConfig.zohoIdColumn);
 console.log(`deals: stored ${dl.stored}, account-linked ${dAcc}, contact-linked ${dCon}`);
 await audit(`Imported ${dl.stored} deals (${dAcc} account-linked, ${dCon} contact-linked)`, { module: "deals", stored: dl.stored, accountLinked: dAcc, contactLinked: dCon });
 
