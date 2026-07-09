@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Agent instructions: direct record links (2026-07-09, chat)
+
+Live testing (post-write): asked for a direct deal link, the agent said it lacked a tool and offered request_new_tool. Wrong - the URL is deterministic (https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id}, Deals = Potentials in URLs) and mirror rows already carry zoho_url. Instruction-only fix in lib/agent/loop.ts AGENT_INSTRUCTIONS: prefer zoho_url from db_get_record/db_search_records, else compose the canonical URL; never claim links need a new tool. tsc clean. Restart the dev server to pick up the new instructions; no extension rebuild. The stray tool_requests row from this exchange can be closed in Supabase if one was filed.
+
 ## Phase D live-test defect fix: approval card buttons were dead (2026-07-09, chat)
 
 Symptom (Aryan, first live scenario-3 attempt): the approval card rendered correctly (record, Next_Step before/after) but Approve/Reject could not be clicked.
