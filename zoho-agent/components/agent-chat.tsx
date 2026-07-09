@@ -148,8 +148,8 @@ function titleFor(session: AgentSession) {
   return session.title || "New agent chat";
 }
 
-// Splits message text into plain runs and clickable links. Bare http(s) URLs
-// become <a> links; trailing sentence punctuation is left out of the href.
+// Splits message text into plain runs and clickable links. Bare http/https
+// URLs become <a> links; trailing sentence punctuation is left out of the href.
 const URL_RE = /(https?:\/\/[^\s<]+)/g;
 
 function linkifyContent(text: string, linkClass: string): ReactNode[] {
