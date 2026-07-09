@@ -31,10 +31,10 @@ Codex (the coding agent) writes the code locally; the chat writes specs, reviews
 ## Immediate next steps (updated 2026-07-09)
 **PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes. Batch run pipeline retained for presets. CRM writes keep the human approval gate - always.
 
-State: **Phases A, B, C, and D are built, chat-reviewed, and live-accepted. Phase E hardening is in build.** Phase E is hardening only: review backlog burn-down, sweeps/retention, env budgets, `/admin/agent-activity`, `/agent` landing, extension job history, one-page guide, and `zoho-agent/docs/V2_TEST_CHECKLIST.md`. No new agent tool surface. Purge is admin-only, confirmed, and never automatic.
-1. Finish Phase E verification: typecheck, lint, build, build:extension, orchestrator/records/tier2 tests, then complete every item in `zoho-agent/docs/V2_TEST_CHECKLIST.md`.
-2. Stop for chat review before declaring Phase E done.
-3. Phase F remains next: UI navigation and teachable workflows.
+State: **Phases A–D built, chat-reviewed, and live-accepted. Phase E BUILT (Codex, 15bb0c9) and CHAT-REVIEWED 2026-07-09: approved with ONE required follow-up.** Review verified independently from the commit (tsc clean; tier2 14/14, orchestrator 8/8, records 5/5; all gate grep-proofs still hold; no slop). Required before the Phase E done gate: server-side "one active turn per session" lock (spec §8.6) — the new Stop button aborts only the client fetch, so a resent message can start a concurrent turn; design sketch in V2_DECISIONS "Phase E review". Purge is admin-only, confirmed, and never automatic.
+1. Codex: implement the turn lock per the V2_DECISIONS design (agent_sessions.turn_active_until, guarded claim on message POST, cleared in finally, self-healing expiry) + label Stop-button behavior.
+2. Aryan: complete every item in `zoho-agent/docs/V2_TEST_CHECKLIST.md` (its Phase D section also re-proves the remaining live paths: reject, identity-mismatch, verify-failure, logged-out, negative proofs), then the one-day acceptance.
+3. Chat re-review of the turn lock, then Phase E done; Phase F next: UI navigation and teachable workflows.
 
 Chat's role: write/maintain specs, review every Codex phase for defects/races/slop (verify independently — `git show` + typecheck from the sandbox via /tmp copies; the mount's view of fresh writes lags), fix small defects directly, keep V2_DECISIONS + this file current. Sandbox CANNOT run git writes or Windows-installed binaries (esbuild/SWC) — builds and commits happen in Aryan's PowerShell; always end reviews with the exact `git add/commit` commands.
 
