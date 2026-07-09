@@ -62,7 +62,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     const body = (await request.json().catch(() => ({}))) as WorkflowPatchBody;
     const nextSteps = Array.isArray(body.steps) ? body.steps : workflow.steps;
-    const effect = workflowEffectForSteps(nextSteps as PreparedUiWorkflow["steps"]);
+    // Effect re-derivation may UPGRADE read->write (mutating steps force the
+    // approval gate) but never DOWNGRADE: a workflow deliberately saved as
+    // write-effect keeps its approval gate even if no step looks mutating.
+    // Removing the gate requires delete + re-teach, not an edit.
+    const derivedEffect = workflowEffectForSteps(nextSteps as PreparedUiWorkflow["steps"]);
+    const effect = derivedEffect === "write" || workflow.effect === "write" ? "write" : "read";
     const prepared = prepareUiWorkflow({
       name: typeof body.name === "string" ? body.name : workflow.name,
       description: typeof body.description === "string" ? body.description : workflow.description ?? "",

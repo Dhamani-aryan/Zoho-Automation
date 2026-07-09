@@ -1,5 +1,19 @@
 # V2 Decisions
 
+## Review: CDP input + workflows management (2026-07-10, chat review)
+
+Reviewed aad9ecf (CDP trusted UI input) and a84852f (workflows management surface). Verdict: approved, one safety edge fixed by the reviewer. Verified from the object store: tsc clean; orchestrator 14/14, tier2 15/15, records untouched; extension CRM write methods still only in page-runner-write.ts; "debugger" permission added as specced.
+
+CDP implementation is spec-conformant and careful: attach 1.3 per job / detach in finally; locateUiTarget is closure-free, scrolls into view, returns CSS-px centers (no devicePixelRatio multiplication - correct per reference section 6), composes iframe offsets via frame_selector; trusted mouseMoved->Pressed->Released; fills via focus click + Ctrl+A + Input.insertText (works for contentEditable, i.e. the email body); DOM path kept as labeled dom_fallback with the CDP error preserved; click results marked needs_verification and the teach instructions now require a wait_for/confirm/verify step after every click before claiming success. frame_selector was added to the schemas AND to the param-injection guard (params cannot reach it) - good catch by the builder.
+
+Management surface: /workflows list+detail, param-form run handoff into /agent chat (execution keeps every existing gate), PATCH validates through the SAME prepareUiWorkflow path, structure changes bump version and reset trusted, creator-or-admin mutation guard, typed-name delete confirm, audits (workflow_saved/updated/deleted incl. from the agent save path).
+
+Fix (reviewer, app/api/workflows/[id]/route.ts): effect downgrade on edit. PATCH recomputed effect purely from steps, so a workflow deliberately saved as effect=write with no mutating-looking steps would silently become read on ANY edit (even a description tweak), removing its approval gate. Effect now only upgrades via re-derivation, never downgrades; removing a gate requires delete + re-teach.
+
+Non-blocking: (1) locateUiTarget reads the iframe rect before the inner scrollIntoView - if the outer page scrolls as a side effect, coordinates could be stale; re-read the frame rect after scrolling if composer clicks ever land off-target. (2) fill_field results carry the intended value as observed (not a read-back); verify_field remains the proof - consistent with the click rule, fine. (3) Chrome shows the debugging infobar during CDP steps - expected, documented for users.
+
+Live acceptance for this batch: the previously failing sequence (open deal -> Emails section -> Compose Email) must now visibly open the composer; /workflows shows saved workflows and the run handoff pre-fills the chat; editing a step resets trusted and forces a new test replay; deleting requires typing the name.
+
 ## Phase F follow-up: workflows management surface (2026-07-10, build)
 
 Built the workflow library UI from spec 4.6:
