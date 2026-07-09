@@ -1,5 +1,15 @@
 # V2 Decisions
 
+## Phase F Step 6 Checkpoint: recorder mode deferred (2026-07-10, build)
+
+Recorder mode is deferred deliberately after completing the mandatory guided teaching, save, read replay, and write replay gates:
+- No recorder UI or raw-recording storage was added in this step.
+- Because recorder mode is absent, there is no password-field capture path and no retained raw recording artifact.
+- Guided teach mode remains the supported workflow teaching path for Phase F chat review.
+- If recorder mode is revived later, it must be built from the spec constraints: Start/Stop in extension options, selector derivation id > name > shortest unique CSS path, never capture password fields, import into chat for cleanup, and discard raw recordings after save or discard.
+
+Verification for this step: docs-only deferral; no runtime change.
+
 ## Phase F Step 5 Checkpoint: write-effect workflow replay approval gate (2026-07-10, build)
 
 Implemented write-effect replay after committing Step 4:
