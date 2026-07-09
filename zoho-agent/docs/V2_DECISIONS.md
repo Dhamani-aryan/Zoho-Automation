@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase F follow-up: teach-mode open_url instruction (2026-07-10, build)
+
+Observed during live testing: asking the agent to "open this deal" returned the CRM link instead of calling ui_step. Root cause was stale wording in AGENT_INSTRUCTIONS that said "UI actions remain unavailable" immediately before the teach-mode ui_step guidance. Updated the prompt to keep deletes/record creation unavailable while explicitly telling the model to use ui_step open_url for crm.zoho.com URLs when teach mode is on.
+
+Verification for this follow-up: npm run typecheck passed.
+
 ## Phase F review (2026-07-10, chat review)
 
 Verdict: approved pending live acceptance; two defense/honesty fixes applied by the reviewer; no slop. Verified independently from commit 4d0281d (git archive to /tmp; mount not trusted): tsc --noEmit clean; orchestrator 13/13, tier2 14/14 (15/15 after the reviewer-added test), records 5/5. Grep-proofs: CRM API writes still ONLY in page-runner-write.ts; page-runner-ui.ts is DOM-only (zero fetch calls, closure-free); tool_jobs inserts unchanged (approvals route + bridge, both guarded); no Vercel/deploy artifacts anywhere - localhost boundary respected; extension manifest hosts unchanged.
