@@ -45,9 +45,30 @@ function waitForTabComplete(tabId: number): Promise<void> {
   });
 }
 
-async function runBackgroundUiStep(tabId: number, job: ToolJob): Promise<PageResult | null> {
-  if (job.tool_name !== "ui_step") return null;
-  const step = (job.args.step ?? {}) as Record<string, unknown>;
+async function assertCrmTab(tabId: number): Promise<PageResult | null> {
+  const tab = await chrome.tabs.get(tabId);
+  const url = typeof tab.url === "string" ? tab.url : "";
+  try {
+    if (new URL(url).hostname === "crm.zoho.com") return null;
+  } catch {
+    // Fall through to the standard failure.
+  }
+  return { ok: false, error_message: "UI steps can run only in crm.zoho.com tabs." };
+}
+
+async function captureEvidence() {
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+    if (dataUrl.length > 500 * 1024) {
+      return { screenshot_error: "Screenshot exceeded the 500 KB cap." };
+    }
+    return { screenshot_data_url: dataUrl };
+  } catch (error) {
+    return { screenshot_error: error instanceof Error ? error.message : "Could not capture screenshot evidence." };
+  }
+}
+
+async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult | null> {
   const type = String(step.type ?? "");
 
   if (type === "open_url") {
@@ -67,22 +88,95 @@ async function runBackgroundUiStep(tabId: number, job: ToolJob): Promise<PageRes
   }
 
   if (type === "screenshot") {
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
-    if (dataUrl.length > 500 * 1024) {
-      return { ok: false, error_message: "Screenshot exceeded the 500 KB cap." };
-    }
-    return { ok: true, result: { screenshot_data_url: dataUrl } };
+    return { ok: true, result: await captureEvidence() };
   }
 
   return null;
+}
+
+async function executeUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
+  try {
+    const backgroundUiResult = await runBackgroundUiStep(tabId, step);
+    if (backgroundUiResult) return backgroundUiResult;
+
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: zohoUiPageRunner,
+      args: [{ tool_name: "ui_step", args: { step } }]
+    });
+    const result = results?.[0]?.result as PageResult | undefined;
+    if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
+      return {
+        ok: false,
+        error_message: "Zoho UI executor returned no result (the tab may still be loading). Try again."
+      };
+    }
+    return result;
+  } catch (error) {
+    return {
+      ok: false,
+      error_message: `Could not run UI step in the Zoho tab${
+        error instanceof Error ? `: ${error.message}` : ""
+      }. If the extension was just reloaded, refresh the crm.zoho.com tab and try again.`
+    };
+  }
+}
+
+async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
+  const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
+  const workflowName = String(job.args.name ?? "ui workflow");
+  const outcomes: Array<{ index: number; step_type: string; ok: boolean; observed?: unknown; error_message?: string }> = [];
+
+  if (steps.length === 0) {
+    return { ok: true, result: { ok: false, workflow_name: workflowName, error_message: "Workflow has no steps." } };
+  }
+
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index] ?? {};
+    const response = await executeUiStep(tabId, step);
+    if (response.ok) {
+      const result = response.result as { observed?: unknown } | null;
+      outcomes.push({ index, step_type: String(step.type ?? ""), ok: true, observed: result?.observed ?? result });
+      continue;
+    }
+
+    const evidence = await captureEvidence();
+    const errorMessage = response.error_message ?? "UI workflow step failed.";
+    outcomes.push({ index, step_type: String(step.type ?? ""), ok: false, error_message: errorMessage });
+    return {
+      ok: true,
+      result: {
+        ok: false,
+        workflow_name: workflowName,
+        failed_step_index: index,
+        error_message: errorMessage,
+        steps: outcomes,
+        evidence
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    result: {
+      ok: true,
+      workflow_name: workflowName,
+      steps: outcomes,
+      evidence: await captureEvidence()
+    }
+  };
 }
 
 // Runs the read-only executor in the page's MAIN world via chrome.scripting.
 // Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
-  const backgroundUiResult = await runBackgroundUiStep(tabId, job);
-  if (backgroundUiResult) return backgroundUiResult;
+  if (job.tool_name === "ui_step") return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
+  if (job.tool_name === "ui_workflow") return runUiWorkflow(tabId, job);
 
   // Belt-and-braces (3 of 3): a write job must carry an approval_id. Even if the
   // server checks were somehow bypassed, the extension refuses to write without
@@ -90,11 +184,13 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (isWrite && !job.approval_id) {
     return { ok: false, error_message: "write without approval refused by extension" };
   }
+  const crmError = await assertCrmTab(tabId);
+  if (crmError) return crmError;
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: job.tool_name === "ui_step" ? zohoUiPageRunner : isWrite ? zohoWritePageRunner : zohoPageRunner,
+      func: isWrite ? zohoWritePageRunner : zohoPageRunner,
       args: [{ tool_name: job.tool_name, args: job.args }]
     });
     const result = results?.[0]?.result as PageResult | undefined;

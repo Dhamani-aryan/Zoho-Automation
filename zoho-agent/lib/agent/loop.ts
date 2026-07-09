@@ -22,6 +22,9 @@ import {
 import {
   isUiTool,
   type PreparedUiWorkflow,
+  prepareUiWorkflowReplay,
+  type RunUiWorkflowArgs,
+  type SavedUiWorkflow,
   UI_TOOL_DEFINITIONS,
   uiStepTeachModeDecision,
   validateUiToolCall
@@ -80,7 +83,7 @@ When a search returns no results, do NOT stop after one attempt and report "not 
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
 You CAN give direct Zoho record links; never say you lack a tool for them. Mirror rows from db_get_record / db_search_records include zoho_url - prefer it. Otherwise compose the canonical URL from the record's Zoho id: https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id} - note Deals use "Potentials" in URLs even though the API module is Deals.
 CRM writes are available through approval-gated tools: zoho_update_fields, zoho_change_owner, zoho_add_tags, zoho_remove_tags. Every such call pauses for the user to approve a before/after card in chat before anything is written; nothing is written until they approve. Only propose a write the user actually asked for, resolve the exact record(s) first (search the mirror or read live Zoho), and put the smallest correct change in the tool call. If the user rejects the card, acknowledge it and do not retry the same write unless they ask. Stage edits are admin-only and Deal_Name cannot be changed. Never claim a write succeeded until the tool result confirms it (verified read-back). Deletes, record creation, and UI actions remain unavailable.
-When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. Outside teach mode, do not call ui_step. When the user asks to save a taught workflow, call save_ui_workflow with the verified steps, params, and effect; it requires a confirmation card before the workflow is saved. You may call list_ui_workflows to inspect saved workflows. UI workflow replay is not available until later Phase F steps.
+When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. Outside teach mode, do not call ui_step. When the user asks to save a taught workflow, call save_ui_workflow with the verified steps, params, and effect; it requires a confirmation card before the workflow is saved. You may call list_ui_workflows to inspect saved workflows. Use run_ui_workflow to replay saved workflows. If run_ui_workflow reports trusted_before=false, tell the user it was the first verified replay and is now trusted only if the result says trusted_after=true. Write-effect workflow replay is not available until later Phase F steps.
 When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
 Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
@@ -426,6 +429,73 @@ async function saveUiWorkflow({
   };
 }
 
+function workflowReplaySucceeded(result: unknown) {
+  return Boolean(result && typeof result === "object" && (result as { ok?: unknown }).ok === true);
+}
+
+async function runReadUiWorkflow({
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}) {
+  const validatedCall = validateUiToolCall(call);
+  const args = validatedCall.args as RunUiWorkflowArgs;
+  const { data: workflowRow, error } = await service
+    .from("ui_workflows")
+    .select("name,description,params,steps,effect,trusted,version")
+    .eq("name", args.name)
+    .maybeSingle();
+  if (error) throw error;
+  if (!workflowRow) throw new Error(`Workflow "${args.name}" was not found.`);
+
+  const replay = prepareUiWorkflowReplay(workflowRow as SavedUiWorkflow, args);
+  if (replay.effect !== "read") {
+    throw new Error("Write-effect workflow replay requires approval and is enabled in the next Phase F step.");
+  }
+
+  const bridgedResult = await runBridgedTool({
+    service,
+    user,
+    sessionId,
+    call: {
+      id: call.id,
+      name: "ui_workflow",
+      args: {
+        name: replay.name,
+        effect: replay.effect,
+        trusted_before: replay.trusted,
+        version: replay.version,
+        steps: replay.steps
+      }
+    },
+    onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+  });
+
+  const verified = workflowReplaySucceeded(bridgedResult);
+  if (verified && !replay.trusted) {
+    await service
+      .from("ui_workflows")
+      .update({ trusted: true })
+      .eq("name", replay.name)
+      .eq("version", replay.version);
+  }
+
+  return {
+    ...(bridgedResult && typeof bridgedResult === "object" ? (bridgedResult as Record<string, unknown>) : { result: bridgedResult }),
+    trusted_before: replay.trusted,
+    trusted_after: verified ? true : replay.trusted,
+    warning: replay.trusted ? null : "This workflow was untrusted before replay; a fully verified replay marks it trusted."
+  };
+}
+
 export async function runAgentTurn({
   supabase,
   user,
@@ -559,6 +629,8 @@ export async function runAgentTurn({
             ok = saved.ok;
             result = saved.result;
             pausedMs += saved.pausedMs;
+          } else if (call.name === "run_ui_workflow") {
+            result = await runReadUiWorkflow({ service, user, sessionId, call, emit });
           } else {
             await ensureTeachMode(service, user, sessionId);
             const validatedCall = validateUiToolCall(call);

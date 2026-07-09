@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase F Step 4 Checkpoint: read-effect UI workflow replay (2026-07-10, build)
+
+Implemented read-effect replay after committing Step 3:
+- Added run_ui_workflow as the public replay tool. The server resolves a saved workflow by name, rejects missing or unknown params, substitutes params only into url/value/text/equals slots, and revalidates the substituted steps before queueing.
+- Read-effect workflows are bridged as an internal ui_workflow extension job. Write-effect workflows are still rejected in this step and are routed through approval in Step 5.
+- The extension executes ui_workflow one step at a time through the same ui_step runner, with crm.zoho.com enforced before page dispatch. open_url and screenshot remain background-side steps.
+- Workflow replay stops on the first failed step and returns failed_step_index, step outcomes, and capped screenshot evidence. Successful replay also returns capped evidence.
+- A successful verified read replay updates ui_workflows.trusted to true for that workflow version and reports trusted_before/trusted_after in the tool result.
+
+Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 12/12 after rerunning unsandboxed for the known Windows .tmp write restriction; npm run build:extension passed after rerunning unsandboxed for the known extension/dist write restriction.
+
 ## Phase F Step 3 Checkpoint: save and list UI workflows (2026-07-10, build)
 
 Implemented the taught-workflow save surface after committing Step 2:

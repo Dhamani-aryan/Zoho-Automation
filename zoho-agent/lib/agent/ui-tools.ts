@@ -116,7 +116,24 @@ export const saveUiWorkflowSchema = z.object({
 });
 
 export type PreparedUiWorkflow = z.infer<typeof saveUiWorkflowSchema>;
+export type UiWorkflowStep = PreparedUiWorkflow["steps"][number];
 export type UiStep = z.infer<typeof uiStepSchema>;
+
+const workflowParamValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+
+export const runUiWorkflowSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  params: z.record(z.string(), workflowParamValueSchema).default({})
+});
+
+export type RunUiWorkflowArgs = z.infer<typeof runUiWorkflowSchema>;
+
+export const savedUiWorkflowSchema = saveUiWorkflowSchema.extend({
+  trusted: z.boolean().default(false),
+  version: z.number().int().min(1).default(1)
+});
+
+export type SavedUiWorkflow = z.infer<typeof savedUiWorkflowSchema>;
 
 export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
@@ -240,17 +257,36 @@ export const UI_TOOL_DEFINITIONS: AgentToolDefinition[] = [
       additionalProperties: false,
       properties: {}
     }
+  },
+  {
+    name: "run_ui_workflow",
+    tier: 1,
+    description:
+      "Replay a saved UI workflow with named params. Read-effect workflows run unaided; write-effect workflows require the approval gate.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name"],
+      properties: {
+        name: { type: "string" },
+        params: {
+          type: "object",
+          additionalProperties: { type: ["string", "number", "boolean"] }
+        }
+      }
+    }
   }
 ];
 
 export function isUiTool(name: string) {
-  return name === "ui_step" || name === "save_ui_workflow" || name === "list_ui_workflows";
+  return name === "ui_step" || name === "save_ui_workflow" || name === "list_ui_workflows" || name === "run_ui_workflow";
 }
 
 export function validateUiToolCall(call: AgentToolCall): AgentToolCall {
   if (!isUiTool(call.name)) throw new Error(`Unknown UI tool: ${call.name}`);
   if (call.name === "ui_step") return { ...call, args: uiStepToolSchema.parse(call.args) };
   if (call.name === "save_ui_workflow") return { ...call, args: prepareUiWorkflow(call.args) };
+  if (call.name === "run_ui_workflow") return { ...call, args: runUiWorkflowSchema.parse(call.args) };
   return { ...call, args: {} };
 }
 
@@ -270,4 +306,49 @@ export function prepareUiWorkflow(args: unknown): PreparedUiWorkflow {
     throw new Error("Workflows containing click, fill_field, or press_key must be saved with effect='write'.");
   }
   return prepared;
+}
+
+const PARAM_TOKEN = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+function substituteSlot(value: string, params: Record<string, string | number | boolean>, allowed: Set<string>) {
+  return value.replace(PARAM_TOKEN, (match, name: string) => {
+    if (!allowed.has(name)) throw new Error(`Unknown workflow param: ${name}.`);
+    if (!Object.hasOwn(params, name)) throw new Error(`Missing workflow param: ${name}.`);
+    return String(params[name]);
+  });
+}
+
+function substituteStep(
+  step: UiWorkflowStep,
+  params: Record<string, string | number | boolean>,
+  allowed: Set<string>
+): UiStep {
+  const next = { ...step } as Record<string, unknown>;
+  if (typeof next.url === "string") next.url = substituteSlot(next.url, params, allowed);
+  if (typeof next.value === "string") next.value = substituteSlot(next.value, params, allowed);
+  if (typeof next.text === "string") next.text = substituteSlot(next.text, params, allowed);
+  if (typeof next.equals === "string") next.equals = substituteSlot(next.equals, params, allowed);
+  return uiStepSchema.parse(next);
+}
+
+export function prepareUiWorkflowReplay(workflowInput: unknown, argsInput: unknown) {
+  const workflow = savedUiWorkflowSchema.parse(workflowInput);
+  const args = runUiWorkflowSchema.parse(argsInput);
+  if (workflow.name !== args.name) throw new Error(`Workflow "${args.name}" was not found.`);
+
+  const allowed = new Set(workflow.params.map((param) => param.name));
+  const supplied = Object.keys(args.params);
+  const unknown = supplied.filter((name) => !allowed.has(name));
+  if (unknown.length > 0) throw new Error(`Unknown workflow param: ${unknown.join(", ")}.`);
+  const missing = [...allowed].filter((name) => !Object.hasOwn(args.params, name));
+  if (missing.length > 0) throw new Error(`Missing workflow param: ${missing.join(", ")}.`);
+
+  return {
+    name: workflow.name,
+    description: workflow.description,
+    effect: workflow.effect,
+    trusted: workflow.trusted,
+    version: workflow.version,
+    steps: workflow.steps.map((step) => substituteStep(step, args.params, allowed))
+  };
 }

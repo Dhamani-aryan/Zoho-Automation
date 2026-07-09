@@ -51,6 +51,7 @@ declare namespace chrome {
     };
 
     function query(queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
+    function get(tabId: number): Promise<Tab>;
     function update(tabId: number, updateProperties: { url?: string; active?: boolean }): Promise<Tab>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
     function captureVisibleTab(options: { format: "png" | "jpeg" }): Promise<string>;

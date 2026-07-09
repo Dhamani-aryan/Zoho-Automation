@@ -19,7 +19,12 @@ import {
   sweepCutoffs
 } from "../lib/agent/sweeps";
 import { turnActiveUntil, turnClaimDecision } from "../lib/agent/turn-lock";
-import { prepareUiWorkflow, uiStepTeachModeDecision, validateUiToolCall } from "../lib/agent/ui-tools";
+import {
+  prepareUiWorkflow,
+  prepareUiWorkflowReplay,
+  uiStepTeachModeDecision,
+  validateUiToolCall
+} from "../lib/agent/ui-tools";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -239,5 +244,63 @@ test("save_ui_workflow validation preserves read/write and selector safety", () 
         steps: [{ type: "read_field", selector: "input[name='{field_name}']" }]
       }),
     /params cannot be used in selectors/
+  );
+});
+
+test("run_ui_workflow replay substitutes only safe slots", () => {
+  const replay = prepareUiWorkflowReplay(
+    {
+      name: "Read Deal Next Step",
+      description: "Open a deal and read Next Step.",
+      effect: "read",
+      trusted: false,
+      version: 1,
+      params: [{ name: "deal_id", description: "Zoho deal id", example: "123456789" }],
+      steps: [
+        { type: "open_url", url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/{deal_id}" },
+        { type: "confirm_text_present", text: "Next Step" },
+        { type: "read_field", selector: "input[name='Next_Step']" }
+      ]
+    },
+    { name: "Read Deal Next Step", params: { deal_id: "987654321" } }
+  );
+
+  assert.equal(replay.effect, "read");
+  assert.equal(replay.steps[0].type, "open_url");
+  assert.deepEqual(replay.steps[0], {
+    type: "open_url",
+    url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/987654321"
+  });
+
+  assert.throws(
+    () =>
+      prepareUiWorkflowReplay(
+        {
+          name: "Read Deal Next Step",
+          effect: "read",
+          trusted: false,
+          version: 1,
+          params: [{ name: "deal_id", description: "Zoho deal id", example: "123456789" }],
+          steps: [{ type: "open_url", url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/{deal_id}" }]
+        },
+        { name: "Read Deal Next Step", params: {} }
+      ),
+    /Missing workflow param/
+  );
+
+  assert.throws(
+    () =>
+      prepareUiWorkflowReplay(
+        {
+          name: "Open Host",
+          effect: "read",
+          trusted: false,
+          version: 1,
+          params: [{ name: "host", description: "Host", example: "example.com" }],
+          steps: [{ type: "open_url", url: "https://{host}/" }]
+        },
+        { name: "Open Host", params: { host: "example.com" } }
+      ),
+    /crm\.zoho\.com/
   );
 });
