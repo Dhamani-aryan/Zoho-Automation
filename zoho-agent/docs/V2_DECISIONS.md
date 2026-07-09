@@ -1,5 +1,20 @@
 # V2 Decisions
 
+## Phase F Build Verification: ready for chat review (2026-07-10, build)
+
+Localhost-only boundary held: no Vercel/deploy config, production URL, manifest hosting change, or hosting refactor was made.
+
+Final local verification after Step 6:
+- npm run typecheck passed.
+- npm run lint passed.
+- npm run build passed after rerunning unsandboxed for the known Windows .next write restriction.
+- npm run test:orchestrator passed 13/13 after rerunning unsandboxed for the known Windows .tmp write restriction.
+- npm run build:extension passed after rerunning unsandboxed for the known extension/dist write restriction.
+
+Grep-proof spot checks: tool_jobs inserts remain at the bridge and approval route only, both adjacent to assertTier2JobInsertAllowed; page-runner-write.ts remains the only extension page runner with Zoho PUT/actions writes; page-runner-ui.ts has no fetch/PUT/actions path. Extension manifest/package/env checked for production/deploy additions and none were found.
+
+Chat-review/live acceptance still owed before declaring Phase F done: teach once on record A and replay unaided on record B; confirm write-effect workflow replay appears only as an approval card and executes only after approval.
+
 ## Phase F Step 6 Checkpoint: recorder mode deferred (2026-07-10, build)
 
 Recorder mode is deferred deliberately after completing the mandatory guided teaching, save, read replay, and write replay gates:
