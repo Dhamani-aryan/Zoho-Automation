@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase F Step 5 Checkpoint: write-effect workflow replay approval gate (2026-07-10, build)
+
+Implemented write-effect replay after committing Step 4:
+- run_ui_workflow now handles both read and write saved workflows. Read workflows still bridge directly as ui_workflow jobs.
+- Write-effect workflows create a pending_approvals card with the substituted step list before any extension job is queued. Reject/expiry returns an observation and does not execute.
+- Approval uses the existing Phase D decision endpoint and approved tool_jobs path. The queued job carries approval_id and the immutable substituted steps exactly as shown in the card.
+- The extension refuses any ui_workflow job with effect=write unless approval_id is present.
+- Verified write-effect replay keeps effect=write through param substitution before the approval card.
+
+Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 13/13 after rerunning unsandboxed for the known Windows .tmp write restriction; npm run build:extension passed after rerunning unsandboxed for the known extension/dist write restriction.
+
 ## Phase F Step 4 Checkpoint: read-effect UI workflow replay (2026-07-10, build)
 
 Implemented read-effect replay after committing Step 3:

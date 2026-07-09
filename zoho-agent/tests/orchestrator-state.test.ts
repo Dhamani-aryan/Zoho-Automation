@@ -304,3 +304,28 @@ test("run_ui_workflow replay substitutes only safe slots", () => {
     /crm\.zoho\.com/
   );
 });
+
+test("run_ui_workflow preserves write-effect classification for mutating steps", () => {
+  const replay = prepareUiWorkflowReplay(
+    {
+      name: "Complete Task",
+      effect: "write",
+      trusted: false,
+      version: 2,
+      params: [{ name: "status", description: "Task status", example: "Completed" }],
+      steps: [
+        { type: "click", text: "Status" },
+        { type: "fill_field", selector: "input[name='Status']", value: "{status}", press_enter: true }
+      ]
+    },
+    { name: "Complete Task", params: { status: "Completed" } }
+  );
+
+  assert.equal(replay.effect, "write");
+  assert.deepEqual(replay.steps[1], {
+    type: "fill_field",
+    selector: "input[name='Status']",
+    value: "Completed",
+    press_enter: true
+  });
+});

@@ -127,6 +127,10 @@ async function executeUiStep(tabId: number, step: Record<string, unknown>): Prom
 }
 
 async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
+  if (job.args.effect === "write" && !job.approval_id) {
+    return { ok: false, error_message: "write workflow without approval refused by extension" };
+  }
+
   const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
   const workflowName = String(job.args.name ?? "ui workflow");
   const outcomes: Array<{ index: number; step_type: string; ok: boolean; observed?: unknown; error_message?: string }> = [];
