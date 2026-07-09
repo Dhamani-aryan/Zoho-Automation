@@ -63,25 +63,60 @@ function buildTimeline(rows: AgentMessageRow[], approvals: ApprovalRow[]): Timel
   const stamped: Stamped[] = [];
   let seq = 0;
 
+  // Each tool call persists two rows: an assistant "marker" row (the call) and
+  // a "tool" row (the result). Merge them by call id so a finished call renders
+  // as ONE row with a resolved status, instead of two stuck-on-"Working" rows.
+  const toolByCall = new Map<string, { item: Extract<TimelineItem, { kind: "tool" }> }>();
+  const callId = (args: unknown, fallback: string) => {
+    const value = (args as { _call_id?: unknown } | null)?._call_id;
+    return typeof value === "string" ? value : fallback;
+  };
+
   for (const row of rows) {
     if (row.role === "user" || (row.role === "assistant" && row.content)) {
       stamped.push({ at: row.created_at, seq: seq++, item: { id: row.id, kind: row.role, content: row.content ?? "" } });
       continue;
     }
-    if (row.tool_name) {
-      stamped.push({
-        at: row.created_at,
-        seq: seq++,
-        item: {
-          id: row.id,
+    if (!row.tool_name) continue;
+
+    const id = callId(row.tool_args, row.id);
+    const existing = toolByCall.get(id);
+    if (row.role === "tool") {
+      const ok = !row.content;
+      if (existing) {
+        existing.item.result = row.tool_result;
+        existing.item.ok = ok;
+        existing.item.status = ok ? "done" : "failed";
+      } else {
+        const item: Extract<TimelineItem, { kind: "tool" }> = {
+          id,
           kind: "tool",
           name: row.tool_name,
           args: row.tool_args,
-          result: row.role === "tool" ? row.tool_result : undefined,
-          ok: row.role === "tool" ? !row.content : undefined,
-          tier: row.tool_tier
-        }
-      });
+          result: row.tool_result,
+          ok,
+          tier: row.tool_tier,
+          status: ok ? "done" : "failed"
+        };
+        toolByCall.set(id, { item });
+        stamped.push({ at: row.created_at, seq: seq++, item });
+      }
+      continue;
+    }
+
+    // assistant marker row = the call itself. Only add it if we haven't already
+    // seen it; its status stays "running" until a tool result row resolves it.
+    if (!existing) {
+      const item: Extract<TimelineItem, { kind: "tool" }> = {
+        id,
+        kind: "tool",
+        name: row.tool_name,
+        args: row.tool_args,
+        tier: row.tool_tier,
+        status: "running"
+      };
+      toolByCall.set(id, { item });
+      stamped.push({ at: row.created_at, seq: seq++, item });
     }
   }
 
