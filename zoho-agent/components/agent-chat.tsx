@@ -230,13 +230,17 @@ function ToolTrace({
 
 export function AgentChat({
   initialSessions,
-  initialMessages
+  initialMessages,
+  initialActiveSessionId
 }: {
   initialSessions: AgentSession[];
   initialMessages: AgentMessageRow[];
+  initialActiveSessionId?: string;
 }) {
   const [sessions, setSessions] = useState(initialSessions);
-  const [activeSessionId, setActiveSessionId] = useState(initialSessions[0]?.id ?? "");
+  const [activeSessionId, setActiveSessionId] = useState(
+    initialActiveSessionId ?? initialSessions[0]?.id ?? ""
+  );
   const [timeline, setTimeline] = useState<TimelineItem[]>(buildTimeline(initialMessages, []));
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);

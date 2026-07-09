@@ -3,7 +3,12 @@ import { AgentChat } from "@/components/agent-chat";
 import { PageHeader } from "@/components/page-header";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
-export default async function AgentPage() {
+export default async function AgentPage({
+  searchParams
+}: {
+  searchParams: Promise<{ session?: string }>;
+}) {
+  const { session: requestedSession } = await searchParams;
   const supabase = await createServerSupabaseClient();
   let sessions: Array<{
     id: string;
@@ -22,6 +27,7 @@ export default async function AgentPage() {
     tool_tier: number | null;
     created_at: string;
   }> = [];
+  let activeSessionId: string | undefined;
 
   if (supabase) {
     const {
@@ -38,11 +44,16 @@ export default async function AgentPage() {
         .limit(30);
       sessions = data ?? [];
 
-      if (sessions[0]) {
+      // Preselect the chat from ?session= when it belongs to this user; else the
+      // most recent one.
+      const active = sessions.find((session) => session.id === requestedSession) ?? sessions[0];
+      activeSessionId = active?.id;
+
+      if (active) {
         const { data: initialMessages } = await supabase
           .from("agent_messages")
           .select("id,role,content,tool_name,tool_args,tool_result,tool_tier,created_at")
-          .eq("session_id", sessions[0].id)
+          .eq("session_id", active.id)
           .order("created_at", { ascending: true });
         messages = (initialMessages ?? []) as typeof messages;
       }
@@ -56,7 +67,11 @@ export default async function AgentPage() {
         title="Tool-calling agent"
         description="Ask questions against the local Zoho mirror and watch the tool trace as it works."
       />
-      <AgentChat initialSessions={sessions} initialMessages={messages} />
+      <AgentChat
+        initialSessions={sessions}
+        initialMessages={messages}
+        initialActiveSessionId={activeSessionId}
+      />
     </AppShell>
   );
 }

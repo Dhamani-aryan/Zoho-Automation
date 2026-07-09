@@ -48,6 +48,29 @@ export async function getRecentRuns(): Promise<RecentRun[]> {
   return data as RecentRun[];
 }
 
+export type RecentChat = { id: string; title: string | null; updated_at: string };
+
+export async function getRecentChats(limit = 3): Promise<RecentChat[]> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return [];
+
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const { data, error } = await supabase
+    .from("agent_sessions")
+    .select("id,title,updated_at")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return [];
+  return data as RecentChat[];
+}
+
 export async function listRecords(
   moduleKey: RecordModuleKey,
   search: string

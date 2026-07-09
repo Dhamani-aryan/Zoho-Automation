@@ -1,16 +1,15 @@
-import { ClipboardList, Database, FileSpreadsheet, ListChecks, Table2 } from "lucide-react";
+import { ClipboardList, Database, FileSpreadsheet, ListChecks, MessageSquare, Table2 } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { ConnectionBanner } from "@/components/connection-banner";
 import { MetricCard } from "@/components/metric-card";
 import { PageHeader } from "@/components/page-header";
-import { StatusBadge } from "@/components/status-badge";
-import { getDashboardStats, getRecentRuns } from "@/lib/supabase/queries";
+import { getDashboardStats, getRecentChats } from "@/lib/supabase/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [stats, recentRuns] = await Promise.all([getDashboardStats(), getRecentRuns()]);
+  const [stats, recentChats] = await Promise.all([getDashboardStats(), getRecentChats(3)]);
 
   return (
     <AppShell>
@@ -38,40 +37,40 @@ export default async function DashboardPage() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <section className="rounded-md border border-line bg-white shadow-soft">
-          <div className="border-b border-line px-4 py-3">
-            <h2 className="text-sm font-semibold">Recent runs</h2>
+          <div className="flex items-center justify-between border-b border-line px-4 py-3">
+            <h2 className="text-sm font-semibold">Recent chats</h2>
+            <Link href="/agent" className="text-xs font-semibold text-accent hover:underline">
+              Open agent
+            </Link>
           </div>
-          {recentRuns.length > 0 ? (
-            <div className="overflow-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="bg-surface text-xs uppercase text-muted">
-                  <tr>
-                    <th className="px-4 py-3">Run</th>
-                    <th className="px-4 py-3">Kind</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentRuns.map((run) => (
-                    <tr key={run.id} className="border-t border-line">
-                      <td className="px-4 py-3 font-mono text-xs">{run.id.slice(0, 8)}</td>
-                      <td className="px-4 py-3 capitalize">{run.run_kind}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={run.status} />
-                      </td>
-                      <td className="px-4 py-3 text-muted">
-                        {new Date(run.created_at).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {recentChats.length > 0 ? (
+            <ul className="divide-y divide-line">
+              {recentChats.map((chat) => (
+                <li key={chat.id}>
+                  <Link
+                    href={`/agent?session=${chat.id}`}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-surface"
+                  >
+                    <MessageSquare className="h-4 w-4 shrink-0 text-muted" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        {chat.title || "New agent chat"}
+                      </div>
+                      <div className="text-xs text-muted">
+                        {new Date(chat.updated_at).toLocaleString()}
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
           ) : (
             <div className="px-4 py-10 text-sm text-muted">
-              No batch runs yet. The V2 agent can already answer from the local mirror; saved
-              preview runs remain here for batch workflows.
+              No agent chats yet.{" "}
+              <Link href="/agent" className="font-semibold text-accent hover:underline">
+                Start one
+              </Link>
+              .
             </div>
           )}
         </section>
