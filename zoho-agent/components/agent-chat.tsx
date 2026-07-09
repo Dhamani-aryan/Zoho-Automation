@@ -486,7 +486,7 @@ export function AgentChat({
     await runTurn(content);
   }
 
-  // Stop the current turn (client-side abort; the input re-enables immediately).
+  // Stop watching the current turn; the server turn finishes in the background.
   function stopStreaming() {
     abortRef.current?.abort();
   }
@@ -695,8 +695,8 @@ export function AgentChat({
                 type="button"
                 onClick={stopStreaming}
                 className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
-                title="Stop"
-                aria-label="Stop generating"
+                title="Stop watching; the agent finishes in the background"
+                aria-label="Stop watching; agent finishes in background"
               >
                 <Square className="h-4 w-4" fill="currentColor" />
               </button>

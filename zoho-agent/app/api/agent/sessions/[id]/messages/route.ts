@@ -1,5 +1,8 @@
 import { requireApiRole } from "@/lib/auth/guards";
 import { runAgentTurn, type AgentStreamEvent } from "@/lib/agent/loop";
+import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
+import { turnClaimDecision } from "@/lib/agent/turn-lock";
 
 function encodeEvent(event: AgentStreamEvent) {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -18,7 +21,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const { data: session, error: sessionError } = await auth.supabase
     .from("agent_sessions")
-    .select("id,user_id,status")
+    .select("id,user_id,status,turn_active_until")
     .eq("id", id)
     .single();
 
@@ -34,11 +37,63 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return Response.json({ error: "This agent session is archived." }, { status: 409 });
   }
 
+  const service = createServiceSupabaseClient();
+  if (!service) {
+    return Response.json({ error: "Supabase service role is not configured." }, { status: 500 });
+  }
+
+  const nowMs = Date.now();
+  const decision = turnClaimDecision({
+    currentActiveUntil: (session as { turn_active_until?: string | null }).turn_active_until,
+    nowMs,
+    turnTimeoutMs: agentTurnTimeoutMs()
+  });
+  if (!decision.claimable) {
+    return Response.json(
+      {
+        error:
+          "This chat already has an agent turn running. Wait for it to finish, or start a new chat for a separate request.",
+        active_until: decision.activeUntilIso
+      },
+      { status: 409 }
+    );
+  }
+
+  const nowIso = new Date(nowMs).toISOString();
+  const { data: claimedTurn, error: claimError } = await service
+    .from("agent_sessions")
+    .update({ turn_active_until: decision.activeUntilIso })
+    .eq("id", id)
+    .eq("user_id", auth.user.id)
+    .eq("status", "active")
+    .or(`turn_active_until.is.null,turn_active_until.lte.${nowIso}`)
+    .select("id")
+    .maybeSingle();
+
+  if (claimError) {
+    return Response.json({ error: claimError.message }, { status: 500 });
+  }
+  if (!claimedTurn) {
+    return Response.json(
+      {
+        error:
+          "This chat already has an agent turn running. Wait for it to finish, or start a new chat for a separate request.",
+        active_until: decision.activeUntilIso
+      },
+      { status: 409 }
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const emit = (event: AgentStreamEvent) => {
-        controller.enqueue(encoder.encode(encodeEvent(event)));
+        try {
+          controller.enqueue(encoder.encode(encodeEvent(event)));
+        } catch {
+          // The browser may stop watching the stream, but the server turn still
+          // finishes and clears the lock in finally.
+        }
       };
 
       try {
@@ -54,7 +109,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         console.error("[agent-message]", message, error);
         emit({ type: "error", error: message });
       } finally {
-        controller.close();
+        await service
+          .from("agent_sessions")
+          .update({ turn_active_until: null })
+          .eq("id", id)
+          .eq("user_id", auth.user.id);
+        try {
+          controller.close();
+        } catch {
+          // Stream already closed by the client.
+        }
       }
     }
   });

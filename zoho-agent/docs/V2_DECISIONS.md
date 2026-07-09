@@ -1,5 +1,18 @@
 # V2 Decisions
 
+## Phase F Step 0 Checkpoint: one active turn per session (2026-07-10, build)
+
+Built the Phase E carry-over before starting Phase F features. This is localhost-only work; no hosting, deploy config, production URL, manifest URL, or Vercel change was made.
+
+Implemented server-side one-turn-per-session locking:
+- Added supabase/2026_v2_phase_f.sql with agent_sessions.turn_active_until and an index for active locks.
+- Added lib/agent/turn-lock.ts with pure turnActiveUntil and turnClaimDecision helpers. The self-healing lock window is current turn timeout plus the max approval wait.
+- POST /api/agent/sessions/[id]/messages now claims the session with a guarded update before streaming. If an unexpired turn is active it returns 409 and does not start a second loop.
+- The lock is cleared in finally after runAgentTurn exits. If the server crashes, the timestamp expiry lets a later request reclaim the session.
+- The Stop button is labeled as "Stop watching; the agent finishes in the background" so client abort behavior is honest.
+
+Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 9/9 after rerunning unsandboxed for the known Windows .tmp write restriction.
+
 ## Phase E review (2026-07-09, chat review)
 
 Verdict: approved with ONE required follow-up before the Phase E done gate; no slop found. Verified independently from the committed tree (git archive of 15bb0c9 into /tmp; the mount served NUL-padded stale working-tree copies, so the object store was the review source): tsc --noEmit clean; tier2 14/14, orchestrator 8/8, records 5/5 - matching the build log's claims exactly. Grep-proofs re-run and hold: page-runner-write.ts is still the only CRM PUT/actions path; still exactly two tool_jobs INSERT sites, both calling assertTier2JobInsertAllowed; claim-route approval check intact; purge is reachable ONLY from the admin button behind window.confirm, never on load.

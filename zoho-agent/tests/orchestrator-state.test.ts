@@ -18,6 +18,7 @@ import {
   runningJobStalePatch,
   sweepCutoffs
 } from "../lib/agent/sweeps";
+import { turnActiveUntil, turnClaimDecision } from "../lib/agent/turn-lock";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -141,4 +142,35 @@ test("agent sweep cutoffs preserve Phase E retention windows", () => {
   });
   assert.equal(queuedJobExpiryPatch("2026-07-09T12:30:00.000Z").status, "expired");
   assert.equal(runningJobStalePatch("2026-07-09T12:30:00.000Z").status, "failed");
+});
+
+test("agent turn lock claims empty or expired sessions only", () => {
+  const nowMs = Date.parse("2026-07-10T09:00:00.000Z");
+  const turnTimeoutMs = 3 * 60 * 1000;
+  const approvalWaitMs = 15 * 60 * 1000;
+  const expectedUntil = "2026-07-10T09:18:00.000Z";
+
+  assert.equal(turnActiveUntil({ nowMs, turnTimeoutMs, approvalWaitMs }), expectedUntil);
+  assert.deepEqual(turnClaimDecision({ currentActiveUntil: null, nowMs, turnTimeoutMs, approvalWaitMs }), {
+    claimable: true,
+    activeUntilIso: expectedUntil
+  });
+  assert.deepEqual(
+    turnClaimDecision({
+      currentActiveUntil: "2026-07-10T08:59:59.000Z",
+      nowMs,
+      turnTimeoutMs,
+      approvalWaitMs
+    }),
+    { claimable: true, activeUntilIso: expectedUntil }
+  );
+  assert.deepEqual(
+    turnClaimDecision({
+      currentActiveUntil: "2026-07-10T09:05:00.000Z",
+      nowMs,
+      turnTimeoutMs,
+      approvalWaitMs
+    }),
+    { claimable: false, activeUntilIso: "2026-07-10T09:05:00.000Z" }
+  );
 });
