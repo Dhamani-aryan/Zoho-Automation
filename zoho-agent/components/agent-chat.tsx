@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Plus, Send, ShieldAlert, Trash2, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Loader2, Plus, Send, ShieldAlert, Trash2, Wrench, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 type AgentSession = {
@@ -149,6 +149,48 @@ function linkifyContent(text: string, linkClass: string): ReactNode[] {
   }
   if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
   return nodes.length > 0 ? nodes : [text];
+}
+
+// Collapsible tool-trace row (ChatGPT-style): shows "Working / Worked / Failed"
+// with the raw tool output hidden behind a click.
+function ToolTrace({
+  item
+}: {
+  item: { name: string; tier?: number | null; status?: string; result?: unknown; args: unknown };
+}) {
+  const [open, setOpen] = useState(false);
+  const status = item.status ?? "";
+  const running = status === "" || status === "called" || status === "queued" || status === "running";
+  const failed = status === "failed";
+  const label = failed ? "Failed" : running ? "Working" : "Worked";
+  const Chevron = open ? ChevronDown : ChevronRight;
+
+  return (
+    <div className="border border-line bg-surface">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-white"
+        aria-expanded={open}
+      >
+        <Chevron className="h-3.5 w-3.5 shrink-0 text-muted" />
+        {running ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted" />
+        ) : (
+          <Wrench className="h-3.5 w-3.5 shrink-0 text-muted" />
+        )}
+        <span className={failed ? "text-red-600" : running ? "text-muted" : "text-emerald-700"}>{label}</span>
+        <span className="font-normal text-muted">
+          Tier {item.tier ?? 0} tool: {item.name}
+        </span>
+      </button>
+      {open ? (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-line px-3 py-2 text-xs text-ink">
+          {shortJson(item.result ?? item.args)}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 export function AgentChat({
@@ -487,18 +529,7 @@ export function AgentChat({
           ) : (
             timeline.map((item) => {
               if (item.kind === "tool") {
-                return (
-                  <div key={item.id} className="border border-line bg-surface p-3">
-                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0] text-muted">
-                      <Wrench className="h-3.5 w-3.5" />
-                      Tier {item.tier ?? 0} tool: {item.name}
-                      {item.status ? <span className="text-[11px] normal-case text-muted">({item.status})</span> : null}
-                    </div>
-                    <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-xs text-ink">
-                      {shortJson(item.result ?? item.args)}
-                    </pre>
-                  </div>
-                );
+                return <ToolTrace key={item.id} item={item} />;
               }
               if (item.kind === "approval") {
                 // NOT gated on `loading`: the agent turn is intentionally still
