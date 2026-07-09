@@ -6,10 +6,11 @@ Owner: Aryan Dhamani (aryan@klouddata.com), KloudData.
 All project files live in `G:\Zoho Automation` (a connected/mounted folder).
 
 ## Read these first, in order
-- `G:\Zoho Automation\ZOHO_AGENT_WORK_PLAN.md` — master build guide + live status
-- `G:\Zoho Automation\PROJECT_OVERVIEW.md` — plain-English overview
-- `G:\Zoho Automation\zoho-agent\docs\PHASE_2_DECISIONS.md` and `PHASE_1_DECISIONS.md` — engineering decision logs
-- `G:\Zoho Automation\workflows\` (5 specs — Phase 3 spec: `SPEC_phase3_extension_live_execution.md`) and `G:\Zoho Automation\reference\ZOHO_SESSION_API_REFERENCE.md`
+- `workflows/SPEC_v2_tool_agent_migration.md` — the CURRENT roadmap (v2 tool-calling agent) + per-phase specs it indexes in §10
+- `zoho-agent/docs/V2_DECISIONS.md` — live decision/review log (newest entries at top); binding engineering invariants
+- `ZOHO_AGENT_WORK_PLAN.md` — original build guide; §2 locked decisions + §3 environment facts still bind
+- `reference/ZOHO_SESSION_API_REFERENCE.md` — Zoho session-API mechanics
+- Older context when needed: `PROJECT_OVERVIEW.md`, `zoho-agent/docs/PHASE_1/2/3_DECISIONS.md`, remaining `workflows/` specs
 
 ## What it is
 An internal web app for a 2–4 person sales-ops team to run repetitive Zoho CRM work (schedule outreach emails, create/complete tasks, update deal/account/contact fields, change owners, add tags) by typing a plain-English command → seeing a validated preview → approving → the tool executes inside each user's own logged-in Zoho session, verifies, and reports. Human-in-control: preview + approval always; no deletes; emails scheduled not sent; no Zoho passwords stored.
@@ -27,7 +28,14 @@ Work = small toggleable "action blocks" (create_task, complete_task, update_deal
 ## Working method
 Codex (the coding agent) writes the code locally; the chat writes specs, reviews Codex's output for quality/"slop," fixes issues, and keeps docs updated. Git commits must be authored as Aryan Dhamani (his personal email `dhamaniaryan4@gmail.com` is the one in use — confirmed 2026-07-05) with NO AI co-author. Note: the repo's `.git` is on a Windows drive, so git often must be run in Aryan's PowerShell, not the agent sandbox.
 
-## Immediate next steps
-**PIVOT (2026-07-05):** Aryan decided to migrate the primary UX to a tool-calling agent (chat; tools for DB search, live Zoho reads through the extension, DB sync, approval-gated writes). The complete migration plan for Codex is `workflows/SPEC_v2_tool_agent_migration.md` — read it before anything else; work proceeds in its Phases A–E, logged to `zoho-agent/docs/V2_DECISIONS.md`. The batch run pipeline and the Phase 3 extension work (steps 1–5, built + reviewed) are retained and reused. CRM writes keep the human approval gate.
+## Immediate next steps (updated 2026-07-08)
+**PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes (Phase D, not built yet). Batch run pipeline retained for presets. CRM writes keep the human approval gate — always.
+
+State: **Phases A, B, C built by Codex and chat-reviewed** (fixes applied each round — see V2_DECISIONS review sections). Live reads work end to end (CSP fix: MAIN-world executeScript).
+1. Aryan: live scenario-2 sync test (fresh tag on demo accounts → agent pulls them in → re-run shows unchanged).
+2. Then Codex builds Phase D from `workflows/SPEC_v2_phase_d_gated_writes.md`; chat reviews (expect hard scrutiny on the approval gate).
+3. Then Phases E, F per their specs.
+
+Chat's role: write/maintain specs, review every Codex phase for defects/races/slop (verify independently — `git show` + typecheck from the sandbox via /tmp copies; the mount's view of fresh writes lags), fix small defects directly, keep V2_DECISIONS + this file current. Sandbox CANNOT run git writes or Windows-installed binaries (esbuild/SWC) — builds and commits happen in Aryan's PowerShell; always end reviews with the exact `git add/commit` commands.
 
 Confirm you've read the files above before proceeding.
