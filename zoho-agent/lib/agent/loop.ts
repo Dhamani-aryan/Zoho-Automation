@@ -21,6 +21,7 @@ import {
 } from "@/lib/agent/tier2-tools";
 import {
   isUiTool,
+  type PreparedUiWorkflow,
   UI_TOOL_DEFINITIONS,
   uiStepTeachModeDecision,
   validateUiToolCall
@@ -31,6 +32,7 @@ import {
   resolvedFromLiveRecord,
   waitForApprovalJob,
   waitForApprovalOutcome,
+  type ApprovalSummaryRecord,
   type LiveRecordFetch
 } from "@/lib/agent/tier2";
 import { getLLMProviderForUser } from "@/lib/llm";
@@ -78,7 +80,7 @@ When a search returns no results, do NOT stop after one attempt and report "not 
 If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
 You CAN give direct Zoho record links; never say you lack a tool for them. Mirror rows from db_get_record / db_search_records include zoho_url - prefer it. Otherwise compose the canonical URL from the record's Zoho id: https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id} - note Deals use "Potentials" in URLs even though the API module is Deals.
 CRM writes are available through approval-gated tools: zoho_update_fields, zoho_change_owner, zoho_add_tags, zoho_remove_tags. Every such call pauses for the user to approve a before/after card in chat before anything is written; nothing is written until they approve. Only propose a write the user actually asked for, resolve the exact record(s) first (search the mirror or read live Zoho), and put the smallest correct change in the tool call. If the user rejects the card, acknowledge it and do not retry the same write unless they ask. Stage edits are admin-only and Deal_Name cannot be changed. Never claim a write succeeded until the tool result confirms it (verified read-back). Deletes, record creation, and UI actions remain unavailable.
-When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. Outside teach mode, do not call ui_step. UI workflow saving and replay are not available until later Phase F steps.
+When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. Outside teach mode, do not call ui_step. When the user asks to save a taught workflow, call save_ui_workflow with the verified steps, params, and effect; it requires a confirmation card before the workflow is saved. You may call list_ui_workflows to inspect saved workflows. UI workflow replay is not available until later Phase F steps.
 When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
 Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
 
@@ -275,6 +277,155 @@ async function handleTier2Call({
   };
 }
 
+type UiWorkflowRow = {
+  name: string;
+  description: string | null;
+  params: unknown;
+  effect: "read" | "write";
+  trusted: boolean;
+  version: number;
+  updated_at: string;
+};
+
+function workflowSummary(workflow: PreparedUiWorkflow, existingVersion: number | null): ApprovalSummaryRecord[] {
+  return [
+    {
+      zoho_id: "ui_workflow",
+      name: workflow.name,
+      before: {
+        version: existingVersion,
+        trusted: false
+      },
+      after: {
+        effect: workflow.effect,
+        steps: workflow.steps.length,
+        params: workflow.params.map((param) => param.name).join(", ") || "(none)"
+      }
+    }
+  ];
+}
+
+async function listUiWorkflows(service: SupabaseClient) {
+  const { data, error } = await service
+    .from("ui_workflows")
+    .select("name,description,params,effect,trusted,version,updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return {
+    workflows: ((data ?? []) as UiWorkflowRow[]).map((workflow) => ({
+      name: workflow.name,
+      description: workflow.description ?? "",
+      params: workflow.params,
+      effect: workflow.effect,
+      trusted: workflow.trusted,
+      version: workflow.version,
+      updated_at: workflow.updated_at
+    }))
+  };
+}
+
+async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
+  const { data: sessionRow, error } = await service
+    .from("agent_sessions")
+    .select("teach_mode")
+    .eq("id", sessionId)
+    .eq("user_id", user.id)
+    .single();
+  if (error) throw error;
+  const decision = uiStepTeachModeDecision((sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true);
+  if (!decision.allowed) throw new Error(decision.reason);
+}
+
+async function saveUiWorkflow({
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  await ensureTeachMode(service, user, sessionId);
+  const validatedCall = validateUiToolCall(call);
+  const workflow = validatedCall.args as PreparedUiWorkflow;
+
+  const { data: existing, error: existingError } = await service
+    .from("ui_workflows")
+    .select("id,version")
+    .eq("name", workflow.name)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  const existingVersion = (existing as { id: string; version: number } | null)?.version ?? null;
+  const summary = workflowSummary(workflow, existingVersion);
+  const { data: approval, error: approvalError } = await service
+    .from("pending_approvals")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      tool_name: "save_ui_workflow",
+      args: workflow,
+      summary
+    })
+    .select("id")
+    .single();
+  if (approvalError) throw approvalError;
+
+  const approvalId = (approval as { id: string }).id;
+  await emit({
+    type: "approval_required",
+    call_id: call.id,
+    approval_id: approvalId,
+    tool_name: "save_ui_workflow",
+    summary
+  });
+
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: "rejected", error: "The user rejected this workflow save." },
+      pausedMs: decision.waitedMs
+    };
+  }
+  if (decision.outcome === "expired") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: "expired", error: "The workflow save approval expired." },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  const payload = {
+    name: workflow.name,
+    description: workflow.description,
+    params: workflow.params,
+    steps: workflow.steps,
+    effect: workflow.effect,
+    trusted: false,
+    version: (existingVersion ?? 0) + 1
+  };
+  const query = existingVersion
+    ? service.from("ui_workflows").update(payload).eq("name", workflow.name)
+    : service.from("ui_workflows").insert({ ...payload, created_by: user.id });
+
+  const { data: saved, error: saveError } = await query
+    .select("name,effect,trusted,version,updated_at")
+    .single();
+  if (saveError) throw saveError;
+
+  return {
+    ok: true,
+    result: { approval_id: approvalId, status: "saved", workflow: saved },
+    pausedMs: decision.waitedMs
+  };
+}
+
 export async function runAgentTurn({
   supabase,
   user,
@@ -401,24 +552,24 @@ export async function runAgentTurn({
           }
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");
-          const { data: sessionRow, error: teachModeError } = await service
-            .from("agent_sessions")
-            .select("teach_mode")
-            .eq("id", sessionId)
-            .eq("user_id", user.id)
-            .single();
-          if (teachModeError) throw teachModeError;
-          const decision = uiStepTeachModeDecision((sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true);
-          if (!decision.allowed) throw new Error(decision.reason);
-
-          const validatedCall = validateUiToolCall(call);
-          result = await runBridgedTool({
-            service,
-            user,
-            sessionId,
-            call: validatedCall,
-            onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-          });
+          if (call.name === "list_ui_workflows") {
+            result = await listUiWorkflows(service);
+          } else if (call.name === "save_ui_workflow") {
+            const saved = await saveUiWorkflow({ service, user, sessionId, call, emit });
+            ok = saved.ok;
+            result = saved.result;
+            pausedMs += saved.pausedMs;
+          } else {
+            await ensureTeachMode(service, user, sessionId);
+            const validatedCall = validateUiToolCall(call);
+            result = await runBridgedTool({
+              service,
+              user,
+              sessionId,
+              call: validatedCall,
+              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+            });
+          }
         } else if (isTier2Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for approvals.");
           const gated = await handleTier2Call({ supabase, service, user, sessionId, call, emit });

@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase F Step 3 Checkpoint: save and list UI workflows (2026-07-10, build)
+
+Implemented the taught-workflow save surface after committing Step 2:
+- Extended lib/agent/ui-tools.ts with save_ui_workflow and list_ui_workflows definitions plus Zod validation for workflow steps, params, and effect.
+- Workflow params are allowed only in value/url/text-like slots. Selectors containing parameter braces are rejected before any confirmation card is shown.
+- Any workflow containing click, fill_field, or press_key must be saved as effect=write. This prevents a mutating CRM workflow from being mislabeled as a read replay.
+- runAgentTurn now lists saved workflows from ui_workflows as a DB read. Saving requires teach mode, creates a save_ui_workflow confirmation card, waits for approve/reject/expiry, and only then upserts ui_workflows with trusted=false and a version bump.
+- POST /api/agent/approvals/[id] treats save_ui_workflow approvals as local confirmations and does not enqueue a tool_jobs row. CRM write approvals still use the existing Phase D job path with approval_id.
+
+Verification for this step: npm run typecheck passed; npm run test:orchestrator passed 11/11 after rerunning unsandboxed for the known Windows .tmp write restriction.
+
 ## Phase F Step 0 Checkpoint: one active turn per session (2026-07-10, build)
 
 Built the Phase E carry-over before starting Phase F features. This is localhost-only work; no hosting, deploy config, production URL, manifest URL, or Vercel change was made.

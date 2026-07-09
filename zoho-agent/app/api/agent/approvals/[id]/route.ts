@@ -8,8 +8,11 @@ type DecisionBody = { decision?: unknown };
 // POST /api/agent/approvals/:id  { decision: "approve" | "reject" }
 // - session-authenticated; only the approval's own user may decide it
 // - the flip is an atomic status-guarded update (pending -> approved|rejected)
-// - on approve this is the ONE place a Tier-2 write tool_job is created, always
-//   carrying approval_id (assertTier2JobInsertAllowed enforces it)
+// - on approve for CRM write tools this is the ONE place a Tier-2 write
+//   tool_job is created, always carrying approval_id
+//   (assertTier2JobInsertAllowed enforces it)
+// - save_ui_workflow approvals are local confirmations; they do not enqueue an
+//   extension job, and the waiting agent loop performs the local upsert.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(["admin", "operator"]);
   if ("error" in auth) return auth.error;
@@ -70,7 +73,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       metadata: { approval_id: id, session_id: decided.session_id, tool_name: decided.tool_name, decision }
     });
 
-    if (decision === "approve") {
+    if (decision === "approve" && decided.tool_name !== "save_ui_workflow") {
       // The immutable approved snapshot is executed EXACTLY as approved.
       assertTier2JobInsertAllowed(decided.tool_name as string, id);
       const { error: jobError } = await service.from("tool_jobs").insert({

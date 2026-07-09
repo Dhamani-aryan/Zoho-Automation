@@ -19,7 +19,7 @@ import {
   sweepCutoffs
 } from "../lib/agent/sweeps";
 import { turnActiveUntil, turnClaimDecision } from "../lib/agent/turn-lock";
-import { uiStepTeachModeDecision, validateUiToolCall } from "../lib/agent/ui-tools";
+import { prepareUiWorkflow, uiStepTeachModeDecision, validateUiToolCall } from "../lib/agent/ui-tools";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -204,5 +204,40 @@ test("ui_step validation and teach-mode gate are strict", () => {
         args: { step: { type: "open_url", url: "https://example.com/" } }
       }),
     /crm\.zoho\.com/
+  );
+});
+
+test("save_ui_workflow validation preserves read/write and selector safety", () => {
+  const readWorkflow = prepareUiWorkflow({
+    name: "Read Next Step",
+    description: "Read the Next Step field from a deal.",
+    effect: "read",
+    params: [{ name: "deal_id", description: "Zoho deal id", example: "123456789" }],
+    steps: [
+      { type: "open_url", url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/{deal_id}" },
+      { type: "wait_for", text: "Next Step" },
+      { type: "read_field", selector: "input[name='Next_Step']" }
+    ]
+  });
+  assert.equal(readWorkflow.effect, "read");
+
+  assert.throws(
+    () =>
+      prepareUiWorkflow({
+        name: "Complete Task",
+        effect: "read",
+        steps: [{ type: "click", text: "Mark as Completed" }]
+      }),
+    /must be saved with effect='write'/
+  );
+
+  assert.throws(
+    () =>
+      prepareUiWorkflow({
+        name: "Bad Selector",
+        effect: "read",
+        steps: [{ type: "read_field", selector: "input[name='{field_name}']" }]
+      }),
+    /params cannot be used in selectors/
   );
 });
