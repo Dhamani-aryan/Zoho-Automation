@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Plus, Send, ShieldAlert, Trash2, Wrench, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 type AgentSession = {
   id: string;
@@ -111,6 +111,44 @@ function shortJson(value: unknown) {
 
 function titleFor(session: AgentSession) {
   return session.title || "New agent chat";
+}
+
+// Splits message text into plain runs and clickable links. Bare http(s) URLs
+// become <a> links; trailing sentence punctuation is left out of the href.
+const URL_RE = /(https?:\/\/[^\s<]+)/g;
+
+function linkifyContent(text: string, linkClass: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  for (const match of text.matchAll(URL_RE)) {
+    const start = match.index ?? 0;
+    let url = match[0];
+    // Don't swallow trailing punctuation that is almost certainly not part of
+    // the URL (e.g. "see https://x.com/a." or "(https://x.com/a)").
+    let trailing = "";
+    const trailMatch = url.match(/[.,;:!?)\]}'"]+$/);
+    if (trailMatch) {
+      trailing = trailMatch[0];
+      url = url.slice(0, url.length - trailing.length);
+    }
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start));
+    nodes.push(
+      <a
+        key={`link-${key++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={linkClass}
+      >
+        {url}
+      </a>
+    );
+    if (trailing) nodes.push(trailing);
+    lastIndex = start + match[0].length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length > 0 ? nodes : [text];
 }
 
 export function AgentChat({
@@ -475,7 +513,12 @@ export function AgentChat({
                     item.kind === "user" ? "ml-auto bg-ink text-white" : "bg-surface text-ink"
                   }`}
                 >
-                  {item.content}
+                  {linkifyContent(
+                    item.content,
+                    item.kind === "user"
+                      ? "underline underline-offset-2 hover:opacity-80 break-all"
+                      : "text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all"
+                  )}
                 </div>
               );
             })
