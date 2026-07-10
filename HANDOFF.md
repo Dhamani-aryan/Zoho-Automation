@@ -10,6 +10,7 @@ All project files live in `G:\Zoho Automation` (a connected/mounted folder).
 - `zoho-agent/docs/V2_DECISIONS.md` — live decision/review log (newest entries at top); binding engineering invariants
 - `ZOHO_AGENT_WORK_PLAN.md` — original build guide; §2 locked decisions + §3 environment facts still bind
 - `reference/ZOHO_SESSION_API_REFERENCE.md` — Zoho session-API mechanics
+- `workflows/SPEC_v2_phase_g_autonomous_agent.md` — CURRENT phase: task autonomy + browser_eval + per-task approval + skill guides (decision record in §0; HeySnap architecture reference in `reference/heysnap/`)
 - Older context when needed: `PROJECT_OVERVIEW.md`, `zoho-agent/docs/PHASE_1/2/3_DECISIONS.md`, remaining `workflows/` specs
 
 ## What it is
@@ -32,9 +33,10 @@ Codex (the coding agent) writes the code locally; the chat writes specs, reviews
 **PIVOT (2026-07-05):** primary UX is now a tool-calling chat agent (`/agent`): Tier-0 DB tools, Tier-1 live Zoho reads via the Chrome extension job bridge + mirror sync, Tier-2 approval-gated Zoho writes, and (Phase F) teachable UI workflows. Batch run pipeline retained for presets. CRM writes keep the human approval gate - always. **Hosting: localhost only for now — no Vercel work until the app is proven locally (Aryan, 2026-07-09).**
 
 State: **Phases A–E built, reviewed, live-accepted (E's turn-lock follow-up landed as Phase F step 0). Phase F BUILT (Codex, ed1ce7a..4d0281d; recorder mode deferred, logged) and CHAT-REVIEWED 2026-07-10: approved pending live acceptance.** Review verified independently from the commit (tsc clean; orchestrator 13/13, tier2 15/15 incl. reviewer test, records 5/5; all gate grep-proofs hold; localhost boundary respected; no slop). Two reviewer fixes applied: replay results now report ok only for fully verified replays (no "Worked" on a mid-step failure), and write-effect ui_workflow jobs get the same claim-route approval check as Tier-2 writes + extension refuses unapproved mutating-step replays regardless of the effect label. See V2_DECISIONS "Phase F review".
-1. Aryan: run `zoho-agent/supabase/2026_v2_phase_f.sql` in Supabase FIRST, then lint/build/build:extension/test:tier2 in PowerShell, reload the extension, restart the server.
-2. Aryan: Phase F live acceptance — teach a read workflow once, replay unaided on a different record; a write-effect workflow replays only via approval card; ui_step outside teach mode errors; turn lock 409s a concurrent message; step failure stops with screenshot evidence. Plus any remaining V2_TEST_CHECKLIST items + the one-day acceptance.
-3. Then: recorder mode (deferred Phase F stretch) or team rollout prep (Vercel deploy + onboarding) when Aryan lifts the localhost boundary.
+**PHASE G (2026-07-10, Aryan's decision after HeySnap comparison — see V2_DECISIONS "DECISION: Phase G" and `workflows/SPEC_v2_phase_g_autonomous_agent.md`):** task-level autonomy, full `browser_eval` (supersedes the no-arbitrary-code rule — Aryan accepted the risk knowingly), approval moves to ONE card per task (the "preview + approve before CRM changes" rule stands, per task not per action), workflows become agent-authored skill guides. Phase F live acceptance is folded into Phase G's done-when.
+1. Codex: build Phase G per the spec's §6 order; stop for chat review (gate/budget/audit focus per spec §8).
+2. Aryan: Phase G live acceptance (spec §7 — the 50-email one-card scenario, teach-once guide authorship, eval card path, Stop abort).
+3. Then: recorder mode or team rollout prep (Vercel + onboarding) when Aryan lifts the localhost boundary.
 
 Chat's role: write/maintain specs, review every Codex phase for defects/races/slop (verify independently — `git show` + typecheck from the sandbox via /tmp copies; the mount's view of fresh writes lags), fix small defects directly, keep V2_DECISIONS + this file current. Sandbox CANNOT run git writes or Windows-installed binaries (esbuild/SWC) — builds and commits happen in Aryan's PowerShell; always end reviews with the exact `git add/commit` commands.
 
