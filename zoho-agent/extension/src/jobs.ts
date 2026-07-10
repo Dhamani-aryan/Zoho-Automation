@@ -13,7 +13,11 @@ const ACTIVE_POLL_MS = 1500;
 const IDLE_POLL_MS = 15000;
 const IDLE_BACKOFF_AFTER_MS = 5 * 60 * 1000;
 const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org890324941/tab/Potentials/custom-view/6834250000000087545/list";
-const AGENT_WINDOW_KEYS = { agentWindowId: null as number | null, agentTabId: null as number | null };
+const AGENT_WINDOW_KEYS = {
+  agentWindowId: null as number | null,
+  agentTabId: null as number | null,
+  agentWindowDedicated: false
+};
 
 let inFlight = false;
 let idleSince = Date.now();
@@ -29,20 +33,29 @@ function crmTabs(): Promise<chrome.tabs.Tab[]> {
   });
 }
 
-function storedAgentTarget(): Promise<{ agentWindowId: number | null; agentTabId: number | null }> {
+function storedAgentTarget(): Promise<{
+  agentWindowId: number | null;
+  agentTabId: number | null;
+  agentWindowDedicated: boolean;
+}> {
   return new Promise((resolve) => {
     chrome.storage.local.get(AGENT_WINDOW_KEYS, (items) => {
       resolve({
         agentWindowId: typeof items.agentWindowId === "number" ? items.agentWindowId : null,
-        agentTabId: typeof items.agentTabId === "number" ? items.agentTabId : null
+        agentTabId: typeof items.agentTabId === "number" ? items.agentTabId : null,
+        agentWindowDedicated: items.agentWindowDedicated === true
       });
     });
   });
 }
 
-function saveAgentTarget(agentWindowId: number | null, agentTabId: number | null): Promise<void> {
+function saveAgentTarget(
+  agentWindowId: number | null,
+  agentTabId: number | null,
+  agentWindowDedicated: boolean
+): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.set({ agentWindowId, agentTabId }, resolve);
+    chrome.storage.local.set({ agentWindowId, agentTabId, agentWindowDedicated }, resolve);
   });
 }
 
@@ -68,16 +81,17 @@ function initialUrlForJob(job: ToolJob) {
   return AGENT_WINDOW_HOME;
 }
 
-async function usableStoredTab() {
+async function usableStoredTab(requireDedicated: boolean) {
   const stored = await storedAgentTarget();
   if (typeof stored.agentTabId !== "number") return null;
+  if (requireDedicated && !stored.agentWindowDedicated) return null;
   try {
     const tab = await chrome.tabs.get(stored.agentTabId);
     if (typeof tab.id === "number" && isCrmUrl(tab.url)) return tab;
   } catch {
     // The user may have closed the dedicated window; create a fresh one below.
   }
-  await saveAgentTarget(null, null);
+  await saveAgentTarget(null, null, false);
   return null;
 }
 
@@ -85,17 +99,21 @@ async function createAgentWindow(url: string, focus: boolean) {
   const created = await chrome.windows.create({ url, focused: focus, type: "normal" });
   const tab = created.tabs?.find((item) => typeof item.id === "number") ?? null;
   const tabId = tab?.id ?? null;
-  await saveAgentTarget(created.id ?? null, tabId);
+  await saveAgentTarget(created.id ?? null, tabId, true);
   if (tabId) await waitForTabComplete(tabId);
   return tabId ? await chrome.tabs.get(tabId) : null;
 }
 
-// UI jobs drive the visible page (and screenshots need the active tab of the
-// focused window), so they focus the dedicated window. API session jobs only
-// need SOME crm.zoho.com page context - they reuse a tab QUIETLY and never
-// steal the user's focus mid-typing.
-function isUiJob(job: ToolJob) {
-  return job.tool_name === "ui_step" || job.tool_name === "ui_workflow";
+// Watched browser jobs drive or inspect the visible page, so they always use
+// the dedicated agent window. Deterministic API session jobs can still reuse a
+// CRM tab quietly without stealing focus.
+function isWatchedBrowserJob(job: ToolJob) {
+  return (
+    job.tool_name === "ui_step" ||
+    job.tool_name === "ui_workflow" ||
+    job.tool_name === "browser_observe" ||
+    job.tool_name === "browser_eval"
+  );
 }
 
 async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
@@ -402,8 +420,8 @@ async function focusTab(tab: chrome.tabs.Tab) {
 }
 
 async function crmTabForJob(job: ToolJob) {
-  const focus = isUiJob(job);
-  const stored = await usableStoredTab();
+  const focus = isWatchedBrowserJob(job);
+  const stored = await usableStoredTab(focus);
   if (stored?.id) {
     if (focus) await focusTab(stored);
     return stored;
@@ -422,7 +440,7 @@ async function crmTabForJob(job: ToolJob) {
   const tabs = await crmTabs();
   const existing = tabs.find((tab) => typeof tab.id === "number") ?? null;
   if (existing?.id) {
-    await saveAgentTarget(existing.windowId ?? null, existing.id);
+    await saveAgentTarget(existing.windowId ?? null, existing.id, false);
     if (focus) await focusTab(existing);
     return existing;
   }

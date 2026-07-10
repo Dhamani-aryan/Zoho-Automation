@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase G live defect fix: browser eval/observe require the dedicated Chrome window (2026-07-10, build)
+
+Live composer retry used the user's ordinary CRM window despite the accepted requirement that visible browser work run in a separate same-profile Chrome window. Root cause: extension isUiJob classified only ui_step/ui_workflow as visible work; browser_observe/browser_eval followed the quiet API path and could adopt any CRM tab. Stored tab ids also had no marker distinguishing an extension-created agent window from an adopted ordinary tab.
+
+The extension now persists agentWindowDedicated=true only for windows it creates. ui_step, ui_workflow, browser_observe, and browser_eval all require, focus, and reuse that dedicated normal window; a legacy/adopted tab without the marker causes a fresh dedicated window to be created. Deterministic API session jobs remain quiet and may reuse an existing CRM tab without changing the visible watched-work contract. Verified npm run typecheck, npm run lint, npm run build:extension, and generated-bundle marker/job classification.
+
 ## Phase G live recovery: Home is not a composer stop condition (2026-07-10, build)
 
 Live retry observed crm.zoho.com/crm/org890324941/tab/Home/begin and stopped even though the session already contained the exact deal id/URL. Restored the canonical record navigation rule that had been logged in Phase C/D decisions but was lost during the Phase G prompt rewrite. Agent instructions now require ui_step open_url to the known canonical record, identity verification, and continuation; Home/list/wrong-page state alone is not a stop. The email guide carries the same recovery sequence and only treats a missing composer as terminal after one known-record navigation plus re-observation.
