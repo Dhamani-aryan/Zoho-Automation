@@ -1523,8 +1523,8 @@ function stringArray(value: unknown) {
 }
 
 function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?: string; fields?: string[] }) {
-  const module = moduleFromApproval(row);
-  if (!module) return { actions: [] as UndoAction[], skipped: [`${row.id}: missing supported module.`] };
+  const moduleName = moduleFromApproval(row);
+  if (!moduleName) return { actions: [] as UndoAction[], skipped: [`${row.id}: missing supported module.`] };
 
   const fieldFilter = filter?.fields ? new Set(filter.fields) : null;
   const actions: UndoAction[] = [];
@@ -1549,13 +1549,13 @@ function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?
       if (Object.keys(fields).length > 0) {
         actions.push({
           source_approval_id: row.id,
-          module,
+          module: moduleName,
           zoho_id: item.zoho_id,
           description: `Revert fields ${Object.keys(fields).join(", ")} on ${item.zoho_id}.`,
           call: {
             id: `undo-fields-${row.id}-${item.zoho_id}`,
             name: "zoho_update_fields",
-            args: { module, updates: [{ zoho_id: item.zoho_id, fields }] }
+            args: { module: moduleName, updates: [{ zoho_id: item.zoho_id, fields }] }
           }
         });
       }
@@ -1567,13 +1567,13 @@ function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?
       if (typeof owner === "string" && owner.trim() && isKnownBeforeValue(owner)) {
         actions.push({
           source_approval_id: row.id,
-          module,
+          module: moduleName,
           zoho_id: item.zoho_id,
           description: `Revert owner on ${item.zoho_id} to ${owner}.`,
           call: {
             id: `undo-owner-${row.id}-${item.zoho_id}`,
             name: "zoho_change_owner",
-            args: { module, zoho_ids: [item.zoho_id], owner_name: owner }
+            args: { module: moduleName, zoho_ids: [item.zoho_id], owner_name: owner }
           }
         });
       } else {
@@ -1591,13 +1591,13 @@ function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?
       if (addedTags.length > 0) {
         actions.push({
           source_approval_id: row.id,
-          module,
+          module: moduleName,
           zoho_id: item.zoho_id,
           description: `Remove tags ${addedTags.join(", ")} from ${item.zoho_id}.`,
           call: {
             id: `undo-add-tags-${row.id}-${item.zoho_id}`,
             name: "zoho_remove_tags",
-            args: { module, zoho_ids: [item.zoho_id], tags: addedTags }
+            args: { module: moduleName, zoho_ids: [item.zoho_id], tags: addedTags }
           }
         });
       }
@@ -1613,13 +1613,13 @@ function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?
       if (removedTags.length > 0) {
         actions.push({
           source_approval_id: row.id,
-          module,
+          module: moduleName,
           zoho_id: item.zoho_id,
           description: `Add tags ${removedTags.join(", ")} back to ${item.zoho_id}.`,
           call: {
             id: `undo-remove-tags-${row.id}-${item.zoho_id}`,
             name: "zoho_add_tags",
-            args: { module, zoho_ids: [item.zoho_id], tags: removedTags }
+            args: { module: moduleName, zoho_ids: [item.zoho_id], tags: removedTags }
           }
         });
       }

@@ -24,6 +24,16 @@ Added `undo_record` and `undo_task` agent tools. Undo reads approved `pending_ap
 
 Added an Undo task button to expanded `complete_task_order` tool reports in the chat. The button sends a normal chat message (`Undo task <id>`) so the undo remains visible in the transcript and goes through the same agent tools.
 
+## Phase G follow-up final verification (2026-07-10, build)
+
+Automated verification for section 8 items 1-7 follow-ups:
+- npm run typecheck passed.
+- npm run lint passed.
+- npm run build passed.
+- npm run build:extension passed.
+
+Stopping for chat review before declaring Phase G follow-ups done. Live acceptance remains the real localhost flow: approval cards off by default, "click Compose Email" auto-loads the email guide, browser_observe sees the compose overlay/iframe, and the KD Blitz drafts file asks only for the TBD schedule date before an auto-approved budgeted task order.
+
 ## DECISION: all approval gates OFF by default (Aryan, 2026-07-10)
 
 Follow-on from the same-day interactive-ungating decision. Aryan: "people are already giving specific instructions and there's nothing that cannot be undone so why have them." ALL approval cards are removed from the default experience - including batch task orders and Tier-2 API write cards.
