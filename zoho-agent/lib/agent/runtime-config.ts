@@ -1,4 +1,4 @@
-import { getEnv } from "@/lib/env";
+import { getEnv } from "../env";
 
 function positiveIntEnv(name: string, fallback: number) {
   const raw = getEnv(name);
@@ -11,6 +11,8 @@ export const AGENT_DEFAULT_MAX_TOOL_CALLS = 15;
 export const AGENT_DEFAULT_TURN_TIMEOUT_MS = 3 * 60 * 1000;
 export const AGENT_DEFAULT_JOB_TIMEOUT_MS = 90 * 1000;
 export const AGENT_DEFAULT_EXTENSION_LIVE_MS = 120 * 1000;
+export const TASK_ORDER_DEFAULT_MAX_TOOL_CALLS = 200;
+export const TASK_ORDER_DEFAULT_WALL_MS = 45 * 60 * 1000;
 export const DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
@@ -29,6 +31,14 @@ export function agentJobTimeoutMs() {
 
 export function extensionLiveMs() {
   return positiveIntEnv("EXTENSION_LIVE_MS", AGENT_DEFAULT_EXTENSION_LIVE_MS);
+}
+
+export function taskOrderMaxToolCalls() {
+  return positiveIntEnv("TASK_ORDER_MAX_TOOL_CALLS", TASK_ORDER_DEFAULT_MAX_TOOL_CALLS);
+}
+
+export function taskOrderWallMs() {
+  return positiveIntEnv("TASK_ORDER_WALL_MS", TASK_ORDER_DEFAULT_WALL_MS);
 }
 
 export function codexResponsesUrl() {

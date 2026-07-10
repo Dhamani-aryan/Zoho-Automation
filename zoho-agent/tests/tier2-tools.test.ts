@@ -197,9 +197,10 @@ test("approvalGatedClaimDecision gates write-effect ui_workflow jobs like Tier-2
   assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "approved").claimable, true);
 });
 
-test("extensionAcceptsWriteJob refuses a write job lacking approval_id", () => {
+test("extensionAcceptsWriteJob refuses a write job lacking approval_id or task_order_id", () => {
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", approval_id: null }), false);
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", approval_id: "a1" }), true);
+  assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", task_order_id: "o1" }), true);
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_search" }), true);
   assert.equal(isTier2WriteTool("zoho_change_owner"), true);
   assert.equal(isTier2WriteTool("zoho_get_record"), false);

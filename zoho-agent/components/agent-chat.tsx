@@ -519,8 +519,11 @@ export function AgentChat({
     await runTurn(content);
   }
 
-  // Stop watching the current turn; the server turn finishes in the background.
-  function stopStreaming() {
+  // Stop the active task order, then stop watching the current stream.
+  async function stopStreaming() {
+    if (activeSessionId) {
+      await fetch(`/api/agent/sessions/${activeSessionId}/stop`, { method: "POST" }).catch(() => undefined);
+    }
     abortRef.current?.abort();
   }
 
@@ -755,10 +758,14 @@ export function AgentChat({
             {loading ? (
               <button
                 type="button"
-                onClick={stopStreaming}
+                onClick={() => {
+                  stopStreaming().catch((err: unknown) => {
+                    setError(err instanceof Error ? err.message : "Could not stop the active task.");
+                  });
+                }}
                 className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
-                title="Stop watching; the agent finishes in the background"
-                aria-label="Stop watching; agent finishes in background"
+                title="Stop the active task"
+                aria-label="Stop the active task"
               >
                 <Square className="h-4 w-4" fill="currentColor" />
               </button>

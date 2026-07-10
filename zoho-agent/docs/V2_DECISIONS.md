@@ -1,5 +1,28 @@
 # V2 Decisions
 
+## Phase G Step 1: task orders and per-task approval scope (2026-07-10, build)
+
+Built the first Phase G slice:
+- Added supabase/2026_v2_phase_g.sql with task_orders, report storage, one active approved order per session, tool_jobs.task_order_id, and explicit approval_id drift coverage.
+- Added propose_task_order and complete_task_order. Read orders auto-approve; write orders create one task_order approval card and activate only after approval. task_order approvals do not enqueue extension jobs.
+- Added task-order budgets with env defaults TASK_ORDER_MAX_TOOL_CALLS=200 and TASK_ORDER_WALL_MS=45 min. The loop fails approved orders when tool-call, wall-clock, or record-touch budgets trip.
+- Under an approved task order, Tier-2 writes enqueue with task_order_id and skip per-call cards. Outside an order, the old per-call approval path remains unchanged.
+- The extension claim route only hands scoped write jobs to the extension when approval_id is approved or task_order_id points at an approved order. The extension refuses writes lacking both ids.
+- The chat Stop button now calls a server stop endpoint before aborting the stream; the endpoint fails active orders, expires queued scoped jobs, clears the turn lock, and audits the stop.
+
+Verification for this step: npm run typecheck passed; npm run build:extension passed; npm run test:orchestrator passed 15/15; npm run test:tier2 passed 15/15 after rerunning unsandboxed for the known Windows .tmp write restriction.
+
+## DECISION: Phase G - task autonomy, full browser_eval, per-task approval, skills-as-guides (Aryan, 2026-07-10)
+
+Context: live teaching felt like a grind (one ui_step per instruction, dictated selectors) and Aryan compared notes with HeySnap, whose hand-off docs now live in reference/heysnap/. Aryan decided, with the risk explicitly explained and accepted:
+
+1. Task-level autonomy: hand the agent a whole task (e.g. a 50-email drafts file) and it executes end to end without per-step confirmation.
+2. FULL browser_eval (arbitrary model-written JS in the logged-in CRM page). This SUPERSEDES the migration spec section 8.4 rule "no arbitrary code execution tool". Chat recommended against; Aryan chose it knowingly. Mitigations: task-order approval scope, full code in the audited trace, verification and stop conditions, crm.zoho.com-only execution.
+3. Approval granularity moves from per-action to PER TASK: one preview/approval card covering the whole task's expected changes, then unattended execution. The locked rule "preview + approval before CRM changes" stands - it is satisfied once per task. Reads stay ungated.
+4. Workflows become agent-authored skill guides (intent/method/gotchas/verification, learn-by-doing after one walkthrough), read on demand; frozen step replays demoted to legacy.
+
+Spec: workflows/SPEC_v2_phase_g_autonomous_agent.md (v1.0). Codex builds in its section 6 order; chat review will focus on the task-order gate (no eval or write job without an approval_id or an approved order id, extension-side belt included), budget enforcement, and audit completeness.
+
 ## Review: CDP input + workflows management (2026-07-10, chat review)
 
 Reviewed aad9ecf (CDP trusted UI input) and a84852f (workflows management surface). Verdict: approved, one safety edge fixed by the reviewer. Verified from the object store: tsc clean; orchestrator 14/14, tier2 15/15, records untouched; extension CRM write methods still only in page-runner-write.ts; "debugger" permission added as specced.

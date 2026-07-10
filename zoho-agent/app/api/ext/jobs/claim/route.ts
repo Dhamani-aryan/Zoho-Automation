@@ -15,6 +15,7 @@ type ToolJobRow = {
   status: "queued" | "running" | "done" | "failed" | "expired";
   created_at: string;
   approval_id: string | null;
+  task_order_id: string | null;
 };
 
 async function sweepStaleJobs(auth: Awaited<ReturnType<typeof requireExtensionAuth>>) {
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
 
     const { data: nextJob, error: nextError } = await auth.service
       .from("tool_jobs")
-      .select("id,tool_name,args,status,created_at,approval_id")
+      .select("id,tool_name,args,status,created_at,approval_id,task_order_id")
       .eq("user_id", auth.user.id)
       .eq("status", "queued")
       .order("created_at", { ascending: true })
@@ -73,20 +74,36 @@ export async function POST(request: Request) {
       nextJob.tool_name === "ui_workflow" &&
       (nextJob.args as { effect?: unknown } | null)?.effect === "write";
     if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow) {
-      const { data: approval, error: approvalError } = await auth.service
-        .from("pending_approvals")
-        .select("status")
-        .eq("id", nextJob.approval_id ?? "")
-        .maybeSingle();
-      if (approvalError) {
-        return NextResponse.json({ error: approvalError.message }, { status: 500 });
+      let taskOrderApproved = false;
+      if (nextJob.task_order_id) {
+        const { data: order, error: orderError } = await auth.service
+          .from("task_orders")
+          .select("status")
+          .eq("id", nextJob.task_order_id)
+          .eq("user_id", auth.user.id)
+          .maybeSingle();
+        if (orderError) {
+          return NextResponse.json({ error: orderError.message }, { status: 500 });
+        }
+        taskOrderApproved = (order?.status as string | undefined) === "approved";
       }
-      const decision = isWriteEffectUiWorkflow
-        ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
-        : tier2ClaimDecision(
-            { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
-            (approval?.status as string) ?? null
-          );
+      let decision = { claimable: taskOrderApproved, reason: taskOrderApproved ? "approved_task_order" : "no_task_order" };
+      if (!taskOrderApproved) {
+        const { data: approval, error: approvalError } = await auth.service
+          .from("pending_approvals")
+          .select("status")
+          .eq("id", nextJob.approval_id ?? "")
+          .maybeSingle();
+        if (approvalError) {
+          return NextResponse.json({ error: approvalError.message }, { status: 500 });
+        }
+        decision = isWriteEffectUiWorkflow
+          ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
+          : tier2ClaimDecision(
+              { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
+              (approval?.status as string) ?? null
+            );
+      }
       if (!decision.claimable) {
         await auth.service
           .from("tool_jobs")
@@ -109,7 +126,7 @@ export async function POST(request: Request) {
       .eq("id", nextJob.id)
       .eq("user_id", auth.user.id)
       .eq("status", "queued")
-      .select("id,tool_name,args,status,created_at,approval_id")
+      .select("id,tool_name,args,status,created_at,approval_id,task_order_id")
       .maybeSingle();
 
     if (claimError) {
@@ -125,7 +142,8 @@ export async function POST(request: Request) {
         id: row.id,
         tool_name: row.tool_name,
         args: row.args,
-        approval_id: row.approval_id
+        approval_id: row.approval_id,
+        task_order_id: row.task_order_id
       },
       context: {
         org_id: ZOHO_ORG_ID,

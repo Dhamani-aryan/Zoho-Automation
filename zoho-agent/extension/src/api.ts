@@ -24,6 +24,7 @@ export type ToolJob = {
   tool_name: string;
   args: Record<string, unknown>;
   approval_id?: string | null;
+  task_order_id?: string | null;
 };
 
 export type JobClaimResponse = {

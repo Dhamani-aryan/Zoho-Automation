@@ -360,7 +360,7 @@ export function tier2ClaimDecision(
 
 // (3) The extension write executor refuses any write job that arrives without
 // an approval_id (defense in depth if the server checks were ever bypassed).
-export function extensionAcceptsWriteJob(job: { tool_name: string; approval_id?: string | null }): boolean {
+export function extensionAcceptsWriteJob(job: { tool_name: string; approval_id?: string | null; task_order_id?: string | null }): boolean {
   if (!isTier2WriteTool(job.tool_name)) return true;
-  return Boolean(job.approval_id);
+  return Boolean(job.approval_id || job.task_order_id);
 }

@@ -26,6 +26,7 @@ import {
   validateUiToolCall,
   workflowEffectForSteps
 } from "../lib/agent/ui-tools";
+import { taskOrderBudgetDecision } from "../lib/agent/task-orders";
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);
@@ -179,6 +180,51 @@ test("agent turn lock claims empty or expired sessions only", () => {
       approvalWaitMs
     }),
     { claimable: false, activeUntilIso: "2026-07-10T09:05:00.000Z" }
+  );
+});
+
+test("task order budgets stop on tool, wall-clock, or record limits", () => {
+  const order = {
+    budget: { max_tool_calls: 3, max_wall_ms: 60_000, max_records_touched: 2 },
+    decided_at: "2026-07-10T09:00:00.000Z",
+    created_at: "2026-07-10T08:59:00.000Z"
+  };
+
+  assert.deepEqual(
+    taskOrderBudgetDecision({
+      order,
+      nowMs: Date.parse("2026-07-10T09:00:30.000Z"),
+      toolCalls: 2,
+      recordsTouched: 2
+    }),
+    { ok: true }
+  );
+  assert.equal(
+    taskOrderBudgetDecision({
+      order,
+      nowMs: Date.parse("2026-07-10T09:00:30.000Z"),
+      toolCalls: 3,
+      recordsTouched: 2
+    }).ok,
+    false
+  );
+  assert.equal(
+    taskOrderBudgetDecision({
+      order,
+      nowMs: Date.parse("2026-07-10T09:02:01.000Z"),
+      toolCalls: 1,
+      recordsTouched: 1
+    }).ok,
+    false
+  );
+  assert.equal(
+    taskOrderBudgetDecision({
+      order,
+      nowMs: Date.parse("2026-07-10T09:00:30.000Z"),
+      toolCalls: 1,
+      recordsTouched: 3
+    }).ok,
+    false
   );
 });
 

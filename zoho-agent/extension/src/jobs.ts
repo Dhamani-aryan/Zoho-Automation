@@ -464,8 +464,8 @@ async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
   // step could mutate state (defense in depth: do not trust the effect label
   // alone if the two ever disagree).
   const hasMutatingStep = steps.some((step) => MUTATING_UI_STEPS.has(String(step?.type ?? "")));
-  if ((job.args.effect === "write" || hasMutatingStep) && !job.approval_id) {
-    return { ok: false, error_message: "write workflow without approval refused by extension" };
+  if ((job.args.effect === "write" || hasMutatingStep) && !job.approval_id && !job.task_order_id) {
+    return { ok: false, error_message: "write workflow without approval or task order refused by extension" };
   }
 
   const workflowName = String(job.args.name ?? "ui workflow");
@@ -518,11 +518,11 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (job.tool_name === "ui_step") return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
   if (job.tool_name === "ui_workflow") return runUiWorkflow(tabId, job);
 
-  // Belt-and-braces (3 of 3): a write job must carry an approval_id. Even if the
-  // server checks were somehow bypassed, the extension refuses to write without
-  // one.
-  if (isWrite && !job.approval_id) {
-    return { ok: false, error_message: "write without approval refused by extension" };
+  // Belt-and-braces (3 of 3): a write job must carry an approval_id OR an
+  // approved task_order_id from the server claim route. Even if the server
+  // checks were somehow bypassed, the extension refuses unscoped writes.
+  if (isWrite && !job.approval_id && !job.task_order_id) {
+    return { ok: false, error_message: "write without approval or task order refused by extension" };
   }
   const crmError = await assertCrmTab(tabId);
   if (crmError) return crmError;

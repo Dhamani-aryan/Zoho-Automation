@@ -30,6 +30,15 @@ import {
   validateUiToolCall
 } from "@/lib/agent/ui-tools";
 import {
+  defaultTaskOrderBudget,
+  isTaskOrderTool,
+  TASK_ORDER_TOOL_DEFINITIONS,
+  taskOrderBudgetDecision,
+  validateTaskOrderToolCall,
+  type ActiveTaskOrder,
+  type ExpectedChange
+} from "@/lib/agent/task-orders";
+import {
   buildApprovalRequest,
   createPendingApproval,
   resolvedFromLiveRecord,
@@ -45,6 +54,7 @@ import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
+const JOB_POLL_INTERVAL_MS = 500;
 
 export type AgentStreamEvent =
   | { type: "assistant_delta"; text: string }
@@ -91,6 +101,7 @@ const AGENT_TOOL_DEFINITIONS = [
   ...TIER0_TOOL_DEFINITIONS,
   ...TIER1_TOOL_DEFINITIONS,
   ...TIER2_TOOL_DEFINITIONS,
+  ...TASK_ORDER_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
@@ -337,6 +348,321 @@ async function currentTeachMode(service: SupabaseClient, user: AuthorizedUser, s
     .single();
   if (error) throw error;
   return (sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true;
+}
+
+async function activeTaskOrder(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
+  const { data, error } = await service
+    .from("task_orders")
+    .select("id,session_id,user_id,goal,plan,scope,status,budget,decided_at,created_at")
+    .eq("session_id", sessionId)
+    .eq("user_id", user.id)
+    .eq("status", "approved")
+    .maybeSingle();
+  if (error) throw error;
+  return data as ActiveTaskOrder | null;
+}
+
+async function taskOrderById(service: SupabaseClient, user: AuthorizedUser, id: string) {
+  const { data, error } = await service
+    .from("task_orders")
+    .select("id,session_id,user_id,goal,plan,scope,status,budget,decided_at,created_at")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (error) throw error;
+  return data as ActiveTaskOrder | null;
+}
+
+function taskOrderSummary(goal: string, planSummary: string, expectedChanges: ExpectedChange[]): ApprovalSummaryRecord[] {
+  if (expectedChanges.length === 0) {
+    return [
+      {
+        zoho_id: "task_order",
+        name: goal,
+        before: { status: "not started" },
+        after: { plan: planSummary, expected_changes: 0 }
+      }
+    ];
+  }
+  return expectedChanges.map((change, index) => ({
+    zoho_id: change.record || `expected_change_${index + 1}`,
+    name: change.record || `Expected change ${index + 1}`,
+    before: { status: "not started" },
+    after: { action: change.action, detail: change.detail }
+  }));
+}
+
+async function proposeTaskOrder({
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateTaskOrderToolCall(call);
+  const args = validated.args as {
+    goal: string;
+    plan_summary: string;
+    expected_changes: ExpectedChange[];
+    scope: "read" | "write";
+  };
+  const existing = await activeTaskOrder(service, user, sessionId);
+  if (existing) {
+    throw new Error(`Task order already active: ${existing.goal}. Complete or stop it before proposing another.`);
+  }
+
+  const budget = defaultTaskOrderBudget(args.expected_changes);
+  const nowIso = new Date().toISOString();
+  const { data: order, error } = await service
+    .from("task_orders")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      goal: args.goal,
+      plan: {
+        plan_summary: args.plan_summary,
+        expected_changes: args.expected_changes
+      },
+      scope: args.scope,
+      status: args.scope === "read" ? "approved" : "proposed",
+      budget,
+      decided_at: args.scope === "read" ? nowIso : null
+    })
+    .select("id,goal,scope,status,budget")
+    .single();
+  if (error) throw error;
+
+  const taskOrderId = (order as { id: string }).id;
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "task_order_proposed",
+    message: `Task order proposed: ${args.goal}.`,
+    metadata: { session_id: sessionId, task_order_id: taskOrderId, scope: args.scope, budget }
+  });
+
+  if (args.scope === "read") {
+    return {
+      ok: true,
+      result: { task_order_id: taskOrderId, status: "approved", scope: "read", budget },
+      pausedMs: 0
+    };
+  }
+
+  const summary = taskOrderSummary(args.goal, args.plan_summary, args.expected_changes);
+  const { data: approval, error: approvalError } = await service
+    .from("pending_approvals")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      tool_name: "task_order",
+      args: { task_order_id: taskOrderId, goal: args.goal, scope: args.scope },
+      summary
+    })
+    .select("id")
+    .single();
+  if (approvalError) throw approvalError;
+
+  const approvalId = (approval as { id: string }).id;
+  await emit({
+    type: "approval_required",
+    call_id: call.id,
+    approval_id: approvalId,
+    tool_name: "task_order",
+    summary
+  });
+
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected" || decision.outcome === "expired") {
+    await service
+      .from("task_orders")
+      .update({
+        status: decision.outcome,
+        decided_at: new Date().toISOString(),
+        report: { status: decision.outcome, approval_id: approvalId }
+      })
+      .eq("id", taskOrderId)
+      .eq("user_id", user.id)
+      .eq("status", "proposed");
+    return {
+      ok: false,
+      result: { approval_id: approvalId, task_order_id: taskOrderId, status: decision.outcome },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  return {
+    ok: true,
+    result: { approval_id: approvalId, task_order_id: taskOrderId, status: "approved", budget },
+    pausedMs: decision.waitedMs
+  };
+}
+
+async function completeTaskOrder({
+  service,
+  user,
+  sessionId,
+  call
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+}): Promise<{ ok: boolean; result: unknown }> {
+  const validated = validateTaskOrderToolCall(call);
+  const args = validated.args as { report: unknown };
+  const order = await activeTaskOrder(service, user, sessionId);
+  if (!order) throw new Error("No active approved task order to complete.");
+
+  const report = typeof args.report === "string" ? { summary: args.report } : args.report;
+  const completedAt = new Date().toISOString();
+  const { data, error } = await service
+    .from("task_orders")
+    .update({ status: "completed", report, completed_at: completedAt })
+    .eq("id", order.id)
+    .eq("user_id", user.id)
+    .eq("status", "approved")
+    .select("id,goal,status,report,completed_at")
+    .single();
+  if (error) throw error;
+
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "task_order_completed",
+    message: `Task order completed: ${order.goal}.`,
+    metadata: { session_id: sessionId, task_order_id: order.id }
+  });
+
+  return { ok: true, result: { task_order: data } };
+}
+
+async function failTaskOrder(service: SupabaseClient, user: AuthorizedUser, orderId: string, reason: string) {
+  await service
+    .from("task_orders")
+    .update({
+      status: "failed",
+      completed_at: new Date().toISOString(),
+      report: { status: "failed", reason }
+    })
+    .eq("id", orderId)
+    .eq("user_id", user.id)
+    .eq("status", "approved");
+}
+
+function recordsTouchedByResult(result: unknown) {
+  const seen = new Set<string>();
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const key of ["zoho_id", "id", "record_id"]) {
+      const item = record[key];
+      if (typeof item === "string" && item.trim()) seen.add(item);
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(result);
+  return seen.size;
+}
+
+async function waitForToolJobById({
+  service,
+  jobId,
+  userId
+}: {
+  service: SupabaseClient;
+  jobId: string;
+  userId: string;
+}) {
+  const started = Date.now();
+  while (Date.now() - started < agentTurnTimeoutMs()) {
+    const { data, error } = await service
+      .from("tool_jobs")
+      .select("id,status,result,error_message")
+      .eq("id", jobId)
+      .eq("user_id", userId)
+      .single();
+    if (error) throw error;
+    const row = data as { status: string; result: unknown; error_message: string | null };
+    if (row.status === "done") return { ok: true, result: row.result, waitedMs: Date.now() - started };
+    if (row.status === "failed" || row.status === "expired") {
+      return {
+        ok: false,
+        result: { status: row.status, error: row.error_message ?? "Task-order job failed.", result: row.result },
+        waitedMs: Date.now() - started
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+  }
+  await service
+    .from("tool_jobs")
+    .update({
+      status: "expired",
+      completed_at: new Date().toISOString(),
+      error_message: "Timed out waiting for the Chrome extension to report this task-order job."
+    })
+    .eq("id", jobId)
+    .eq("user_id", userId)
+    .in("status", ["queued", "running"]);
+  return { ok: false, result: { status: "expired", error: "Task-order job timed out." }, waitedMs: Date.now() - started };
+}
+
+async function runTier2UnderTaskOrder({
+  service,
+  user,
+  sessionId,
+  call,
+  order,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  order: ActiveTaskOrder;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const moduleGuess = normalizeModule((call.args as { module?: unknown })?.module);
+  const { data: metaRows } = moduleGuess
+    ? await service
+        .from("zoho_field_meta")
+        .select("module,api_name,data_type,picklist_values")
+        .eq("module", moduleGuess)
+    : { data: [] as Array<{ module: string; api_name: string; data_type: string | null; picklist_values: unknown }> };
+  const prepared = validateTier2Call(call, { fieldMeta: metaRows ?? [], role: user.role });
+
+  const { data: inserted, error } = await service
+    .from("tool_jobs")
+    .insert({
+      user_id: user.id,
+      session_id: sessionId,
+      tool_name: prepared.tool_name,
+      args: prepared,
+      task_order_id: order.id
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+  return {
+    ok: job.ok,
+    result: {
+      task_order_id: order.id,
+      status: job.ok ? "executed" : "failed",
+      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+    },
+    pausedMs: job.waitedMs
+  };
 }
 
 function instructionsForTurn(teachMode: boolean) {
@@ -657,8 +983,52 @@ export async function runAgentTurn({
   let pausedMs = 0;
   const turnTimeoutMs = agentTurnTimeoutMs();
   const maxToolCalls = agentMaxToolCalls();
+  let activeTaskOrderId: string | null = null;
+  let taskOrderToolCalls = 0;
+  let taskOrderRecordsTouched = 0;
 
   while (Date.now() - started - pausedMs < turnTimeoutMs) {
+    let approvedOrder: ActiveTaskOrder | null = null;
+    if (service) {
+      if (activeTaskOrderId) {
+        const tracked = await taskOrderById(service, user, activeTaskOrderId);
+        if (!tracked || tracked.status !== "approved") {
+          const message = "Stopped because the active task order is no longer approved.";
+          await supabase.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "assistant",
+            content: message
+          });
+          await emit({ type: "assistant_delta", text: message });
+          await emit({ type: "done" });
+          return;
+        }
+        approvedOrder = tracked;
+      } else {
+        approvedOrder = await activeTaskOrder(service, user, sessionId);
+        activeTaskOrderId = approvedOrder?.id ?? null;
+      }
+      if (approvedOrder) {
+        const budget = taskOrderBudgetDecision({
+          order: approvedOrder,
+          nowMs: Date.now(),
+          toolCalls: taskOrderToolCalls,
+          recordsTouched: taskOrderRecordsTouched
+        });
+        if (!budget.ok) {
+          await failTaskOrder(service, user, approvedOrder.id, budget.reason);
+          const message = `Stopped task order: ${budget.reason}.`;
+          await supabase.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "assistant",
+            content: message
+          });
+          await emit({ type: "assistant_delta", text: message });
+          await emit({ type: "done" });
+          return;
+        }
+      }
+    }
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const model = await provider.runTools({
       instructions: instructionsForTurn(teachMode),
@@ -737,6 +1107,25 @@ export async function runAgentTurn({
               onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
             });
           }
+        } else if (isTaskOrderTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for task orders.");
+          if (call.name === "propose_task_order") {
+            const proposed = await proposeTaskOrder({ service, user, sessionId, call, emit });
+            ok = proposed.ok;
+            result = proposed.result;
+            pausedMs += proposed.pausedMs;
+            const orderId = (proposed.result as { task_order_id?: unknown } | null)?.task_order_id;
+            if (proposed.ok && typeof orderId === "string") {
+              activeTaskOrderId = orderId;
+              taskOrderToolCalls = 0;
+              taskOrderRecordsTouched = 0;
+            }
+          } else {
+            const completed = await completeTaskOrder({ service, user, sessionId, call });
+            ok = completed.ok;
+            result = completed.result;
+            activeTaskOrderId = null;
+          }
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");
           if (call.name === "list_ui_workflows") {
@@ -764,7 +1153,9 @@ export async function runAgentTurn({
           }
         } else if (isTier2Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for approvals.");
-          const gated = await handleTier2Call({ supabase, service, user, sessionId, call, emit });
+          const gated = approvedOrder
+            ? await runTier2UnderTaskOrder({ service, user, sessionId, call, order: approvedOrder, emit })
+            : await handleTier2Call({ supabase, service, user, sessionId, call, emit });
           ok = gated.ok;
           result = gated.result;
           pausedMs += gated.pausedMs;
@@ -790,8 +1181,12 @@ export async function runAgentTurn({
         user_id: user.id,
         event_type: "tool_call",
         message: `${ok ? "Ran" : "Failed"} agent tool ${call.name}.`,
-        metadata: { session_id: sessionId, call_id: call.id, tool_name: call.name, ok }
+        metadata: { session_id: sessionId, call_id: call.id, tool_name: call.name, ok, task_order_id: activeTaskOrderId }
       });
+      if (activeTaskOrderId && !isTaskOrderTool(call.name)) {
+        taskOrderToolCalls += 1;
+        taskOrderRecordsTouched += recordsTouchedByResult(result);
+      }
       transcript.push({
         role: "tool",
         toolName: call.name,

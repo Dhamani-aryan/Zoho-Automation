@@ -8,8 +8,9 @@ export type WritePageResult =
 //
 // This is the ONLY code path that issues Zoho WRITES. It is reached only for a
 // job the server created from an approved pending_approvals row (approval_id
-// present), and extension/src/jobs.ts refuses to call it otherwise. Per record
-// it: reads current values, aborts on an identity mismatch, skips no-op writes
+// present) or an approved task_orders row (task_order_id present), and
+// extension/src/jobs.ts refuses to call it otherwise. Per record it: reads
+// current values, aborts on an identity mismatch, skips no-op writes
 // (idempotent resume), PUTs in chunks of <=100 requiring per-record SUCCESS,
 // then re-reads to VERIFY before reporting verified:true.
 export async function zohoWritePageRunner(job: {
