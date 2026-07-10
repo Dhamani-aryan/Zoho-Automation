@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## HeySnap correction adaptation: exact composer insertion recipe (2026-07-10, build)
+
+Expanded the email-scheduling seed with a copy-ready browser_eval recipe derived from NUANCES_AND_CORRECTIONS (1).md. The stored guide now removes only stale body nodes before the top-level node containing #ecw_signature, normalizes leading/trailing blank lines, inserts body lines as Verdana 13.33px nodes, appends exactly two blank lines, inserts before the signature anchor, dispatches input, and returns body_text/signature_present/signature_after_body evidence. The top-level-anchor walk is intentionally safer than assuming #ecw_signature is always a direct #editorDiv child. Added a dated correction to Gotchas. Verified balanced SQL dollar quoting, git diff --check, and extracted/compiled the embedded recipe with Node new Function.
+
 ## HeySnap instruction-following and correction-memory adaptation (2026-07-10, build)
 
 Reviewed INSTRUCTION_FOLLOWING_AND_MEMORY.md and NUANCES_AND_CORRECTIONS (1).md supplied from Aryan's HeySnap use. Adopted the parts compatible with the accepted Phase G architecture: narrow commands stay bounded while high-level goals remain autonomous; browser actions re-observe and ground against current visible/DOM state; missing or ambiguous targets are never silently substituted; prefilled content is edited surgically and verified; and user corrections trigger a full update of the existing skill_guide with a dated Gotchas rule instead of a duplicate. Automatic guide routing now scores gotchas/verification/stop conditions and recognizes email signature/spacing/font corrections. Injected guide context puts Gotchas first.
