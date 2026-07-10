@@ -113,7 +113,8 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
     name: "zoho_get_record",
     tier: 1,
-    description: "Read selected fields for one live Zoho Accounts, Contacts, or Deals record by Zoho id.",
+    description:
+      "Read authoritative current fields for one live Zoho Account, Contact, or Deal by Zoho id. Use before/after writes and whenever mirror freshness is insufficient.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -162,7 +163,7 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "db_sync_records",
     tier: 1,
     description:
-      "Upsert live Zoho Accounts, Contacts, or Deals records into the local Supabase mirror. This is a local DB sync only; it never writes to Zoho.",
+      "Upsert authoritative live Zoho Account, Contact, or Deal read-back records into the Supabase mirror after verified changes or freshness checks. This is local DB sync only; it never writes to Zoho.",
     parameters: {
       type: "object",
       additionalProperties: false,

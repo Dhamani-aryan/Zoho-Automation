@@ -1,5 +1,13 @@
 # V2 Decisions
 
+## Snap-like agent rewrite Step 1: autonomy and data-source routing contract (2026-07-10, build)
+
+Reviewed BUILD_AN_AGENT_LIKE_SNAP.md supplied by Aryan. Reframed the agent prompt around a feedback-driven goal loop: internally plan, choose a tool from current evidence, inspect the real result, adapt, and continue until verified completion or a true stop. The model must not ask the user which source/tool/endpoint/tab/selector or obvious sub-step to use. Partial/empty/truncated output triggers narrowing, pagination, re-observation, authority escalation, or another allowed primitive rather than immediate defeat.
+
+Added explicit autonomous source policy for this stack: Supabase mirror first for fast discovery/bulk scope/ids/URLs; live Zoho for authoritative current state, conflicts, and all pre-write/read-back checks; deterministic tools before browser_eval; visible UI only for UI-only/watched work; live Zoho wins source conflicts; verified mirrorable Account/Contact/Deal changes flow back through db_sync_records. Task-order previews retain the approvals_enabled behavior (card when ON, auto-approved work log when OFF).
+
+Intentional adaptation from Snap rather than literal copying: keep the reviewed deterministic CRM primitives, safe structured Supabase queries, extension allowlists, task budgets, no-delete rule, schedule-never-send, and approval flag. Do not expose raw SQL, arbitrary server shell, or unrestricted filesystem writes merely to imitate another harness. Verified npm run test:orchestrator (18/18), npm run typecheck, and npm run lint.
+
 ## Phase G live defect fix: observable composer read-back (2026-07-10, build)
 
 Live retry opened the Emails area but again reported that composer fields could not be verified. browser_observe previously returned labels/selectors but not input values, omitted Zoho's committed recipient chips, and emitted generic navigation controls before useful dialog/iframe evidence; truncation made that worse.

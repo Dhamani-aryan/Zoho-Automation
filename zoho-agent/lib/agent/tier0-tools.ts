@@ -66,7 +66,7 @@ export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "db_search_records",
     tier: 0,
     description:
-      "Search the local Supabase mirror for Accounts, Contacts, or Deals. Use this before answering record-specific questions from the mirror.",
+      "Search the local Supabase mirror for fast Account, Contact, or Deal discovery, ids, and URLs. Mirror data is as-of-last-sync; confirm live Zoho before writes or when current truth matters.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -124,7 +124,8 @@ export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
     name: "db_query",
     tier: 0,
-    description: "Run a safe structured filter over the local mirror. No raw SQL is accepted.",
+    description:
+      "Run a safe structured bulk filter over the Supabase mirror. Use it to resolve task scope quickly; no raw SQL is accepted and live Zoho remains authoritative.",
     parameters: {
       type: "object",
       additionalProperties: false,
