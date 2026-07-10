@@ -88,21 +88,44 @@ type AgentMessageRow = {
   tool_result: unknown;
 };
 
-const AGENT_INSTRUCTIONS = `You are the Zoho Automation tool agent.
+const AGENT_INSTRUCTIONS = `You are ZohoOps, an autonomous operations agent for the KloudData sales team.
 
-Use tools when you need facts. Local DB tools read the Supabase mirror; Zoho tools read live data through the user's Chrome extension.
-Never claim a local mirror answer is live Zoho data. Say "as of last sync" for DB-sourced answers.
-For a specific record question, search the mirror first to resolve likely records, then use live Zoho reads when the user needs current field values.
-Always label live Zoho answers as live from Zoho. If the extension is offline, say that clearly and offer the mirror answer instead.
-For tag-driven pull/sync requests, use zoho_search with the tag, paginate until Zoho says there are no more records, then call db_sync_records with only the records the user asked to sync. Report inserted, updated, unchanged, and warnings.
-Treat the user's wording as intent, not exact values - users will be approximate and should not have to phrase things precisely. A phrase like "the deal with the tag test search" may mean the tag is "test", or that the deal name or a field contains those words; infer the most likely meaning and try it.
-When a search returns no results, do NOT stop after one attempt and report "not found". Work the request: (1) retry with a broader or alternative term - try each significant word on its own, or switch approach (tag vs name vs criteria); (2) discover what actually exists - use db_list_tags to see real tag names and pick the closest, or db_list_by_tag / db_search_records to find records whose name or fields contain the words; (3) only if there is still no confident match, briefly say what you tried and either offer the closest candidates or ask one short clarifying question. Prefer resolving it yourself over making the user restate it. Stay within the tool-call budget.
-If a user asks for an unsupported capability, call request_new_tool with a concise name, purpose, and example_call.
-You CAN give direct Zoho record links; never say you lack a tool for them. Mirror rows from db_get_record / db_search_records include zoho_url - prefer it. Otherwise compose the canonical URL from the record's Zoho id: https://crm.zoho.com/crm/org890324941/tab/{Potentials|Contacts|Accounts}/{zoho_id} - note Deals use "Potentials" in URLs even though the API module is Deals.
-CRM writes are available through approval-gated tools: zoho_update_fields, zoho_change_owner, zoho_add_tags, zoho_remove_tags. Every such call pauses for the user to approve a before/after card in chat before anything is written; nothing is written until they approve. Only propose a write the user actually asked for, resolve the exact record(s) first (search the mirror or read live Zoho), and put the smallest correct change in the tool call. If the user rejects the card, acknowledge it and do not retry the same write unless they ask. Stage edits are admin-only and Deal_Name cannot be changed. Never claim a write succeeded until the tool result confirms it (verified read-back). Deletes and record creation remain unavailable.
-When the current chat is in teach mode, you may call ui_step to execute exactly ONE watched Zoho UI step per user instruction. Use it only for guided teaching, report what was observed, and wait for the user's next instruction. If the user asks you to open or navigate to a crm.zoho.com deal/contact/account URL while teach mode is on, call ui_step with an open_url step instead of merely returning the link. A click result is only "input dispatched" unless a later wait_for/confirm_text_present/verify_field step proves the UI changed; after every click, propose the next verification step instead of claiming success from the click alone. Outside teach mode, do not call ui_step. When the user asks to save a taught workflow, call save_ui_workflow with the verified steps, params, and effect; it requires a confirmation card before the workflow is saved. If the user asks what workflows exist or how to run a workflow, call list_ui_workflows and answer with matching workflow names, effects, params, and one example phrase like: Run UI workflow "Workflow Name" with params: {"deal_id":"6834250000003329005"}. Use run_ui_workflow to replay saved workflows. If run_ui_workflow reports trusted_before=false, tell the user it was the first verified replay and is now trusted only if the result says trusted_after=true. Write-effect workflows always require an approval card before replay; nothing executes until the user approves.
-When you have enough information, answer in natural, conversational language. For a simple lookup, prefer one or two short sentences, like "Duraco's live Next Step is Call, and the deal is currently in Follow-Up." Do not default to rigid report headings or bullet lists unless there are multiple records, several values to compare, or the user asks for a list.
-Keep source clarity in the sentence: say "live in Zoho" for live reads, and "as of last sync" for mirror-only answers.`;
+You do real work inside Zoho CRM using the logged-in user's Chrome session. You perform, verify, and report; you do not merely describe steps. Work in a loop: observe state, reason, take one action, observe the result, repeat until the goal is met or a stop condition fires. Never assume an action worked. Check it.
+
+Source clarity:
+- Local DB tools read the Supabase mirror. Say "as of last sync" for mirror-sourced answers.
+- Live Zoho tools and browser tools use the user's Chrome session. Label live answers as live from Zoho.
+- If the extension is offline or Zoho is logged out, say that clearly and stop or offer the mirror answer for read-only questions.
+
+Method order for Zoho:
+1. Deterministic tools first. Use Tier-0 mirror search/list tools to resolve records, Tier-1 live Zoho reads for current state, db_sync_records for mirror sync, and Tier-2 write tools for supported field/owner/tag changes. These are cheaper, validated, and preferred.
+2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). Use it to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. browser_eval is allowed only under an approved task order or a per-call approval card showing the full code.
+3. UI automation last. Use browser_observe to find controls, then ui_step only for UI-only flows or when the user asks to open/click/show something. In teach mode, take the user's goal and autonomously chain observe -> act -> verify while the user watches the dedicated Chrome window. Do not require one instruction per UI step.
+
+Task orders:
+- For multi-step or batch work, call propose_task_order before changing Zoho. scope=read auto-approves; scope=write shows one approval card covering the expected changes for the whole task.
+- After a write task order is approved, execute the task end to end without asking for per-step permission. The Stop button is the user's abort lever.
+- Stay within the task order plan and budgets. If the scope changes, expected records change materially, or the work becomes unsafe, stop and explain.
+- Finish active orders with complete_task_order. The report must include counts, per-record status, Zoho links when known, failures with reasons, and expected-vs-actual reconciliation.
+
+CRM writes and safety:
+- The old per-call approval cards still apply for small one-off writes outside a task order.
+- No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Schedule means schedule; never send immediately.
+- Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
+- Stage edits are admin-only. Deal_Name cannot be changed.
+- Verify every write by read-back before reporting success. For scheduled email, confirm recipient, subject, date/time, and scheduled state.
+
+Search and matching:
+- Treat the user's wording as intent. If a search returns no results, retry broader terms, try significant words, check tags, and offer close candidates before asking.
+- Stop and ask one focused question when identity mismatches, required data is missing, more than one match has no rule, a duplicate exists, Zoho errors, the user is logged out, 3 failures happen consecutively, or failures exceed 20%.
+
+Workflows and guides:
+- Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
+- Skill guides are the preferred future workflow memory: intent, method, gotchas, verification, and stop conditions. When guide tools are available, read relevant guides before a task and propose saving a new guide after novel work.
+
+Reporting style:
+- Do the work; do not narrate every internal step. Give short task-level updates when useful.
+- Final answers should be plain: done/not done, counts, skipped/failed reasons, and links. Be honest on partial failure.`;
 
 const AGENT_TOOL_DEFINITIONS = [
   ...TIER0_TOOL_DEFINITIONS,
@@ -673,6 +696,53 @@ async function runTier2UnderTaskOrder({
   };
 }
 
+function uiStepCouldMutate(call: AgentToolCall) {
+  const step = (call.args as { step?: { type?: unknown } } | null)?.step;
+  const type = typeof step?.type === "string" ? step.type : "";
+  return type === "click" || type === "fill_field" || type === "press_key";
+}
+
+async function runUiStepUnderTaskOrder({
+  service,
+  user,
+  sessionId,
+  call,
+  order,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  order: ActiveTaskOrder;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validatedCall = validateUiToolCall(call);
+  const { data: inserted, error } = await service
+    .from("tool_jobs")
+    .insert({
+      user_id: user.id,
+      session_id: sessionId,
+      tool_name: validatedCall.name,
+      args: validatedCall.args,
+      task_order_id: order.id
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+  return {
+    ok: job.ok,
+    result: {
+      task_order_id: order.id,
+      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+    },
+    pausedMs: job.waitedMs
+  };
+}
+
 function codeHash(code: string) {
   return createHash("sha256").update(code, "utf8").digest("hex");
 }
@@ -855,8 +925,8 @@ function instructionsForTurn(teachMode: boolean) {
 
 Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. ${
     teachMode
-      ? "For a user request to open or navigate to a crm.zoho.com URL, call ui_step with an open_url step now."
-      : "Do not call ui_step; tell the user to turn on Teach a workflow before UI navigation."
+      ? "Teach mode is a watched walkthrough mode: use browser_observe, ui_step, browser_eval when approved, and verification to accomplish the user's goal and learn the method."
+      : "Outside teach mode, mutating UI steps require an approved write task order. Read-only observation and crm.zoho.com open/show navigation are allowed when useful."
   }`;
 }
 
@@ -1313,10 +1383,21 @@ export async function runAgentTurn({
           }
         } else if (isBrowserTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
-          const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
-          ok = evalResult.ok;
-          result = evalResult.result;
-          pausedMs += evalResult.pausedMs;
+          if (call.name === "browser_observe") {
+            const validatedCall = validateBrowserToolCall(call);
+            result = await runBridgedTool({
+              service,
+              user,
+              sessionId,
+              call: validatedCall,
+              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+            });
+          } else {
+            const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
+            ok = evalResult.ok;
+            result = evalResult.result;
+            pausedMs += evalResult.pausedMs;
+          }
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");
           if (call.name === "list_ui_workflows") {
@@ -1332,15 +1413,25 @@ export async function runAgentTurn({
             result = replayed.result;
             pausedMs += replayed.pausedMs;
           } else {
-            await ensureTeachMode(service, user, sessionId);
-            const validatedCall = validateUiToolCall(call);
-            result = await runBridgedTool({
-              service,
-              user,
-              sessionId,
-              call: validatedCall,
-              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-            });
+            if (approvedOrder) {
+              const stepped = await runUiStepUnderTaskOrder({ service, user, sessionId, call, order: approvedOrder, emit });
+              ok = stepped.ok;
+              result = stepped.result;
+              pausedMs += stepped.pausedMs;
+            } else {
+              await ensureTeachMode(service, user, sessionId);
+              if (uiStepCouldMutate(call)) {
+                throw new Error("Mutating UI steps require an approved write task order.");
+              }
+              const validatedCall = validateUiToolCall(call);
+              result = await runBridgedTool({
+                service,
+                user,
+                sessionId,
+                call: validatedCall,
+                onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+              });
+            }
           }
         } else if (isTier2Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for approvals.");

@@ -11,6 +11,17 @@ export type BrowserEvalArgs = z.infer<typeof browserEvalSchema>;
 
 export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
+    name: "browser_observe",
+    tier: 1,
+    description:
+      "Read the current crm.zoho.com page state: URL, title, visible headings, and visible interactive controls. Read-only and ungated.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
     name: "browser_eval",
     tier: 2,
     description:
@@ -29,10 +40,11 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
 ];
 
 export function isBrowserTool(name: string) {
-  return name === "browser_eval";
+  return name === "browser_eval" || name === "browser_observe";
 }
 
 export function validateBrowserToolCall(call: AgentToolCall) {
+  if (call.name === "browser_observe") return { ...call, args: {} };
   if (call.name === "browser_eval") return { ...call, args: browserEvalSchema.parse(call.args) };
   throw new Error(`Unknown browser tool: ${call.name}`);
 }

@@ -126,6 +126,75 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   }
 }
 
+function browserObservePageRunner() {
+  const LIMIT = 16 * 1024;
+
+  function isVisible(element: Element) {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  function textOf(element: Element) {
+    return (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+  }
+
+  function selectorFor(element: Element) {
+    const el = element as HTMLElement;
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const name = el.getAttribute("name");
+    if (name) return `${element.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
+    const aria = el.getAttribute("aria-label");
+    if (aria) return `${element.tagName.toLowerCase()}[aria-label="${CSS.escape(aria)}"]`;
+    const role = el.getAttribute("role");
+    if (role) return `${element.tagName.toLowerCase()}[role="${CSS.escape(role)}"]`;
+    return element.tagName.toLowerCase();
+  }
+
+  const headings = Array.from(document.querySelectorAll("h1,h2,h3,[role='heading']"))
+    .filter(isVisible)
+    .slice(0, 40)
+    .map((element) => ({ tag: element.tagName.toLowerCase(), text: textOf(element) }))
+    .filter((item) => item.text);
+
+  const controls = Array.from(
+    document.querySelectorAll("button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true']")
+  )
+    .filter(isVisible)
+    .slice(0, 120)
+    .map((element) => {
+      const el = element as HTMLElement;
+      const rect = element.getBoundingClientRect();
+      return {
+        tag: element.tagName.toLowerCase(),
+        role: el.getAttribute("role") ?? "",
+        text: textOf(element) || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || "",
+        selector: selectorFor(element),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2)
+      };
+    })
+    .filter((item) => item.text || item.selector);
+
+  const result = {
+    url: location.href,
+    title: document.title,
+    headings,
+    controls
+  };
+  const json = JSON.stringify(result);
+  if (json.length <= LIMIT) return { ok: true, result };
+  return {
+    ok: true,
+    result: {
+      url: result.url,
+      title: result.title,
+      truncated: true,
+      preview: json.slice(0, LIMIT)
+    }
+  };
+}
+
 async function focusTab(tab: chrome.tabs.Tab) {
   if (typeof tab.windowId === "number") {
     await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => undefined);
@@ -486,6 +555,11 @@ async function runDomUiStep(tabId: number, step: Record<string, unknown>): Promi
 // save-time classification in lib/agent/ui-tools.ts stepLooksMutating().
 const MUTATING_UI_STEPS = new Set(["click", "fill_field", "press_key"]);
 
+function isMutatingUiStepJob(job: ToolJob) {
+  const step = (job.args.step ?? {}) as Record<string, unknown>;
+  return MUTATING_UI_STEPS.has(String(step.type ?? ""));
+}
+
 async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
   const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
   // Refuse unapproved replays when EITHER the declared effect is write OR any
@@ -543,8 +617,34 @@ async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
 // Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
-  if (job.tool_name === "ui_step") return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
+  if (job.tool_name === "ui_step") {
+    if (isMutatingUiStepJob(job) && !job.approval_id && !job.task_order_id) {
+      return { ok: false, error_message: "mutating ui_step without approval or task order refused by extension" };
+    }
+    return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
+  }
   if (job.tool_name === "ui_workflow") return runUiWorkflow(tabId, job);
+  if (job.tool_name === "browser_observe") {
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: browserObservePageRunner
+      });
+      const result = results?.[0]?.result as PageResult | undefined;
+      if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
+        return { ok: false, error_message: "browser_observe returned no result." };
+      }
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        error_message: `Could not observe the Zoho tab${error instanceof Error ? `: ${error.message}` : ""}.`
+      };
+    }
+  }
   if (job.tool_name === "browser_eval") {
     if (!job.approval_id && !job.task_order_id) {
       return { ok: false, error_message: "browser_eval without approval or task order refused by extension" };

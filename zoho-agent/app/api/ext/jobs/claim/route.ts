@@ -73,8 +73,13 @@ export async function POST(request: Request) {
     const isWriteEffectUiWorkflow =
       nextJob.tool_name === "ui_workflow" &&
       (nextJob.args as { effect?: unknown } | null)?.effect === "write";
+    const isMutatingUiStep =
+      nextJob.tool_name === "ui_step" &&
+      ["click", "fill_field", "press_key"].includes(
+        String(((nextJob.args as { step?: { type?: unknown } } | null)?.step?.type) ?? "")
+      );
     const isBrowserEval = nextJob.tool_name === "browser_eval";
-    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow || isBrowserEval) {
+    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow || isMutatingUiStep || isBrowserEval) {
       let taskOrderApproved = false;
       if (nextJob.task_order_id) {
         const { data: order, error: orderError } = await auth.service
@@ -98,7 +103,7 @@ export async function POST(request: Request) {
         if (approvalError) {
           return NextResponse.json({ error: approvalError.message }, { status: 500 });
         }
-        decision = isWriteEffectUiWorkflow || isBrowserEval
+        decision = isWriteEffectUiWorkflow || isMutatingUiStep || isBrowserEval
           ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
           : tier2ClaimDecision(
               { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },

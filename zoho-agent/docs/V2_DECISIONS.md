@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase G Step 3: browser_observe and autonomous instructions (2026-07-10, build)
+
+Built the observation/autonomy slice:
+- Added browser_observe as an ungated read-only browser primitive. It reports the current CRM URL, title, visible headings, and visible interactive controls from the page MAIN world, capped to about 16 KB.
+- Removed the Phase F one-step-per-instruction teaching rule from AGENT_INSTRUCTIONS. Teach mode is now a watched walkthrough mode where the agent can observe, act, and verify toward a user goal.
+- Rewrote AGENT_INSTRUCTIONS around the HeySnap loop: observe -> reason -> act -> verify; deterministic tools first, browser_eval when deterministic tools do not fit, UI automation last; task-order approval scope; verification/read-back; stop conditions; and concise task-level reporting.
+- Server-side UI gating now lets ui_step run without teach mode only under an approved task order. Mutating ui_step calls outside an approved task order are rejected even in teach mode.
+- Claim route and extension now refuse manually inserted mutating ui_step jobs unless they carry approval_id or approved task_order_id.
+
+Verification for this step: npm run typecheck passed; npm run build:extension passed.
+
 ## Phase G Step 2: browser_eval gated browser primitive (2026-07-10, build)
 
 Built browser_eval end to end:
