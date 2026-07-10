@@ -78,6 +78,20 @@ function workflowStepLabel(step: Record<string, unknown>, index: number) {
   return `${index + 1}. ${type}${target ? ` - ${target}` : ""}`;
 }
 
+function guideEditState(guide: SkillGuideRow | null) {
+  return {
+    name: guide?.name ?? "",
+    intent: guide?.intent ?? "",
+    preconditions: guide?.preconditions ?? "",
+    method_api: guide?.method_api ?? "",
+    method_ui: guide?.method_ui ?? "",
+    gotchas: guide?.gotchas ?? "",
+    verification: guide?.verification ?? "",
+    stop_conditions: guide?.stop_conditions ?? "",
+    params: JSON.stringify(guide?.params ?? [], null, 2)
+  };
+}
+
 function WorkflowTabs({
   active,
   onChange
@@ -467,20 +481,6 @@ function GuidesManager({ initialGuides }: { initialGuides: SkillGuideRow[] }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  function guideEditState(guide: SkillGuideRow | null) {
-    return {
-      name: guide?.name ?? "",
-      intent: guide?.intent ?? "",
-      preconditions: guide?.preconditions ?? "",
-      method_api: guide?.method_api ?? "",
-      method_ui: guide?.method_ui ?? "",
-      gotchas: guide?.gotchas ?? "",
-      verification: guide?.verification ?? "",
-      stop_conditions: guide?.stop_conditions ?? "",
-      params: JSON.stringify(guide?.params ?? [], null, 2)
-    };
-  }
 
   function selectGuide(guide: SkillGuideRow) {
     setSelectedId(guide.id);

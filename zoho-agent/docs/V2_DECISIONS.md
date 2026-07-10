@@ -1,5 +1,19 @@
 # V2 Decisions
 
+## Phase G Step 5: learn-by-doing rule and final build verification (2026-07-10, build)
+
+Tightened the learn-by-doing prompt rule: after completing any task with no matching guide, the agent must draft everything needed to redo the task without being walked through, including params for values that vary, then propose save_skill_guide behind a confirmation card.
+
+Final automated verification for the Phase G build:
+- npm run typecheck passed.
+- npm run lint passed.
+- npm run build passed.
+- npm run build:extension passed.
+- npm run test:orchestrator passed 15/15.
+- npm run test:tier2 passed 15/15.
+
+Stopping for chat review before declaring Phase G done. Live acceptance remains the spec section 7 scenarios.
+
 ## Phase G Step 4: skill guides and Guides tab (2026-07-10, build)
 
 Built workflows-as-skills:
