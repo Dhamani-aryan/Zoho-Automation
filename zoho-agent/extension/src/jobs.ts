@@ -367,9 +367,13 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
     .slice(0, 160)
     .filter((item) => item.text || item.selector);
 
+  const recoveryHint = location.pathname.includes("/tab/Home")
+    ? "Zoho Home is a recoverable navigation state. If the task or recent conversation contains a known record URL/id, use ui_step open_url to navigate there, wait for the expected record, and continue. Stop only when the target identity is unknown or ambiguous."
+    : null;
   const result = {
     url: location.href,
     title: document.title,
+    recovery_hint: recoveryHint,
     scope_selector: scopeSelector || null,
     frames_observed: allContexts.map((context) => context.frame),
     warnings: scoped.warnings,
@@ -383,6 +387,7 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
     result: {
       url: result.url,
       title: result.title,
+      recovery_hint: result.recovery_hint,
       truncated: true,
       preview: json.slice(0, LIMIT)
     }

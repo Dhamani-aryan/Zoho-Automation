@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase G live recovery: Home is not a composer stop condition (2026-07-10, build)
+
+Live retry observed crm.zoho.com/crm/org890324941/tab/Home/begin and stopped even though the session already contained the exact deal id/URL. Restored the canonical record navigation rule that had been logged in Phase C/D decisions but was lost during the Phase G prompt rewrite. Agent instructions now require ui_step open_url to the known canonical record, identity verification, and continuation; Home/list/wrong-page state alone is not a stop. The email guide carries the same recovery sequence and only treats a missing composer as terminal after one known-record navigation plus re-observation.
+
+browser_observe now returns a top-level recovery_hint on /tab/Home, including in truncated observations, so the immediate tool result reinforces the same behavior. Verified npm run typecheck, npm run lint, npm run build:extension, generated-bundle recovery text, balanced SQL dollar quoting, and extracted composer-recipe syntax.
+
 ## Deterministic backend routing for the four core playbooks (2026-07-10, build)
 
 The four core seeded playbooks are deals-editing, contacts-editing, accounts-editing, and email-scheduling; zoho-facts and task-create-complete remain supporting guides. Replaced fuzzy-only current-message loading with explicit core intent routes. Email/compose/schedule/subject/recipient/CC/signature routes email-scheduling; deal/potential routes deals-editing; contact/person routes contacts-editing; account/company routes accounts-editing. Exact routed guides load first, with scoring used only to fill the remaining two-guide context budget.
