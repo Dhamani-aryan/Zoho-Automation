@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Snap-like agent rewrite Step 2: safe workspace file reading (2026-07-10, build)
+
+The Phase G prompt required parsing imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md, but the agent had no file-reading tool and therefore could not actually satisfy the acceptance flow from a goal alone. Added read_workspace_file as a Tier-0 general primitive. It reads .md/.txt/.csv/.json only from imports/samples, source_docs, workflows, or reference/heysnap; rejects absolute paths, traversal, disallowed extensions, directories, binary/NUL content, and files over 2 MB; and returns at most 6,000 characters per page with line metadata and next_start_line.
+
+The agent prompt now requires following next_start_line through every required page and forbids claiming a file was parsed from its name or a truncated first page. Regression coverage reads the real Batch 3 drafts and proves traversal/extension refusal. This deliberately adds read-only input capability, not Snap's arbitrary shell or unrestricted filesystem writes. Verified npm run test:orchestrator (19/19), npm run typecheck, and npm run lint.
+
 ## Snap-like agent rewrite Step 1: autonomy and data-source routing contract (2026-07-10, build)
 
 Reviewed BUILD_AN_AGENT_LIKE_SNAP.md supplied by Aryan. Reframed the agent prompt around a feedback-driven goal loop: internally plan, choose a tool from current evidence, inspect the real result, adapt, and continue until verified completion or a true stop. The model must not ask the user which source/tool/endpoint/tab/selector or obvious sub-step to use. Partial/empty/truncated output triggers narrowing, pagination, re-observation, authority escalation, or another allowed primitive rather than immediate defeat.

@@ -33,6 +33,31 @@ import {
 } from "../lib/agent/task-orders";
 import { responsesInputFromMessages } from "../lib/llm/tool-calls";
 import { routeCoreSkillGuides } from "../lib/agent/guide-routing";
+import {
+  readWorkspaceTextFile,
+  resolveWorkspaceFilePath,
+  workspaceRootFromCwd
+} from "../lib/agent/workspace-files";
+
+test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
+  const workspaceRoot = workspaceRootFromCwd(process.cwd());
+  assert.match(
+    resolveWorkspaceFilePath(workspaceRoot, "imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md"),
+    /KD Blitz Batch 3 All Contacts Email Drafts\.md$/
+  );
+  assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "../secrets.txt"), /outside allowed roots/);
+  assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "imports/samples/secret.exe"), /type is not allowed/);
+
+  const page = await readWorkspaceTextFile(workspaceRoot, {
+    path: "imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md",
+    start_line: 1,
+    max_lines: 20
+  });
+  assert.equal(page.source, "workspace_file");
+  assert.match(page.content, /KD Blitz Batch 3 All Contacts Email Drafts/);
+  assert.match(page.content, /Schedule date: TBD/);
+  assert.equal(typeof page.next_start_line, "number");
+});
 
 test("core playbooks route deterministically and carry recent intent", () => {
   assert.deepEqual(routeCoreSkillGuides("email"), { names: ["email-scheduling"], source: "current" });

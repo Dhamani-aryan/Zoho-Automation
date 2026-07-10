@@ -12,6 +12,10 @@ import {
   type MirrorModuleKey,
   type MirrorRecord
 } from "@/lib/records/mirror";
+import {
+  readWorkspaceTextFile,
+  workspaceRootFromCwd
+} from "@/lib/agent/workspace-files";
 
 const moduleSchema = z.preprocess(
   (value) => String(value ?? "").trim().toLowerCase(),
@@ -61,7 +65,29 @@ const requestNewToolSchema = z.object({
   example_call: z.unknown().optional()
 });
 
+const readWorkspaceFileSchema = z.object({
+  path: z.string().trim().min(1).max(500),
+  start_line: z.preprocess((value) => (value == null ? 1 : Number(value)), z.number().int().min(1)).default(1),
+  max_lines: z.preprocess((value) => (value == null ? 100 : Number(value)), z.number().int().min(1).max(200)).default(100)
+});
+
 export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
+  {
+    name: "read_workspace_file",
+    tier: 0,
+    description:
+      "Read a paginated text file from the allowed local workspace roots: imports/samples, source_docs, workflows, or reference/heysnap. Use for drafts, batch inputs, and reference playbooks. Follow next_start_line until the required content is complete.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["path"],
+      properties: {
+        path: { type: "string", description: "Workspace-relative .md, .txt, .csv, or .json path." },
+        start_line: { type: "integer", minimum: 1, default: 1 },
+        max_lines: { type: "integer", minimum: 1, maximum: 200, default: 100 }
+      }
+    }
+  },
   {
     name: "db_search_records",
     tier: 0,
@@ -204,6 +230,11 @@ export async function runTier0Tool({
   supabase: SupabaseClient;
   userId: string;
 }) {
+  if (call.name === "read_workspace_file") {
+    const args = parseArgs(readWorkspaceFileSchema, call.args);
+    return readWorkspaceTextFile(workspaceRootFromCwd(process.cwd()), args);
+  }
+
   if (call.name === "db_search_records") {
     const args = parseArgs(dbSearchSchema, call.args);
     const records = await fetchModuleRecords(supabase, args.module);

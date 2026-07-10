@@ -14,6 +14,7 @@
     "lib/orchestrator/state.ts",
     "lib/agent/sweeps.ts",
     "lib/agent/guide-routing.ts",
+    "lib/agent/workspace-files.ts",
     "lib/agent/task-orders.ts",
     "lib/agent/turn-lock.ts",
     "lib/agent/ui-tools.ts",
