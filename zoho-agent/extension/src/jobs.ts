@@ -101,11 +101,27 @@ function isUiJob(job: ToolJob) {
 async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   const code = typeof job.args.code === "string" ? job.args.code : "";
   const awaitPromise = job.args.await_promise === true;
+  const frameSelector = typeof job.args.frame_selector === "string" ? job.args.frame_selector.trim() : "";
   if (!code.trim()) return { ok: false, error_message: "browser_eval code is empty." };
   try {
+    // Zoho renders the email composer body (and some dialogs) inside a
+    // same-origin iframe. When a frame_selector is given, resolve that frame's
+    // document and bind it to `document` inside the evaluated code so the
+    // model's DOM queries target the composer, not the top page. Same-origin
+    // access works directly from the top MAIN world - no frame injection.
+    let boundDocument: Document = document;
+    if (frameSelector) {
+      const frame = document.querySelector(frameSelector);
+      if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
+        return { ok: false, error_message: `browser_eval frame_selector matched no accessible iframe: ${frameSelector}` };
+      }
+      boundDocument = frame.contentDocument;
+    }
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const fn = awaitPromise ? new AsyncFunction(code) : new Function(code);
-    const raw = awaitPromise ? await fn() : fn();
+    // `document` is shadowed by the bound (possibly frame) document; `window`
+    // and `window.document` stay top-level so callers can still read #token.
+    const fn = awaitPromise ? new AsyncFunction("document", code) : new Function("document", code);
+    const raw = awaitPromise ? await fn(boundDocument) : fn(boundDocument);
     const json = JSON.stringify(raw ?? null);
     if (json.length > 64 * 1024) {
       return {

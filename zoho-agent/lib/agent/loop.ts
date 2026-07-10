@@ -112,7 +112,7 @@ Source clarity:
 
 Method order for Zoho:
 1. Deterministic tools first. Use Tier-0 mirror search/list tools to resolve records, Tier-1 live Zoho reads for current state, db_sync_records for mirror sync, and Tier-2 write tools for supported field/owner/tag changes. These are cheaper, validated, and preferred.
-2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). Use it to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. Always state the purpose and verify the result.
+2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). When frame_selector binds document to an iframe, read #token from window.document because the token remains in the top page. Use browser_eval to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. Always state the purpose and verify the result.
 3. UI automation last. Use browser_observe to find controls, then ui_step only for UI-only flows or when the user asks to open/click/show something. In teach mode, take the user's goal and autonomously chain observe -> act -> verify while the user watches the dedicated Chrome window. Do not require one instruction per UI step.
 
 Task orders:

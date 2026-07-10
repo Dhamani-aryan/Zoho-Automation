@@ -4,7 +4,8 @@ import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 const browserEvalSchema = z.object({
   purpose: z.string().trim().min(1),
   code: z.string().trim().min(1).max(200_000),
-  await_promise: z.boolean().optional()
+  await_promise: z.boolean().optional(),
+  frame_selector: z.string().trim().min(1).max(500).optional()
 });
 
 const browserObserveSchema = z.object({
@@ -34,7 +35,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_eval",
     tier: 2,
     description:
-      "Run model-written JavaScript in the active crm.zoho.com page MAIN world. Requires an approved task order or a per-call approval card showing the full purpose and code.",
+      "Run model-written JavaScript in the active crm.zoho.com page MAIN world. The code receives `document` as its execution document. To target the email composer body or a dialog rendered in a same-origin iframe, pass frame_selector (a CSS selector for the iframe) and `document` will be bound to that frame's document. `window` and `window.document` stay top-level; when frame_selector is set, read Zoho's #token from window.document before making fetch()-based API calls. Gated only when the user has approvals enabled.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -42,7 +43,11 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
       properties: {
         purpose: { type: "string" },
         code: { type: "string" },
-        await_promise: { type: "boolean" }
+        await_promise: { type: "boolean" },
+        frame_selector: {
+          type: "string",
+          description: "Optional CSS selector for a same-origin iframe (e.g. the Zoho email composer body) whose document the code should run against."
+        }
       }
     }
   }

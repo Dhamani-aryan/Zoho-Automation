@@ -1,5 +1,13 @@
 # V2 Decisions
 
+## Phase G live defect fix: browser_eval could not reach the composer iframe (2026-07-10, chat)
+
+Live run: "fill the open composer" -> browser_eval "Worked" but returned null twice; complete_task_order honestly reported "could not verify" (verification rules working as intended). Root cause: browserEvalPageRunner (extension/src/jobs.ts) runs the model's code in the TOP frame's MAIN world via new Function(code); Zoho's email composer body is a same-origin IFRAME (#z_editor per the seeded email-scheduling guide). The model's document.querySelector ran against the top document, found no composer fields, returned null. browser_observe was taught to descend into iframes in this phase, but browser_eval was not - so the model could see the fields and not touch them.
+
+Fix (chat): browser_eval now accepts optional frame_selector. When present, the runner resolves that same-origin iframe's contentDocument and binds it to `document` inside the evaluated code (new Function("document", code) called with the frame document); `window` and `window.document` stay top-level. Eval code that also calls Zoho APIs must therefore read #token from window.document while frame_selector is set. Added frame_selector to browserEvalSchema + the tool JSON schema + the tool description (points the model at the composer body iframe). No frame injection needed - same-origin iframes are reachable from the top MAIN world. Verified npm run typecheck, npm run lint, npm run build, and npm run build:extension; reload the unpacked extension before live acceptance. Part of the pending Phase G review batch.
+
+Note: new Function(code) executing at all means Zoho's page CSP allows eval in the MAIN world here (unlike the inline-script block from Phase B) - the null was frame scope, not CSP. If a future Zoho CSP tightening blocks new Function, browser_eval would need to move to CDP Runtime.evaluate; not needed now.
+
 ## Phase G follow-up hotfix: profile fallback before migration (2026-07-10, build)
 
 Live issue: Settings -> Chrome extension token generation returned "User profile is not configured" when the cloud Supabase schema had not yet been migrated with `users.approvals_enabled`.
