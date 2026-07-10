@@ -128,6 +128,7 @@ Search and matching:
 Workflows and guides:
 - Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
 - Skill guides are the preferred workflow memory: intent, method, gotchas, verification, and stop conditions. For a task class, call list_skill_guides if you need to discover names, then read_skill_guide for each relevant guide before acting. After novel work, draft and propose save_skill_guide.
+- Acceptance uses the real drafts file at imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md. Parse its header rules (persona mapping, first-subject rule, CC, time, body boundary) and per-contact sections; the only permitted question is the TBD schedule date. Encode the format in the email-scheduling guide.
 - Learn by doing: after any completed task where no matching guide existed, draft "everything needed to redo this without being walked through" as a guide. Include intent, preconditions, preferred API method, UI fallback, gotchas discovered, verification proof, stop conditions, and parameter slots for what varies such as record id, recipient, field value, date, or time. Then call save_skill_guide and wait for the confirmation card.
 
 Reporting style:
@@ -424,6 +425,70 @@ async function readSkillGuide(service: SupabaseClient, call: AgentToolCall) {
   if (error) throw error;
   if (!data) throw new Error(`Skill guide "${name}" was not found.`);
   return { guide: data };
+}
+
+type SkillGuideContextRow = {
+  name: string;
+  intent: string;
+  preconditions: string;
+  method_api: string;
+  method_ui: string;
+  gotchas: string;
+  verification: string;
+  stop_conditions: string;
+  params: unknown;
+};
+
+function guideKeywordScore(text: string, guide: SkillGuideContextRow) {
+  const haystack = `${guide.name} ${guide.intent} ${guide.method_api} ${guide.method_ui}`.toLowerCase();
+  let score = 0;
+  for (const token of text.toLowerCase().split(/[^a-z0-9_]+/).filter(Boolean)) {
+    if (token.length < 3) continue;
+    if (haystack.includes(token)) score += 1;
+  }
+
+  const includesAny = (terms: string[]) => terms.some((term) => text.toLowerCase().includes(term));
+  if (guide.name === "email-scheduling" && includesAny(["email", "compose", "composer", "schedule", "subject", "cc", "recipient", "draft"])) score += 12;
+  if (guide.name === "task-create-complete" && includesAny(["task", "activity", "complete"])) score += 8;
+  if (guide.name === "deals-editing" && includesAny(["deal", "potential", "next step", "stage"])) score += 6;
+  if (guide.name === "contacts-editing" && includesAny(["contact", "recipient", "person"])) score += 5;
+  if (guide.name === "accounts-editing" && includesAny(["account", "company"])) score += 5;
+  if (guide.name === "zoho-facts" && includesAny(["zoho", "crm", "deal", "contact", "account", "email", "task"])) score += 2;
+  return score;
+}
+
+function formatGuideForContext(guide: SkillGuideContextRow) {
+  const text = [
+    `Guide: ${guide.name}`,
+    `Intent: ${guide.intent}`,
+    `Preconditions: ${guide.preconditions}`,
+    `Method API: ${guide.method_api}`,
+    `Method UI: ${guide.method_ui}`,
+    `Gotchas: ${guide.gotchas}`,
+    `Verification: ${guide.verification}`,
+    `Stop conditions: ${guide.stop_conditions}`,
+    `Params: ${JSON.stringify(guide.params)}`
+  ].join("\n");
+  return text.length > 6000 ? `${text.slice(0, 6000)}\n[guide truncated]` : text;
+}
+
+async function guideContextForTurn(service: SupabaseClient, content: string) {
+  const { data, error } = await service
+    .from("skill_guides")
+    .select("name,intent,preconditions,method_api,method_ui,gotchas,verification,stop_conditions,params")
+    .limit(100);
+  if (error || !data) return "";
+
+  const ranked = (data as SkillGuideContextRow[])
+    .map((guide) => ({ guide, score: guideKeywordScore(content, guide) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.guide.name.localeCompare(b.guide.name))
+    .slice(0, 2)
+    .map((item) => formatGuideForContext(item.guide));
+
+  return ranked.length > 0
+    ? `\n\nAutomatically loaded skill guides for this turn:\n\n${ranked.join("\n\n---\n\n")}`
+    : "";
 }
 
 function skillGuideSummary(guide: SaveSkillGuideArgs, existingVersion: number | null): ApprovalSummaryRecord[] {
@@ -1108,7 +1173,7 @@ async function runBrowserEvalTool({
   };
 }
 
-function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean) {
+function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean, guideContext: string) {
   return `${AGENT_INSTRUCTIONS}
 
 Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}; approval cards are ${
@@ -1117,7 +1182,7 @@ Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}; approval cards
     approvalsEnabled
       ? "When approval cards are ON, unattended/batch task orders and Tier-2 API writes pause for cards."
       : "When approval cards are OFF, batch task orders auto-approve as work logs and Tier-2 API writes run immediately with before/after evidence."
-  }`;
+  }${guideContext}`;
 }
 
 async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
@@ -1457,6 +1522,7 @@ export async function runAgentTurn({
   if (loadError) throw loadError;
 
   const transcript = messageRowsToPrompt((rows ?? []) as AgentMessageRow[]);
+  const automaticGuideContext = service ? await guideContextForTurn(service, content) : "";
   let toolCallCount = 0;
   // Time spent blocked on a Tier-2 approval card does NOT count against the
   // turn budget (a human may take minutes to decide). We subtract it.
@@ -1511,7 +1577,7 @@ export async function runAgentTurn({
     }
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const model = await provider.runTools({
-      instructions: instructionsForTurn(teachMode, user.approvals_enabled),
+      instructions: instructionsForTurn(teachMode, user.approvals_enabled, automaticGuideContext),
       messages: transcript,
       tools: AGENT_TOOL_DEFINITIONS
     });

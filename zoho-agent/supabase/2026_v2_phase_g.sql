@@ -145,13 +145,13 @@ insert into public.skill_guides (
 (
   'email-scheduling',
   'Schedule KD Blitz style one-to-one emails from draft markdown/contact rows. Schedule never send immediately.',
-  'Each item needs contact name, email, account/company, deal URL/id, subject, body, schedule date/time, and timezone rule. Missing recipient/subject/body/date/time must stop or skip per approved plan.',
-  'Use API/browser_eval for data prep, resolving deal/contact ids, duplicate checks, and verification where available. For the UI-only compose/schedule flow, open deal Potential URL, navigate to Emails/Send Email/Compose, fill recipient/subject/body, choose schedule, and verify in Scheduled view. Preserve CC rules from the source draft; for KD Blitz CC ankur@klouddata.com only when the playbook says so.',
-  'Use browser_observe to find Emails/Send Email/Compose and scheduler controls. Use CDP trusted input for composer/editor iframe, hover-reveal controls, and Enter-to-commit. The email body editor may be contentEditable/iframe; use frame_selector when needed.',
-  'Schedule means schedule, never send. Verify contact/deal identity before composing. Date format in task/email UI can be like Jun 22, 2026. Multiple subject options require choosing the approved one.',
-  'Confirm the scheduled email exists with correct recipient, subject, scheduled date/time, and related deal/contact. Report success/skipped/failed counts and links.',
-  'Stop on missing email/subject/body/date/time, wrong deal/contact/account, duplicate scheduled email, logged out, composer not found, or verification mismatch.',
-  '[{"name":"draft_file","description":"Markdown file with contact email drafts","example":"KD Blitz Batch 5 All Contacts Email Drafts.md"},{"name":"schedule_date","description":"Schedule date","example":"2026-07-22"}]'::jsonb
+  'Each item needs contact name, email, account/company, persona, title, deal URL/id, first subject option, body ending at Best,, schedule date/time, and CC rules. For imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md parse the header: IT/Technical gets Email A, Finance gets Email B, Leadership gets Email A; use subject option 1; CC prashant.sharma@klouddata.com and ankur@klouddata.com; schedule time is 8:00 PM; body boundary is Best, and Zoho signature stays below. The only permitted question for that file is the TBD schedule date.',
+  'Use API/browser_eval for data prep, resolving deal/contact ids, duplicate checks, and verification where available. For UI compose/schedule, open the deal Potential URL, navigate to Emails, click Compose Email, fill recipient/subject/body/CC, schedule, then verify in Scheduled. Schedule never send immediately. For undo, scheduled emails are non-revertible in scope; document manual path: open the related deal, Emails, Scheduled tab, find the matching recipient/subject/time, and use Zoho UI delete/cancel manually.',
+  'Selector map from KD Blitz playbook section 9: Compose Email button is a button with text Compose Email. To input #ceToAddr_1; To chips [id^="ceToAddrDetails"] li.selectedEmail; remove stale chips via .closeIconB. Subject #ceSubject_1. Cc link is small text Cc; Cc input #ceCCAddr_1; Cc chips [id^="ceCCAddrDetails"]. Body editor is iframe frame_selector #z_editor with inner #editorDiv and signature #ecw_signature. Insert body above signature as Verdana, Geneva, sans-serif at 13.33px; no leading blank line; two blank lines before signature. Use CDP trusted input and a real Enter key to commit To and each CC chip. Schedule button is text Schedule, last visible match width < 160; popup time #schTimeMail with zero-padded option like 08:00 PM; date #startDate or #bstDate; confirm button text Schedule & Close.',
+  'Schedule means schedule, never send. Zoho may leave a default To chip, so clear chips first and read them back. Date format in task/email UI can be like Jun 22, 2026. Multiple subject options require option 1 unless the user explicitly overrides. The body in the drafts file already ends at Best,; never add a typed signature because #ecw_signature is already present.',
+  'Before scheduling: read back To and Cc chips, subject, and visible body top/spacing; screenshot evidence should show correct recipient(s), first subject, Hi {FirstName} with no blank line above, two blank lines before signature. After scheduling: confirm success toast "Your mail has been scheduled successfully" and verify the email appears in the Scheduled tab at the requested date/time. Report counts, failures, screenshots/evidence ids, and non-revertible scheduled-email undo notes.',
+  'Stop on missing email/subject/body/date/time, wrong deal/contact/account, duplicate scheduled email, To/Cc chip mismatch, composer/iframe not found, logged out, immediate-send risk, or Scheduled-tab verification mismatch.',
+  '[{"name":"draft_file","description":"Markdown file with contact email drafts","example":"imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md"},{"name":"schedule_date","description":"Only question allowed when the source says TBD","example":"2026-07-22"},{"name":"schedule_time","description":"Time from header, normally 8:00 PM","example":"8:00 PM"},{"name":"cc","description":"CC addresses from header","example":["prashant.sharma@klouddata.com","ankur@klouddata.com"]}]'::jsonb
 ),
 (
   'task-create-complete',
@@ -164,4 +164,24 @@ insert into public.skill_guides (
   'Stop on duplicate task, parent mismatch, missing subject/due date, more than one matching open task, or completion not verified.',
   '[{"name":"record_url","description":"Parent Zoho record URL","example":"https://crm.zoho.com/crm/org890324941/tab/Potentials/6834250000003329005"},{"name":"task_subject","description":"Task subject","example":"Follow up"}]'::jsonb
 )
-on conflict (name) do nothing;
+on conflict (name) do update set
+  intent = excluded.intent,
+  preconditions = excluded.preconditions,
+  method_api = excluded.method_api,
+  method_ui = excluded.method_ui,
+  gotchas = excluded.gotchas,
+  verification = excluded.verification,
+  stop_conditions = excluded.stop_conditions,
+  params = excluded.params,
+  version = case
+    when row(public.skill_guides.intent, public.skill_guides.preconditions, public.skill_guides.method_api, public.skill_guides.method_ui, public.skill_guides.gotchas, public.skill_guides.verification, public.skill_guides.stop_conditions, public.skill_guides.params)
+      is distinct from row(excluded.intent, excluded.preconditions, excluded.method_api, excluded.method_ui, excluded.gotchas, excluded.verification, excluded.stop_conditions, excluded.params)
+    then public.skill_guides.version + 1
+    else public.skill_guides.version
+  end,
+  updated_at = case
+    when row(public.skill_guides.intent, public.skill_guides.preconditions, public.skill_guides.method_api, public.skill_guides.method_ui, public.skill_guides.gotchas, public.skill_guides.verification, public.skill_guides.stop_conditions, public.skill_guides.params)
+      is distinct from row(excluded.intent, excluded.preconditions, excluded.method_api, excluded.method_ui, excluded.gotchas, excluded.verification, excluded.stop_conditions, excluded.params)
+    then now()
+    else public.skill_guides.updated_at
+  end;

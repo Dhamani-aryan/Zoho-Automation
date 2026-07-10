@@ -8,6 +8,12 @@ When approval cards are off, Tier-2 API writes still build the normal before-val
 
 Also fixed task-order Tier-2 writes to go through buildApprovalRequest before enqueueing, so batch/task-order writes now keep the same before-value evidence needed for audit and undo.
 
+## Phase G follow-up Step 2: automatic guide context and real email guide (2026-07-10, build)
+
+Added deterministic per-turn skill-guide routing. The agent now loads the top matching one or two guides into context before the model call; email/compose/schedule language routes to `email-scheduling` without the user asking.
+
+Rebuilt the `email-scheduling` seed from the KD Blitz playbook section 9 selector map and the real acceptance drafts file format. It now records To/Cc chip selectors, real Enter commit, subject input, body iframe `#z_editor` -> `#editorDiv`, Verdana 13.33px body insertion above `#ecw_signature`, schedule-never-send flow, chip read-back, Scheduled-tab verification, and the manual Scheduled-tab path for non-revertible scheduled emails. The seed upsert now updates existing guide rows instead of doing nothing on conflict.
+
 ## DECISION: all approval gates OFF by default (Aryan, 2026-07-10)
 
 Follow-on from the same-day interactive-ungating decision. Aryan: "people are already giving specific instructions and there's nothing that cannot be undone so why have them." ALL approval cards are removed from the default experience - including batch task orders and Tier-2 API write cards.
