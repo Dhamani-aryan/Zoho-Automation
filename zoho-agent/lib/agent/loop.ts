@@ -35,6 +35,7 @@ import {
   isTaskOrderTool,
   TASK_ORDER_TOOL_DEFINITIONS,
   taskOrderBudgetDecision,
+  taskOrderProposalDecision,
   validateTaskOrderToolCall,
   type ActiveTaskOrder,
   type ExpectedChange
@@ -654,12 +655,14 @@ async function proposeTaskOrder({
   user,
   sessionId,
   call,
+  userRequest,
   emit
 }: {
   service: SupabaseClient;
   user: AuthorizedUser;
   sessionId: string;
   call: AgentToolCall;
+  userRequest: string;
   emit: Emit;
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const validated = validateTaskOrderToolCall(call);
@@ -673,6 +676,9 @@ async function proposeTaskOrder({
   if (existing) {
     throw new Error(`Task order already active: ${existing.goal}. Complete or stop it before proposing another.`);
   }
+
+  const proposal = taskOrderProposalDecision(args.expected_changes, userRequest);
+  if (!proposal.allowed) throw new Error(proposal.reason);
 
   const budget = defaultTaskOrderBudget(args.expected_changes);
   const nowIso = new Date().toISOString();
@@ -1989,7 +1995,7 @@ export async function runAgentTurn({
         } else if (isTaskOrderTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for task orders.");
           if (call.name === "propose_task_order") {
-            const proposed = await proposeTaskOrder({ service, user, sessionId, call, emit });
+            const proposed = await proposeTaskOrder({ service, user, sessionId, call, userRequest: content, emit });
             ok = proposed.ok;
             result = proposed.result;
             pausedMs += proposed.pausedMs;

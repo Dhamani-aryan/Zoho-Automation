@@ -55,7 +55,7 @@ export const TASK_ORDER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "propose_task_order",
     tier: 2,
     description:
-      "Create a task order for an autonomous task. Read scope auto-approves; write scope shows one approval card for the whole task before any CRM-changing work.",
+      "Create a task order only for batch work affecting more than 3 distinct records or work the user explicitly asked to run unattended/in the background. Never use it for watched one-record browser work. Read scope auto-approves; write scope shows one approval card for the whole task before any CRM-changing work.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -109,8 +109,29 @@ export function validateTaskOrderToolCall(call: AgentToolCall) {
   throw new Error(`Unknown task order tool: ${call.name}`);
 }
 
+export function distinctExpectedRecordCount(expectedChanges: ExpectedChange[]) {
+  return new Set(expectedChanges.map((change) => change.record.trim().toLowerCase()).filter(Boolean)).size;
+}
+
+export function taskOrderProposalDecision(expectedChanges: ExpectedChange[], userRequest: string) {
+  const recordCount = distinctExpectedRecordCount(expectedChanges);
+  if (recordCount > 3) return { allowed: true as const, reason: "batch", recordCount };
+
+  const explicitlyUnattended =
+    /\b(unattended|in the background|background task|while i(?:'m| am) away|without me watching|run overnight|continue on your own)\b/i.test(
+      userRequest
+    );
+  if (explicitlyUnattended) return { allowed: true as const, reason: "unattended", recordCount };
+
+  return {
+    allowed: false as const,
+    reason: "Task orders are only for more than 3 distinct records or explicitly unattended work. Continue this watched task directly.",
+    recordCount
+  };
+}
+
 export function defaultTaskOrderBudget(expectedChanges: ExpectedChange[]): TaskOrderBudget {
-  const expected = expectedChanges.length;
+  const expected = distinctExpectedRecordCount(expectedChanges);
   return {
     max_tool_calls: taskOrderMaxToolCalls(),
     max_wall_ms: taskOrderWallMs(),

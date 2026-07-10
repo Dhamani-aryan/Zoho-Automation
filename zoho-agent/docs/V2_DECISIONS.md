@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase G live defect fix: enforce batch-only task orders (2026-07-10, build)
+
+The watched one-record composer retry incorrectly proposed a task order, and its budget reported four records because expected_changes counted recipient/subject/body actions rather than distinct records. The server now accepts propose_task_order only for more than three distinct expected records or when the current user request explicitly asks for unattended/background execution. Otherwise the tool returns an observation telling the agent to continue directly. Record budgets now derive from distinct normalized record labels, with the existing 10 percent headroom. Added regression coverage for watched, unattended, batch, and repeated-action budget cases. Verified npm run test:orchestrator (17/17), npm run typecheck, and npm run lint.
+
 ## Phase G live defect fix: self-heal interrupted tool transcripts (2026-07-10, build)
 
 After the composer turn, the next Codex request failed with HTTP 400 "No tool output found for function call". A turn interruption can persist an assistant function-call marker before its tool-result row, and the structured Responses serializer previously replayed that orphan. responsesInputFromMessages now emits structured function_call/function_call_output items only for call ids present on both sides. Orphan calls are omitted; orphan outputs are retained as plain TOOL RESULT context. Added regression coverage to the orchestrator test suite. Verified npm run test:orchestrator (16/16), npm run typecheck, and npm run lint.

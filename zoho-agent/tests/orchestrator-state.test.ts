@@ -26,7 +26,11 @@ import {
   validateUiToolCall,
   workflowEffectForSteps
 } from "../lib/agent/ui-tools";
-import { taskOrderBudgetDecision } from "../lib/agent/task-orders";
+import {
+  defaultTaskOrderBudget,
+  taskOrderBudgetDecision,
+  taskOrderProposalDecision
+} from "../lib/agent/task-orders";
 import { responsesInputFromMessages } from "../lib/llm/tool-calls";
 
 test("Responses transcript includes only complete tool call/output pairs", () => {
@@ -251,6 +255,32 @@ test("task order budgets stop on tool, wall-clock, or record limits", () => {
     }).ok,
     false
   );
+});
+
+test("task orders require batch records or explicit unattended intent", () => {
+  const oneRecordChanges = [
+    { record: "Deal 123", action: "recipient", detail: "Set To" },
+    { record: "Deal 123", action: "subject", detail: "Set subject" },
+    { record: "Deal 123", action: "body", detail: "Set body" }
+  ];
+  const batchChanges = ["1", "2", "3", "4"].map((record) => ({
+    record: `Deal ${record}`,
+    action: "email",
+    detail: "Schedule email"
+  }));
+
+  assert.equal(taskOrderProposalDecision(oneRecordChanges, "Try now").allowed, false);
+  assert.deepEqual(taskOrderProposalDecision(oneRecordChanges, "Run this in the background"), {
+    allowed: true,
+    reason: "unattended",
+    recordCount: 1
+  });
+  assert.deepEqual(taskOrderProposalDecision(batchChanges, "Schedule these"), {
+    allowed: true,
+    reason: "batch",
+    recordCount: 4
+  });
+  assert.equal(defaultTaskOrderBudget(oneRecordChanges).max_records_touched, 2);
 });
 
 test("ui_step validation and teach-mode gate are strict", () => {
