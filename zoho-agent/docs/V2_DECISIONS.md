@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase G follow-up hotfix: profile fallback before migration (2026-07-10, build)
+
+Live issue: Settings -> Chrome extension token generation returned "User profile is not configured" when the cloud Supabase schema had not yet been migrated with `users.approvals_enabled`.
+
+Fix: `requireApiRole` and `requirePageRole` now try the new `role,email,approvals_enabled` profile shape first, then retry the legacy `role,email` shape and default `approvals_enabled=false` if the new column is missing. This keeps existing Settings/token routes usable while the Phase G migration is being applied. Verification: npm run typecheck passed; npm run lint passed.
+
 ## Phase G follow-up Step 1: approvals flag and default ungated execution (2026-07-10, build)
 
 Started the section 8 follow-ups by putting the reviewed gate machinery behind `users.approvals_enabled`, default false. Settings now exposes the flag, with admin-only edits.

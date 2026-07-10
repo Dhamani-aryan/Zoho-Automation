@@ -10,6 +10,34 @@ export type AuthorizedUser = {
   approvals_enabled: boolean;
 };
 
+async function loadProfile(supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>, userId: string) {
+  if (!supabase) return { profile: null };
+
+  const withApprovals = await supabase
+    .from("users")
+    .select("role,email,approvals_enabled")
+    .eq("id", userId)
+    .single();
+  if (!withApprovals.error && withApprovals.data) {
+    return { profile: withApprovals.data as { role: string; email: string | null; approvals_enabled?: boolean | null } };
+  }
+
+  // Backward compatibility for a running app pointed at a cloud database before
+  // the Phase G migration has been applied. Without this retry, every route
+  // that requires a user profile fails with "User profile is not configured"
+  // because PostgREST rejects the unknown approvals_enabled column.
+  const legacy = await supabase
+    .from("users")
+    .select("role,email")
+    .eq("id", userId)
+    .single();
+  if (!legacy.error && legacy.data) {
+    return { profile: { ...(legacy.data as { role: string; email: string | null }), approvals_enabled: false } };
+  }
+
+  return { profile: null };
+}
+
 export async function requireApiRole(allowedRoles: UserRole[]) {
   const supabase = await createServerSupabaseClient();
 
@@ -30,13 +58,9 @@ export async function requireApiRole(allowedRoles: UserRole[]) {
     };
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("users")
-    .select("role,email,approvals_enabled")
-    .eq("id", user.id)
-    .single();
+  const { profile } = await loadProfile(supabase, user.id);
 
-  if (profileError || !profile) {
+  if (!profile) {
     return {
       error: NextResponse.json({ error: "User profile is not configured." }, { status: 403 })
     };
@@ -54,7 +78,7 @@ export async function requireApiRole(allowedRoles: UserRole[]) {
       id: user.id,
       email: profile.email ?? user.email ?? null,
       role: profile.role as UserRole,
-      approvals_enabled: Boolean((profile as { approvals_enabled?: boolean | null }).approvals_enabled)
+      approvals_enabled: Boolean(profile.approvals_enabled)
     } satisfies AuthorizedUser
   };
 }
@@ -69,11 +93,7 @@ export async function requirePageRole(allowedRoles: UserRole[]) {
 
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase
-    .from("users")
-    .select("role,email,approvals_enabled")
-    .eq("id", user.id)
-    .single();
+  const { profile } = await loadProfile(supabase, user.id);
 
   if (!profile || !allowedRoles.includes(profile.role as UserRole)) {
     redirect("/agent");
@@ -85,7 +105,7 @@ export async function requirePageRole(allowedRoles: UserRole[]) {
       id: user.id,
       email: profile.email ?? user.email ?? null,
       role: profile.role as UserRole,
-      approvals_enabled: Boolean((profile as { approvals_enabled?: boolean | null }).approvals_enabled)
+      approvals_enabled: Boolean(profile.approvals_enabled)
     } satisfies AuthorizedUser
   };
 }
