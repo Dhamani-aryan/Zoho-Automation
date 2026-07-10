@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic backend routing for the four core playbooks (2026-07-10, build)
+
+The four core seeded playbooks are deals-editing, contacts-editing, accounts-editing, and email-scheduling; zoho-facts and task-create-complete remain supporting guides. Replaced fuzzy-only current-message loading with explicit core intent routes. Email/compose/schedule/subject/recipient/CC/signature routes email-scheduling; deal/potential routes deals-editing; contact/person routes contacts-editing; account/company routes accounts-editing. Exact routed guides load first, with scoring used only to fill the remaining two-guide context budget.
+
+Routing now falls back to the latest matching user message in the same session when the current turn is shorthand such as "try now". Every routed turn writes a skill_guides_loaded audit event with route source plus requested/loaded/missing names. If a required routed row is absent or the guide query fails, the prompt receives an explicit stop warning instead of silently attempting the workflow without its playbook. Regression coverage includes exact one-word email/deal/contact/account triggers, multi-guide email-contact intent, recent email carry-forward, and no-match behavior. Verified npm run test:orchestrator (18/18), npm run typecheck, and npm run lint.
+
 ## HeySnap correction adaptation: exact composer insertion recipe (2026-07-10, build)
 
 Expanded the email-scheduling seed with a copy-ready browser_eval recipe derived from NUANCES_AND_CORRECTIONS (1).md. The stored guide now removes only stale body nodes before the top-level node containing #ecw_signature, normalizes leading/trailing blank lines, inserts body lines as Verdana 13.33px nodes, appends exactly two blank lines, inserts before the signature anchor, dispatches input, and returns body_text/signature_present/signature_after_body evidence. The top-level-anchor walk is intentionally safer than assuming #ecw_signature is always a direct #editorDiv child. Added a dated correction to Gotchas. Verified balanced SQL dollar quoting, git diff --check, and extracted/compiled the embedded recipe with Node new Function.

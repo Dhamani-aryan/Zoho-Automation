@@ -32,6 +32,23 @@ import {
   taskOrderProposalDecision
 } from "../lib/agent/task-orders";
 import { responsesInputFromMessages } from "../lib/llm/tool-calls";
+import { routeCoreSkillGuides } from "../lib/agent/guide-routing";
+
+test("core playbooks route deterministically and carry recent intent", () => {
+  assert.deepEqual(routeCoreSkillGuides("email"), { names: ["email-scheduling"], source: "current" });
+  assert.deepEqual(routeCoreSkillGuides("deal"), { names: ["deals-editing"], source: "current" });
+  assert.deepEqual(routeCoreSkillGuides("contact"), { names: ["contacts-editing"], source: "current" });
+  assert.deepEqual(routeCoreSkillGuides("account"), { names: ["accounts-editing"], source: "current" });
+  assert.deepEqual(routeCoreSkillGuides("Email this contact"), {
+    names: ["email-scheduling", "contacts-editing"],
+    source: "current"
+  });
+  assert.deepEqual(routeCoreSkillGuides("Try now", ["Open the deal", "Compose the email"]), {
+    names: ["email-scheduling"],
+    source: "recent"
+  });
+  assert.deepEqual(routeCoreSkillGuides("Continue"), { names: [], source: "none" });
+});
 
 test("Responses transcript includes only complete tool call/output pairs", () => {
   const input = responsesInputFromMessages([

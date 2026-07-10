@@ -73,6 +73,7 @@ import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
 import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
+import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
 const JOB_POLL_INTERVAL_MS = 500;
@@ -493,23 +494,65 @@ function formatGuideForContext(guide: SkillGuideContextRow) {
   return text.length > 6000 ? `${text.slice(0, 6000)}\n[guide truncated]` : text;
 }
 
-async function guideContextForTurn(service: SupabaseClient, content: string) {
+async function guideContextForTurn(
+  service: SupabaseClient,
+  currentContent: string,
+  recentUserContents: string[]
+) {
   const { data, error } = await service
     .from("skill_guides")
     .select("name,intent,preconditions,method_api,method_ui,gotchas,verification,stop_conditions,params")
     .limit(100);
-  if (error || !data) return "";
+  const routed = routeCoreSkillGuides(currentContent, recentUserContents);
+  if (error || !data) {
+    return {
+      context: routed.names.length
+        ? `\n\nRequired backend skill guides could not be loaded: ${routed.names.join(", ")}. Stop before execution and report that the guide library is unavailable.`
+        : "",
+      requestedNames: routed.names,
+      loadedNames: [] as string[],
+      missingNames: routed.names,
+      source: routed.source
+    };
+  }
 
-  const ranked = (data as SkillGuideContextRow[])
-    .map((guide) => ({ guide, score: guideKeywordScore(content, guide) }))
+  const rows = data as SkillGuideContextRow[];
+  const byName = new Map(rows.map((guide) => [guide.name, guide] as const));
+  const selected: SkillGuideContextRow[] = [];
+  for (const name of routed.names) {
+    const guide = byName.get(name);
+    if (guide && !selected.some((item) => item.name === guide.name)) selected.push(guide);
+  }
+
+  const rankedFallback = rows
+    .filter((guide) => !selected.some((item) => item.name === guide.name))
+    .map((guide) => ({ guide, score: guideKeywordScore(currentContent, guide) }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score || a.guide.name.localeCompare(b.guide.name))
-    .slice(0, 2)
-    .map((item) => formatGuideForContext(item.guide));
+    .map((item) => item.guide);
 
-  return ranked.length > 0
-    ? `\n\nAutomatically loaded skill guides for this turn:\n\n${ranked.join("\n\n---\n\n")}`
+  for (const guide of rankedFallback) {
+    if (selected.length >= 2) break;
+    selected.push(guide);
+  }
+
+  const loadedNames = selected.map((guide) => guide.name);
+  const missingNames = routed.names.filter((name) => !byName.has(name));
+  const formatted = selected.map(formatGuideForContext);
+  const missingWarning = missingNames.length
+    ? `\n\nRequired routed skill guides are missing from the backend: ${missingNames.join(", ")}. Stop before that workflow and report that the Phase G guide seed must be applied.`
     : "";
+
+  return {
+    context:
+      (formatted.length > 0
+        ? `\n\nAutomatically loaded backend skill guides for this turn:\n\n${formatted.join("\n\n---\n\n")}`
+        : "") + missingWarning,
+    requestedNames: routed.names,
+    loadedNames,
+    missingNames,
+    source: routed.source
+  };
 }
 
 function skillGuideSummary(guide: SaveSkillGuideArgs, existingVersion: number | null): ApprovalSummaryRecord[] {
@@ -1871,8 +1914,33 @@ export async function runAgentTurn({
     .limit(80);
   if (loadError) throw loadError;
 
-  const transcript = messageRowsToPrompt((rows ?? []) as AgentMessageRow[]);
-  const automaticGuideContext = service ? await guideContextForTurn(service, content) : "";
+  const messageRows = (rows ?? []) as AgentMessageRow[];
+  const transcript = messageRowsToPrompt(messageRows);
+  const allUserContents = messageRows
+    .filter((row) => row.role === "user" && row.content?.trim())
+    .map((row) => row.content as string);
+  const recentUserContents =
+    allUserContents.at(-1) === content ? allUserContents.slice(-6, -1) : allUserContents.slice(-5);
+  const guideRouting = service
+    ? await guideContextForTurn(service, content, recentUserContents)
+    : { context: "", requestedNames: [], loadedNames: [], missingNames: [], source: "none" as const };
+  const automaticGuideContext = guideRouting.context;
+  if (service && (guideRouting.requestedNames.length > 0 || guideRouting.loadedNames.length > 0)) {
+    await service.from("audit_events").insert({
+      user_id: user.id,
+      event_type: "skill_guides_loaded",
+      message: guideRouting.loadedNames.length
+        ? `Loaded backend skill guides: ${guideRouting.loadedNames.join(", ")}.`
+        : "No matching backend skill guide was loaded.",
+      metadata: {
+        session_id: sessionId,
+        route_source: guideRouting.source,
+        requested_guides: guideRouting.requestedNames,
+        loaded_guides: guideRouting.loadedNames,
+        missing_guides: guideRouting.missingNames
+      }
+    });
+  }
   let toolCallCount = 0;
   // Time spent blocked on a Tier-2 approval card does NOT count against the
   // turn budget (a human may take minutes to decide). We subtract it.
