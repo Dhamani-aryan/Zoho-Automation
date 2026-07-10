@@ -11,10 +11,10 @@ type DecisionBody = { decision?: unknown };
 // - on approve for CRM write tools this is the ONE place a Tier-2 write
 //   tool_job is created, always carrying approval_id
 //   (assertTier2JobInsertAllowed enforces it)
-// - save_ui_workflow, task_order, and browser_eval approvals are local
-//   confirmations; they do not enqueue here. The waiting agent loop performs
-//   the local upsert, begins the task-order scope, or queues browser_eval with
-//   audit context.
+// - save_ui_workflow, save_skill_guide, task_order, and browser_eval approvals
+//   are local confirmations; they do not enqueue here. The waiting agent loop
+//   performs the local upsert, begins the task-order scope, or queues
+//   browser_eval with audit context.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(["admin", "operator"]);
   if ("error" in auth) return auth.error;
@@ -95,6 +95,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (
       decision === "approve" &&
       decided.tool_name !== "save_ui_workflow" &&
+      decided.tool_name !== "save_skill_guide" &&
       decided.tool_name !== "task_order" &&
       decided.tool_name !== "browser_eval"
     ) {

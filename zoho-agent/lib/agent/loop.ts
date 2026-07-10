@@ -46,6 +46,12 @@ import {
   type BrowserEvalArgs
 } from "@/lib/agent/browser-tools";
 import {
+  isSkillGuideTool,
+  SKILL_GUIDE_TOOL_DEFINITIONS,
+  validateSkillGuideToolCall,
+  type SaveSkillGuideArgs
+} from "@/lib/agent/skill-guides";
+import {
   buildApprovalRequest,
   createPendingApproval,
   resolvedFromLiveRecord,
@@ -121,7 +127,7 @@ Search and matching:
 
 Workflows and guides:
 - Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
-- Skill guides are the preferred future workflow memory: intent, method, gotchas, verification, and stop conditions. When guide tools are available, read relevant guides before a task and propose saving a new guide after novel work.
+- Skill guides are the preferred workflow memory: intent, method, gotchas, verification, and stop conditions. For a task class, call list_skill_guides if you need to discover names, then read_skill_guide for each relevant guide before acting. After novel work, draft and propose save_skill_guide.
 
 Reporting style:
 - Do the work; do not narrate every internal step. Give short task-level updates when useful.
@@ -133,6 +139,7 @@ const AGENT_TOOL_DEFINITIONS = [
   ...TIER2_TOOL_DEFINITIONS,
   ...TASK_ORDER_TOOL_DEFINITIONS,
   ...BROWSER_TOOL_DEFINITIONS,
+  ...SKILL_GUIDE_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
@@ -367,6 +374,119 @@ async function listUiWorkflows(service: SupabaseClient) {
       version: workflow.version,
       updated_at: workflow.updated_at
     }))
+  };
+}
+
+async function listSkillGuides(service: SupabaseClient) {
+  const { data, error } = await service
+    .from("skill_guides")
+    .select("name,intent,params,version,updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return { guides: data ?? [] };
+}
+
+async function readSkillGuide(service: SupabaseClient, call: AgentToolCall) {
+  const validated = validateSkillGuideToolCall(call);
+  const name = (validated.args as { name: string }).name;
+  const { data, error } = await service
+    .from("skill_guides")
+    .select("name,intent,preconditions,method_api,method_ui,gotchas,verification,stop_conditions,params,version,updated_at")
+    .eq("name", name)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error(`Skill guide "${name}" was not found.`);
+  return { guide: data };
+}
+
+function skillGuideSummary(guide: SaveSkillGuideArgs, existingVersion: number | null): ApprovalSummaryRecord[] {
+  return [
+    {
+      zoho_id: "skill_guide",
+      name: guide.name,
+      before: { version: existingVersion },
+      after: {
+        intent: guide.intent,
+        params: guide.params.map((param) => param.name).join(", ") || "(none)",
+        has_api_method: guide.method_api.trim().length > 0,
+        has_ui_method: guide.method_ui.trim().length > 0
+      }
+    }
+  ];
+}
+
+async function saveSkillGuide({
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateSkillGuideToolCall(call);
+  const guide = validated.args as SaveSkillGuideArgs;
+  const { data: existing, error: existingError } = await service
+    .from("skill_guides")
+    .select("id,version")
+    .eq("name", guide.name)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  const existingVersion = (existing as { id: string; version: number } | null)?.version ?? null;
+  const summary = skillGuideSummary(guide, existingVersion);
+  const { data: approval, error: approvalError } = await service
+    .from("pending_approvals")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      tool_name: "save_skill_guide",
+      args: guide,
+      summary
+    })
+    .select("id")
+    .single();
+  if (approvalError) throw approvalError;
+
+  const approvalId = (approval as { id: string }).id;
+  await emit({ type: "approval_required", call_id: call.id, approval_id: approvalId, tool_name: "save_skill_guide", summary });
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected" || decision.outcome === "expired") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: decision.outcome, error: `The skill guide save was ${decision.outcome}.` },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  const payload = {
+    ...guide,
+    version: (existingVersion ?? 0) + 1
+  };
+  const query = existingVersion
+    ? service.from("skill_guides").update(payload).eq("name", guide.name)
+    : service.from("skill_guides").insert({ ...payload, created_by: user.id });
+  const { data: saved, error: saveError } = await query
+    .select("name,version,updated_at")
+    .single();
+  if (saveError) throw saveError;
+
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: existingVersion ? "skill_guide_updated" : "skill_guide_saved",
+    message: `${existingVersion ? "Updated" : "Saved"} skill guide ${guide.name}.`,
+    metadata: { session_id: sessionId, name: guide.name, version: payload.version }
+  });
+
+  return {
+    ok: true,
+    result: { approval_id: approvalId, status: "saved", guide: saved },
+    pausedMs: decision.waitedMs
   };
 }
 
@@ -1397,6 +1517,18 @@ export async function runAgentTurn({
             ok = evalResult.ok;
             result = evalResult.result;
             pausedMs += evalResult.pausedMs;
+          }
+        } else if (isSkillGuideTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for skill guides.");
+          if (call.name === "list_skill_guides") {
+            result = await listSkillGuides(service);
+          } else if (call.name === "read_skill_guide") {
+            result = await readSkillGuide(service, call);
+          } else {
+            const saved = await saveSkillGuide({ service, user, sessionId, call, emit });
+            ok = saved.ok;
+            result = saved.result;
+            pausedMs += saved.pausedMs;
           }
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");

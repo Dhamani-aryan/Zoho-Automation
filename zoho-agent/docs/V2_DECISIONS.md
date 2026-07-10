@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase G Step 4: skill guides and Guides tab (2026-07-10, build)
+
+Built workflows-as-skills:
+- Extended supabase/2026_v2_phase_g.sql with skill_guides, read RLS, service-role write policy intent, update trigger, and seed rows for zoho-facts, deals-editing, contacts-editing, accounts-editing, email-scheduling, and task-create-complete.
+- Seed guides convert the playbooks/reference facts into intent, preconditions, Method API, Method UI, gotchas, verification, stop conditions, and params.
+- Added list_skill_guides, read_skill_guide, and save_skill_guide tools. save_skill_guide uses a confirmation card and version bump, then audits skill_guide_saved/updated.
+- Added /workflows Guides tab beside legacy workflows. Guides list/detail/edit is available to admin/operator users, and edits go through /api/skill-guides/[id] with validation and audit.
+- Updated AGENT_INSTRUCTIONS to discover/read relevant guides before task classes and propose save_skill_guide after novel work.
+
+Verification for this step: npm run typecheck passed.
+
 ## Phase G Step 3: browser_observe and autonomous instructions (2026-07-10, build)
 
 Built the observation/autonomy slice:
