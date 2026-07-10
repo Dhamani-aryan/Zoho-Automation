@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## HeySnap instruction-following and correction-memory adaptation (2026-07-10, build)
+
+Reviewed INSTRUCTION_FOLLOWING_AND_MEMORY.md and NUANCES_AND_CORRECTIONS (1).md supplied from Aryan's HeySnap use. Adopted the parts compatible with the accepted Phase G architecture: narrow commands stay bounded while high-level goals remain autonomous; browser actions re-observe and ground against current visible/DOM state; missing or ambiguous targets are never silently substituted; prefilled content is edited surgically and verified; and user corrections trigger a full update of the existing skill_guide with a dated Gotchas rule instead of a duplicate. Automatic guide routing now scores gotchas/verification/stop conditions and recognizes email signature/spacing/font corrections. Injected guide context puts Gotchas first.
+
+Deliberately not adopted: the blanket "one instruction = one action, always wait" rule. That would restore the Phase F one-step teaching constraint explicitly removed by Phase G. The adapted rule distinguishes a narrow imperative from a high-level goal. Verified npm run test:orchestrator (17/17), npm run typecheck, and npm run lint.
+
 ## Phase G live defect fix: enforce batch-only task orders (2026-07-10, build)
 
 The watched one-record composer retry incorrectly proposed a task order, and its budget reported four records because expected_changes counted recipient/subject/body actions rather than distinct records. The server now accepts propose_task_order only for more than three distinct expected records or when the current user request explicitly asks for unattended/background execution. Otherwise the tool returns an observation telling the agent to continue directly. Record budgets now derive from distinct normalized record labels, with the existing 10 percent headroom. Added regression coverage for watched, unattended, batch, and repeated-action budget cases. Verified npm run test:orchestrator (17/17), npm run typecheck, and npm run lint.

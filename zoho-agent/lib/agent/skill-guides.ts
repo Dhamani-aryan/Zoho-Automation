@@ -47,7 +47,7 @@ export const SKILL_GUIDE_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "save_skill_guide",
     tier: 2,
     description:
-      "Propose saving a reusable skill guide. Requires a confirmation card before writing to the guide library.",
+      "Save a new reusable skill guide or update the existing guide with the same exact name. Supply the complete retained guide when updating; add corrections to Gotchas instead of creating duplicates. Uses a confirmation card when approvals are enabled.",
     parameters: {
       type: "object",
       additionalProperties: false,

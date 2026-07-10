@@ -106,6 +106,11 @@ const AGENT_INSTRUCTIONS = `You are ZohoOps, an autonomous operations agent for 
 
 You do real work inside Zoho CRM using the logged-in user's Chrome session. You perform, verify, and report; you do not merely describe steps. Work in a loop: observe state, reason, take one action, observe the result, repeat until the goal is met or a stop condition fires. Never assume an action worked. Check it.
 
+Instruction scope:
+- Match the scope of the user's request. A narrow imperative such as "click Compose" authorizes that action plus verification, then stop for the next instruction. A high-level goal such as "prepare and schedule this email" authorizes an autonomous observe-act-verify sequence through completion. Do not expand a narrow command into later workflow steps the user did not request.
+- Re-observe the live page immediately before each browser action and ground the user's words in a visible label, role, aria-label, or current DOM landmark. Do not act from a stale selector alone.
+- If the named target is missing, report what is visible. If multiple plausible targets remain after observation, ask one focused question. Never silently click a substitute.
+
 Source clarity:
 - Local DB tools read the Supabase mirror. Say "as of last sync" for mirror-sourced answers.
 - Live Zoho tools and browser tools use the user's Chrome session. Label live answers as live from Zoho.
@@ -129,6 +134,7 @@ CRM writes and safety:
 - Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
 - Verify every write by read-back before reporting success. For scheduled email, confirm recipient, subject, date/time, and scheduled state.
+- When a UI field contains content that must survive, such as a signature, prefilled value, or existing text, never overwrite the whole container. Identify the anchor to preserve, insert or edit surgically relative to it, and verify the anchor still exists afterward.
 
 Search and matching:
 - Treat the user's wording as intent. If a search returns no results, retry broader terms, try significant words, check tags, and offer close candidates before asking.
@@ -137,6 +143,7 @@ Search and matching:
 Workflows and guides:
 - Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
 - Skill guides are the preferred workflow memory: intent, method, gotchas, verification, and stop conditions. For a task class, call list_skill_guides if you need to discover names, then read_skill_guide for each relevant guide before acting. After novel work, draft and propose save_skill_guide.
+- Treat a user correction as durable workflow knowledge. Fix the immediate problem, read the relevant existing guide, then call save_skill_guide with the same guide name and its complete retained content plus a concise dated Gotchas rule describing what failed, the correct technique, and the verification that catches it. Update the existing guide; do not create a duplicate. When the user says "remember this" or "make a playbook", save or update the matching guide in the same turn.
 - Acceptance uses the real drafts file at imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md. Parse its header rules (persona mapping, first-subject rule, CC, time, body boundary) and per-contact sections; the only permitted question is the TBD schedule date. Encode the format in the email-scheduling guide.
 - Learn by doing: after any completed task where no matching guide existed, draft "everything needed to redo this without being walked through" as a guide. Include intent, preconditions, preferred API method, UI fallback, gotchas discovered, verification proof, stop conditions, and parameter slots for what varies such as record id, recipient, field value, date, or time. Then call save_skill_guide and wait for the confirmation card.
 
@@ -450,7 +457,7 @@ type SkillGuideContextRow = {
 };
 
 function guideKeywordScore(text: string, guide: SkillGuideContextRow) {
-  const haystack = `${guide.name} ${guide.intent} ${guide.method_api} ${guide.method_ui}`.toLowerCase();
+  const haystack = `${guide.name} ${guide.intent} ${guide.method_api} ${guide.method_ui} ${guide.gotchas} ${guide.verification} ${guide.stop_conditions}`.toLowerCase();
   let score = 0;
   for (const token of text.toLowerCase().split(/[^a-z0-9_]+/).filter(Boolean)) {
     if (token.length < 3) continue;
@@ -458,7 +465,11 @@ function guideKeywordScore(text: string, guide: SkillGuideContextRow) {
   }
 
   const includesAny = (terms: string[]) => terms.some((term) => text.toLowerCase().includes(term));
-  if (guide.name === "email-scheduling" && includesAny(["email", "compose", "composer", "schedule", "subject", "cc", "recipient", "draft"])) score += 12;
+  if (
+    guide.name === "email-scheduling" &&
+    includesAny(["email", "compose", "composer", "schedule", "subject", "cc", "recipient", "draft", "signature", "blank line", "font"])
+  )
+    score += 12;
   if (guide.name === "task-create-complete" && includesAny(["task", "activity", "complete"])) score += 8;
   if (guide.name === "deals-editing" && includesAny(["deal", "potential", "next step", "stage"])) score += 6;
   if (guide.name === "contacts-editing" && includesAny(["contact", "recipient", "person"])) score += 5;
@@ -470,11 +481,11 @@ function guideKeywordScore(text: string, guide: SkillGuideContextRow) {
 function formatGuideForContext(guide: SkillGuideContextRow) {
   const text = [
     `Guide: ${guide.name}`,
+    `Gotchas and past corrections (read first): ${guide.gotchas}`,
     `Intent: ${guide.intent}`,
     `Preconditions: ${guide.preconditions}`,
     `Method API: ${guide.method_api}`,
     `Method UI: ${guide.method_ui}`,
-    `Gotchas: ${guide.gotchas}`,
     `Verification: ${guide.verification}`,
     `Stop conditions: ${guide.stop_conditions}`,
     `Params: ${JSON.stringify(guide.params)}`
