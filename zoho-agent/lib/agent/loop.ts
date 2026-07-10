@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
 import { ZodError } from "zod";
 import {
   isTier0Tool,
@@ -38,6 +39,12 @@ import {
   type ActiveTaskOrder,
   type ExpectedChange
 } from "@/lib/agent/task-orders";
+import {
+  BROWSER_TOOL_DEFINITIONS,
+  isBrowserTool,
+  validateBrowserToolCall,
+  type BrowserEvalArgs
+} from "@/lib/agent/browser-tools";
 import {
   buildApprovalRequest,
   createPendingApproval,
@@ -102,6 +109,7 @@ const AGENT_TOOL_DEFINITIONS = [
   ...TIER1_TOOL_DEFINITIONS,
   ...TIER2_TOOL_DEFINITIONS,
   ...TASK_ORDER_TOOL_DEFINITIONS,
+  ...BROWSER_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
@@ -665,6 +673,183 @@ async function runTier2UnderTaskOrder({
   };
 }
 
+function codeHash(code: string) {
+  return createHash("sha256").update(code, "utf8").digest("hex");
+}
+
+function browserEvalSummary(args: BrowserEvalArgs): ApprovalSummaryRecord[] {
+  return [
+    {
+      zoho_id: "browser_eval",
+      name: args.purpose,
+      before: { status: "not executed" },
+      after: {
+        purpose: args.purpose,
+        code_sha256: codeHash(args.code),
+        code_bytes: Buffer.byteLength(args.code, "utf8"),
+        code: args.code
+      }
+    }
+  ];
+}
+
+async function enqueueBrowserEval({
+  service,
+  user,
+  sessionId,
+  call,
+  args,
+  taskOrderId,
+  approvalId,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  args: BrowserEvalArgs;
+  taskOrderId?: string | null;
+  approvalId?: string | null;
+  emit: Emit;
+}) {
+  const hash = codeHash(args.code);
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "browser_eval_queued",
+    message: `Queued browser_eval: ${args.purpose}.`,
+    metadata: {
+      session_id: sessionId,
+      purpose: args.purpose,
+      code_sha256: hash,
+      code_bytes: Buffer.byteLength(args.code, "utf8"),
+      task_order_id: taskOrderId ?? null,
+      approval_id: approvalId ?? null
+    }
+  });
+
+  const { data: inserted, error } = await service
+    .from("tool_jobs")
+    .insert({
+      user_id: user.id,
+      session_id: sessionId,
+      tool_name: "browser_eval",
+      args,
+      ...(taskOrderId ? { task_order_id: taskOrderId } : {}),
+      ...(approvalId ? { approval_id: approvalId } : {})
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "browser_eval_completed",
+    message: `${job.ok ? "Completed" : "Failed"} browser_eval: ${args.purpose}.`,
+    metadata: {
+      session_id: sessionId,
+      purpose: args.purpose,
+      code_sha256: hash,
+      code_bytes: Buffer.byteLength(args.code, "utf8"),
+      task_order_id: taskOrderId ?? null,
+      approval_id: approvalId ?? null,
+      ok: job.ok
+    }
+  });
+  return job;
+}
+
+async function runBrowserEvalTool({
+  service,
+  user,
+  sessionId,
+  call,
+  order,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  order: ActiveTaskOrder | null;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateBrowserToolCall(call);
+  const args = validated.args as BrowserEvalArgs;
+
+  if (order) {
+    const job = await enqueueBrowserEval({
+      service,
+      user,
+      sessionId,
+      call,
+      args,
+      taskOrderId: order.id,
+      emit
+    });
+    return {
+      ok: job.ok,
+      result: {
+        task_order_id: order.id,
+        code_sha256: codeHash(args.code),
+        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      },
+      pausedMs: job.waitedMs
+    };
+  }
+
+  const summary = browserEvalSummary(args);
+  const { data: approval, error: approvalError } = await service
+    .from("pending_approvals")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      tool_name: "browser_eval",
+      args,
+      summary
+    })
+    .select("id")
+    .single();
+  if (approvalError) throw approvalError;
+
+  const approvalId = (approval as { id: string }).id;
+  await emit({
+    type: "approval_required",
+    call_id: call.id,
+    approval_id: approvalId,
+    tool_name: "browser_eval",
+    summary
+  });
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected" || decision.outcome === "expired") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: decision.outcome, code_sha256: codeHash(args.code) },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  const job = await enqueueBrowserEval({
+    service,
+    user,
+    sessionId,
+    call,
+    args,
+    approvalId,
+    emit
+  });
+  return {
+    ok: job.ok,
+    result: {
+      approval_id: approvalId,
+      code_sha256: codeHash(args.code),
+      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+    },
+    pausedMs: decision.waitedMs + job.waitedMs
+  };
+}
+
 function instructionsForTurn(teachMode: boolean) {
   return `${AGENT_INSTRUCTIONS}
 
@@ -1126,6 +1311,12 @@ export async function runAgentTurn({
             result = completed.result;
             activeTaskOrderId = null;
           }
+        } else if (isBrowserTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for browser tools.");
+          const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
+          ok = evalResult.ok;
+          result = evalResult.result;
+          pausedMs += evalResult.pausedMs;
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");
           if (call.name === "list_ui_workflows") {

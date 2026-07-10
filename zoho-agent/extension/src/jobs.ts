@@ -98,6 +98,34 @@ function isUiJob(job: ToolJob) {
   return job.tool_name === "ui_step" || job.tool_name === "ui_workflow";
 }
 
+async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
+  const code = typeof job.args.code === "string" ? job.args.code : "";
+  const awaitPromise = job.args.await_promise === true;
+  if (!code.trim()) return { ok: false, error_message: "browser_eval code is empty." };
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const fn = awaitPromise ? new AsyncFunction(code) : new Function(code);
+    const raw = awaitPromise ? await fn() : fn();
+    const json = JSON.stringify(raw ?? null);
+    if (json.length > 64 * 1024) {
+      return {
+        ok: true,
+        result: {
+          truncated: true,
+          original_char_count: json.length,
+          preview: json.slice(0, 64 * 1024)
+        }
+      };
+    }
+    return { ok: true, result: JSON.parse(json) };
+  } catch (error) {
+    return {
+      ok: false,
+      error_message: error instanceof Error ? error.message : "browser_eval failed."
+    };
+  }
+}
+
 async function focusTab(tab: chrome.tabs.Tab) {
   if (typeof tab.windowId === "number") {
     await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => undefined);
@@ -517,6 +545,31 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
   if (job.tool_name === "ui_step") return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
   if (job.tool_name === "ui_workflow") return runUiWorkflow(tabId, job);
+  if (job.tool_name === "browser_eval") {
+    if (!job.approval_id && !job.task_order_id) {
+      return { ok: false, error_message: "browser_eval without approval or task order refused by extension" };
+    }
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: browserEvalPageRunner,
+        args: [{ args: job.args }]
+      });
+      const result = results?.[0]?.result as PageResult | undefined;
+      if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
+        return { ok: false, error_message: "browser_eval returned no result." };
+      }
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        error_message: `Could not run browser_eval in the Zoho tab${error instanceof Error ? `: ${error.message}` : ""}.`
+      };
+    }
+  }
 
   // Belt-and-braces (3 of 3): a write job must carry an approval_id OR an
   // approved task_order_id from the server claim route. Even if the server

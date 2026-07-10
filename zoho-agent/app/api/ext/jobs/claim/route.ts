@@ -73,7 +73,8 @@ export async function POST(request: Request) {
     const isWriteEffectUiWorkflow =
       nextJob.tool_name === "ui_workflow" &&
       (nextJob.args as { effect?: unknown } | null)?.effect === "write";
-    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow) {
+    const isBrowserEval = nextJob.tool_name === "browser_eval";
+    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow || isBrowserEval) {
       let taskOrderApproved = false;
       if (nextJob.task_order_id) {
         const { data: order, error: orderError } = await auth.service
@@ -97,7 +98,7 @@ export async function POST(request: Request) {
         if (approvalError) {
           return NextResponse.json({ error: approvalError.message }, { status: 500 });
         }
-        decision = isWriteEffectUiWorkflow
+        decision = isWriteEffectUiWorkflow || isBrowserEval
           ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
           : tier2ClaimDecision(
               { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
           .update({
             status: "failed",
             completed_at: new Date().toISOString(),
-            error_message: `Refused to run Tier-2 write without an approved approval (${decision.reason}).`
+            error_message: `Refused to run scoped extension job without an approved approval or task order (${decision.reason}).`
           })
           .eq("id", nextJob.id)
           .eq("user_id", auth.user.id)

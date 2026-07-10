@@ -1,5 +1,16 @@
 # V2 Decisions
 
+## Phase G Step 2: browser_eval gated browser primitive (2026-07-10, build)
+
+Built browser_eval end to end:
+- Added browser_eval { purpose, code, await_promise } as a Tier-2 browser primitive. The full code remains in agent_messages tool_args; server audit stores purpose, sha256(code), byte length, approval_id, task_order_id, and ok/error.
+- Under an active approved task order, browser_eval queues a tool_job with task_order_id. Outside an order, the agent emits a per-call approval card showing purpose, code hash, byte length, and full code; the waiting loop queues the job only after approval.
+- The approval route treats browser_eval as a local/waited approval so it never auto-enqueues a job without the loop's audit context.
+- The extension claim route refuses browser_eval unless approval_id is approved or task_order_id points at an approved task order.
+- The extension runs browser_eval in the crm.zoho.com MAIN world with chrome.scripting.executeScript, returns JSON-serializable results, caps output at 64 KB, and refuses unscoped eval jobs as defense in depth.
+
+Verification for this step: npm run typecheck passed; npm run build:extension passed.
+
 ## Phase G Step 1: task orders and per-task approval scope (2026-07-10, build)
 
 Built the first Phase G slice:
