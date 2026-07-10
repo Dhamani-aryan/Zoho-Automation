@@ -170,6 +170,19 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
         result: { signature_removed: true, signature_restored: signatureRestored }
       };
     }
+    if (raw === undefined) {
+      return {
+        ok: true,
+        result: {
+          executed: true,
+          returned: false,
+          possible_state_change: true,
+          verification_required: true,
+          warning:
+            "browser_eval completed without a return value. Do not treat null as proof that nothing changed; observe and read back the page before retrying or reporting."
+        }
+      };
+    }
     const json = JSON.stringify(raw ?? null);
     if (json.length > 64 * 1024) {
       return {

@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase G live defect fix: explicit browser_eval no-return result (2026-07-10, build)
+
+The live composer eval changed fields but omitted return, and the runner converted undefined to null; the model then treated null as no evidence and incorrectly reported the visible work as not done. browser_eval now returns an explicit executed/returned=false/possible_state_change/verification_required observation when code omits return. Tool and agent instructions require state-changing evals to return exact JSON read-back values and require observation before retry or completion when returned=false. The email guide requires exact composer values plus signature_present=true in the fill result. Verified npm run typecheck, npm run lint, and npm run build:extension.
+
 ## Phase G live defect fix: preserve composer signatures (2026-07-10, build)
 
 Live retry proved the eval did fill the composer despite returning null, but its whole-editor replacement removed the existing Zoho signature. browser_eval now finds and snapshots #ecw_signature across readable same-origin frames before model code runs, restores it if removed (including when code throws), and rejects that unsafe eval with an explicit result. Both CDP and DOM ui_step fill_field paths refuse to replace an editor containing the signature. Agent instructions and the email-scheduling seed now require inserting body nodes immediately before #ecw_signature, prohibit whole-editor innerHTML/textContent/replaceChildren and ui_step fill_field, and require signature read-back before scheduling. Verified npm run typecheck, npm run lint, and npm run build:extension.
