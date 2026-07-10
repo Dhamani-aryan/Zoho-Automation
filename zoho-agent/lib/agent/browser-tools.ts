@@ -1,15 +1,20 @@
 import { z } from "zod";
 import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 
+const optionalSelectorSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).max(500).optional()
+);
+
 const browserEvalSchema = z.object({
   purpose: z.string().trim().min(1),
   code: z.string().trim().min(1).max(200_000),
   await_promise: z.boolean().optional(),
-  frame_selector: z.string().trim().min(1).max(500).optional()
+  frame_selector: optionalSelectorSchema
 });
 
 const browserObserveSchema = z.object({
-  scope_selector: z.string().trim().min(1).max(500).optional()
+  scope_selector: optionalSelectorSchema
 });
 
 export type BrowserEvalArgs = z.infer<typeof browserEvalSchema>;

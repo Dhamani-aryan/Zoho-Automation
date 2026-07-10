@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase G live defect fix: blank optional browser selectors (2026-07-10, build)
+
+Live retry exposed browser_eval validation rejecting frame_selector="" even though the field is optional. Browser tool validation now normalizes an empty or whitespace-only frame_selector/scope_selector to omitted before applying the non-empty selector constraint. Non-empty selectors retain the 500-character bound.
+
 ## Phase G live defect fix: browser_eval could not reach the composer iframe (2026-07-10, chat)
 
 Live run: "fill the open composer" -> browser_eval "Worked" but returned null twice; complete_task_order honestly reported "could not verify" (verification rules working as intended). Root cause: browserEvalPageRunner (extension/src/jobs.ts) runs the model's code in the TOP frame's MAIN world via new Function(code); Zoho's email composer body is a same-origin IFRAME (#z_editor per the seeded email-scheduling guide). The model's document.querySelector ran against the top document, found no composer fields, returned null. browser_observe was taught to descend into iframes in this phase, but browser_eval was not - so the model could see the fields and not touch them.
