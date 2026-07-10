@@ -52,6 +52,13 @@ import {
   type SaveSkillGuideArgs
 } from "@/lib/agent/skill-guides";
 import {
+  isUndoTool,
+  UNDO_TOOL_DEFINITIONS,
+  validateUndoToolCall,
+  type UndoRecordArgs,
+  type UndoTaskArgs
+} from "@/lib/agent/undo-tools";
+import {
   buildApprovalRequest,
   createPendingApproval,
   resolvedFromLiveRecord,
@@ -116,6 +123,7 @@ Task orders:
 
 CRM writes and safety:
 - When approval cards are enabled, per-call approval cards apply for small one-off writes outside a task order. When cards are disabled, these writes execute immediately with before/after evidence and read-back verification.
+- Undo uses undo_record or undo_task only. It can revert logged fields, owners, and tags through the normal verified write path. Scheduled emails are non-revertible in scope; report the manual Scheduled-tab cancel/delete path.
 - No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Schedule means schedule; never send immediately.
 - Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
@@ -142,6 +150,7 @@ const AGENT_TOOL_DEFINITIONS = [
   ...TASK_ORDER_TOOL_DEFINITIONS,
   ...BROWSER_TOOL_DEFINITIONS,
   ...SKILL_GUIDE_TOOL_DEFINITIONS,
+  ...UNDO_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
@@ -1483,6 +1492,330 @@ async function runUiWorkflowTool({
   };
 }
 
+type PendingApprovalUndoRow = {
+  id: string;
+  tool_name: string;
+  args: Record<string, unknown>;
+  summary: ApprovalSummaryRecord[] | null;
+  task_order_id: string | null;
+  created_at: string;
+};
+
+type UndoAction = {
+  source_approval_id: string;
+  module: Tier2Module;
+  zoho_id: string;
+  description: string;
+  call: AgentToolCall;
+};
+
+function isKnownBeforeValue(value: unknown) {
+  return value !== "unknown - verify in card" && value !== undefined;
+}
+
+function moduleFromApproval(row: PendingApprovalUndoRow): Tier2Module | null {
+  const moduleValue = row.args?.module;
+  return moduleValue === "Accounts" || moduleValue === "Contacts" || moduleValue === "Deals" ? moduleValue : null;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?: string; fields?: string[] }) {
+  const module = moduleFromApproval(row);
+  if (!module) return { actions: [] as UndoAction[], skipped: [`${row.id}: missing supported module.`] };
+
+  const fieldFilter = filter?.fields ? new Set(filter.fields) : null;
+  const actions: UndoAction[] = [];
+  const skipped: string[] = [];
+  for (const item of row.summary ?? []) {
+    if (filter?.zohoId && item.zoho_id !== filter.zohoId) continue;
+
+    if (row.tool_name === "zoho_update_fields") {
+      const fields: Record<string, string | number | boolean | null> = {};
+      for (const [field, value] of Object.entries(item.before ?? {})) {
+        if (fieldFilter && !fieldFilter.has(field)) continue;
+        if (!isKnownBeforeValue(value)) {
+          skipped.push(`${item.zoho_id}: ${field} had no logged before-value.`);
+          continue;
+        }
+        if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
+          fields[field] = value as string | number | boolean | null;
+        } else {
+          skipped.push(`${item.zoho_id}: ${field} before-value is not a simple field value.`);
+        }
+      }
+      if (Object.keys(fields).length > 0) {
+        actions.push({
+          source_approval_id: row.id,
+          module,
+          zoho_id: item.zoho_id,
+          description: `Revert fields ${Object.keys(fields).join(", ")} on ${item.zoho_id}.`,
+          call: {
+            id: `undo-fields-${row.id}-${item.zoho_id}`,
+            name: "zoho_update_fields",
+            args: { module, updates: [{ zoho_id: item.zoho_id, fields }] }
+          }
+        });
+      }
+      continue;
+    }
+
+    if (row.tool_name === "zoho_change_owner") {
+      const owner = item.before?.Owner;
+      if (typeof owner === "string" && owner.trim() && isKnownBeforeValue(owner)) {
+        actions.push({
+          source_approval_id: row.id,
+          module,
+          zoho_id: item.zoho_id,
+          description: `Revert owner on ${item.zoho_id} to ${owner}.`,
+          call: {
+            id: `undo-owner-${row.id}-${item.zoho_id}`,
+            name: "zoho_change_owner",
+            args: { module, zoho_ids: [item.zoho_id], owner_name: owner }
+          }
+        });
+      } else {
+        skipped.push(`${item.zoho_id}: owner had no logged before-value.`);
+      }
+      continue;
+    }
+
+    if (row.tool_name === "zoho_add_tags") {
+      const beforeTags = stringArray(item.before?.tags);
+      const addedTags = stringArray(item.after?.add).filter((tag) => !beforeTags.includes(tag));
+      if (beforeTags.length === 0 && !Array.isArray(item.before?.tags)) {
+        skipped.push(`${item.zoho_id}: tags had no logged before-value.`);
+      }
+      if (addedTags.length > 0) {
+        actions.push({
+          source_approval_id: row.id,
+          module,
+          zoho_id: item.zoho_id,
+          description: `Remove tags ${addedTags.join(", ")} from ${item.zoho_id}.`,
+          call: {
+            id: `undo-add-tags-${row.id}-${item.zoho_id}`,
+            name: "zoho_remove_tags",
+            args: { module, zoho_ids: [item.zoho_id], tags: addedTags }
+          }
+        });
+      }
+      continue;
+    }
+
+    if (row.tool_name === "zoho_remove_tags") {
+      const beforeTags = stringArray(item.before?.tags);
+      const removedTags = stringArray(item.after?.remove).filter((tag) => beforeTags.includes(tag));
+      if (beforeTags.length === 0 && !Array.isArray(item.before?.tags)) {
+        skipped.push(`${item.zoho_id}: tags had no logged before-value.`);
+      }
+      if (removedTags.length > 0) {
+        actions.push({
+          source_approval_id: row.id,
+          module,
+          zoho_id: item.zoho_id,
+          description: `Add tags ${removedTags.join(", ")} back to ${item.zoho_id}.`,
+          call: {
+            id: `undo-remove-tags-${row.id}-${item.zoho_id}`,
+            name: "zoho_add_tags",
+            args: { module, zoho_ids: [item.zoho_id], tags: removedTags }
+          }
+        });
+      }
+    }
+  }
+  return { actions, skipped };
+}
+
+async function executeUndoActions({
+  supabase,
+  service,
+  user,
+  sessionId,
+  emit,
+  actions
+}: {
+  supabase: SupabaseClient;
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  emit: Emit;
+  actions: UndoAction[];
+}) {
+  const results: unknown[] = [];
+  let pausedMs = 0;
+  for (const action of actions) {
+    const outcome = await handleTier2Call({ supabase, service, user, sessionId, call: action.call, emit });
+    pausedMs += outcome.pausedMs;
+    results.push({
+      source_approval_id: action.source_approval_id,
+      zoho_id: action.zoho_id,
+      description: action.description,
+      ok: outcome.ok,
+      result: outcome.result
+    });
+    await service.from("audit_events").insert({
+      user_id: user.id,
+      event_type: "undo",
+      message: `${outcome.ok ? "Ran" : "Failed"} undo: ${action.description}`,
+      metadata: {
+        session_id: sessionId,
+        source_approval_id: action.source_approval_id,
+        module: action.module,
+        zoho_id: action.zoho_id,
+        ok: outcome.ok
+      }
+    });
+  }
+  return { results, pausedMs, ok: results.every((item) => (item as { ok?: unknown }).ok === true) };
+}
+
+async function undoRecord({
+  supabase,
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  supabase: SupabaseClient;
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateUndoToolCall(call);
+  const args = validated.args as UndoRecordArgs;
+  const { data, error } = await service
+    .from("pending_approvals")
+    .select("id,tool_name,args,summary,task_order_id,created_at")
+    .eq("user_id", user.id)
+    .eq("status", "approved")
+    .in("tool_name", ["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"])
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) throw error;
+
+  const skipped: string[] = [];
+  let selected: { row: PendingApprovalUndoRow; actions: UndoAction[] } | null = null;
+  for (const row of (data ?? []) as PendingApprovalUndoRow[]) {
+    if (moduleFromApproval(row) !== args.module) continue;
+    const built = undoActionsFromApproval(row, { zohoId: args.zoho_id, fields: args.fields });
+    skipped.push(...built.skipped);
+    if (built.actions.length > 0) {
+      selected = { row, actions: built.actions };
+      break;
+    }
+  }
+
+  if (!selected) {
+    return {
+      ok: false,
+      result: {
+        status: "not_revertible",
+        error: "No revertible logged before-values were found for this record.",
+        skipped
+      },
+      pausedMs: 0
+    };
+  }
+
+  const executed = await executeUndoActions({ supabase, service, user, sessionId, emit, actions: selected.actions });
+  return {
+    ok: executed.ok,
+    result: {
+      status: executed.ok ? "undone" : "partial",
+      source_approval_id: selected.row.id,
+      actions: executed.results,
+      skipped
+    },
+    pausedMs: executed.pausedMs
+  };
+}
+
+async function undoTask({
+  supabase,
+  service,
+  user,
+  sessionId,
+  call,
+  emit
+}: {
+  supabase: SupabaseClient;
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateUndoToolCall(call);
+  const args = validated.args as UndoTaskArgs;
+  const { data: order, error: orderError } = await service
+    .from("task_orders")
+    .select("id,goal,report")
+    .eq("id", args.task_order_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (orderError) throw orderError;
+  if (!order) throw new Error("Task order was not found.");
+
+  const { data, error } = await service
+    .from("pending_approvals")
+    .select("id,tool_name,args,summary,task_order_id,created_at")
+    .eq("user_id", user.id)
+    .eq("status", "approved")
+    .eq("task_order_id", args.task_order_id)
+    .in("tool_name", ["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"])
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) throw error;
+
+  const skipped: string[] = [];
+  const actions: UndoAction[] = [];
+  for (const row of (data ?? []) as PendingApprovalUndoRow[]) {
+    const built = undoActionsFromApproval(row);
+    actions.push(...built.actions);
+    skipped.push(...built.skipped);
+  }
+
+  const reportText = JSON.stringify((order as { report?: unknown }).report ?? "").toLowerCase();
+  const nonRevertible =
+    reportText.includes("email") || reportText.includes("schedule")
+      ? [
+          "Scheduled emails are not automatically revertible in scope. Manual path: open the related deal, Emails, Scheduled tab, find the matching recipient/subject/time, then cancel/delete it in Zoho UI."
+        ]
+      : [];
+
+  if (actions.length === 0) {
+    return {
+      ok: nonRevertible.length === 0 ? false : true,
+      result: {
+        task_order_id: args.task_order_id,
+        status: "nothing_revertible",
+        actions: [],
+        skipped,
+        non_revertible: nonRevertible
+      },
+      pausedMs: 0
+    };
+  }
+
+  const executed = await executeUndoActions({ supabase, service, user, sessionId, emit, actions });
+  return {
+    ok: executed.ok,
+    result: {
+      task_order_id: args.task_order_id,
+      status: executed.ok ? "undone" : "partial",
+      actions: executed.results,
+      skipped,
+      non_revertible: nonRevertible
+    },
+    pausedMs: executed.pausedMs
+  };
+}
+
 export async function runAgentTurn({
   supabase,
   user,
@@ -1701,6 +2034,15 @@ export async function runAgentTurn({
             result = saved.result;
             pausedMs += saved.pausedMs;
           }
+        } else if (isUndoTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for undo.");
+          const undone =
+            call.name === "undo_task"
+              ? await undoTask({ supabase, service, user, sessionId, call, emit })
+              : await undoRecord({ supabase, service, user, sessionId, call, emit });
+          ok = undone.ok;
+          result = undone.result;
+          pausedMs += undone.pausedMs;
         } else if (isUiTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for UI steps.");
           if (call.name === "list_ui_workflows") {

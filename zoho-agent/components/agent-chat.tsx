@@ -160,6 +160,13 @@ function shortJson(value: unknown) {
   return text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
 }
 
+function taskOrderIdFromToolResult(item: { name: string; result?: unknown }) {
+  if (item.name !== "complete_task_order") return null;
+  const taskOrder = item.result && typeof item.result === "object" ? (item.result as { task_order?: unknown }).task_order : null;
+  const id = taskOrder && typeof taskOrder === "object" ? (taskOrder as { id?: unknown }).id : null;
+  return typeof id === "string" && id ? id : null;
+}
+
 function titleFor(session: AgentSession) {
   return session.title || "New agent chat";
 }
@@ -205,9 +212,11 @@ function linkifyContent(text: string, linkClass: string): ReactNode[] {
 // Collapsible tool-trace row (ChatGPT-style): shows "Working / Worked / Failed"
 // with the raw tool output hidden behind a click.
 function ToolTrace({
-  item
+  item,
+  onUndoTask
 }: {
   item: { name: string; tier?: number | null; status?: string; result?: unknown; args: unknown };
+  onUndoTask?: (taskOrderId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const status = item.status ?? "";
@@ -215,6 +224,7 @@ function ToolTrace({
   const failed = status === "failed";
   const label = failed ? "Failed" : running ? "Working" : "Worked";
   const Chevron = open ? ChevronDown : ChevronRight;
+  const taskOrderId = taskOrderIdFromToolResult(item);
 
   return (
     <div className="border border-line bg-surface">
@@ -236,9 +246,23 @@ function ToolTrace({
         </span>
       </button>
       {open ? (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-line px-3 py-2 text-xs text-ink">
-          {shortJson(item.result ?? item.args)}
-        </pre>
+        <div className="border-t border-line">
+          {taskOrderId && onUndoTask ? (
+            <div className="flex justify-end border-b border-line bg-white px-3 py-2">
+              <button
+                type="button"
+                onClick={() => onUndoTask(taskOrderId)}
+                className="inline-flex h-8 items-center gap-2 rounded-md border border-line px-3 text-xs font-semibold text-ink hover:bg-surface"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Undo task
+              </button>
+            </div>
+          ) : null}
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap px-3 py-2 text-xs text-ink">
+            {shortJson(item.result ?? item.args)}
+          </pre>
+        </div>
       ) : null}
     </div>
   );
@@ -544,6 +568,11 @@ export function AgentChat({
     }
   }
 
+  function undoTask(taskOrderId: string) {
+    if (loading) return;
+    void runTurn(`Undo task ${taskOrderId}`);
+  }
+
   return (
     <div className="grid h-[calc(100vh-12rem)] min-h-[520px] gap-5 overflow-hidden xl:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
@@ -683,7 +712,7 @@ export function AgentChat({
           ) : (
             timeline.map((item) => {
               if (item.kind === "tool") {
-                return <ToolTrace key={item.id} item={item} />;
+                return <ToolTrace key={item.id} item={item} onUndoTask={undoTask} />;
               }
               if (item.kind === "approval") {
                 // NOT gated on `loading`: the agent turn is intentionally still

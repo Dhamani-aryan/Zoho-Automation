@@ -18,6 +18,12 @@ Rebuilt the `email-scheduling` seed from the KD Blitz playbook section 9 selecto
 
 Expanded `browser_observe` with optional `scope_selector`. The extension runner now observes the top document plus readable same-origin iframes, tags headings/controls with `frame` and `frame_selector`, marks dialog/overlay ancestry, and returns CSS-pixel coordinates adjusted back into the main viewport. This is intended to make the Zoho compose overlay and `#z_editor` body iframe visible to the agent without increasing the 16 KB result cap.
 
+## Phase G follow-up Step 4: undo tools and task report button (2026-07-10, build)
+
+Added `undo_record` and `undo_task` agent tools. Undo reads approved `pending_approvals` summaries, reconstructs field/owner/tag reverts from logged before-values, and runs those reverts through the existing Tier-2 write path so cards, auto-approval, read-back verification, extension API-write linkage, and audit behavior remain centralized. Task-order undo runs newest-first and reports scheduled emails as non-revertible with the manual Scheduled-tab path.
+
+Added an Undo task button to expanded `complete_task_order` tool reports in the chat. The button sends a normal chat message (`Undo task <id>`) so the undo remains visible in the transcript and goes through the same agent tools.
+
 ## DECISION: all approval gates OFF by default (Aryan, 2026-07-10)
 
 Follow-on from the same-day interactive-ungating decision. Aryan: "people are already giving specific instructions and there's nothing that cannot be undone so why have them." ALL approval cards are removed from the default experience - including batch task orders and Tier-2 API write cards.
