@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
-import { approvalGatedClaimDecision, isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
+import { isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
 import {
   queuedJobExpiryPatch,
   runningJobStalePatch,
@@ -65,21 +65,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ job: null });
     }
 
-    // Belt-and-braces (2 of 3): a Tier-2 write job is only handed out when its
-    // linked approval row exists and is 'approved'. Any other state means it
-    // must never run, so we terminally fail it (keeps the queue moving) and do
-    // not claim it. Write-effect ui_workflow replays are held to the same rule
-    // (their effect is fixed server-side from the saved workflow row).
-    const isWriteEffectUiWorkflow =
-      nextJob.tool_name === "ui_workflow" &&
-      (nextJob.args as { effect?: unknown } | null)?.effect === "write";
-    const isMutatingUiStep =
-      nextJob.tool_name === "ui_step" &&
-      ["click", "fill_field", "press_key"].includes(
-        String(((nextJob.args as { step?: { type?: unknown } } | null)?.step?.type) ?? "")
-      );
-    const isBrowserEval = nextJob.tool_name === "browser_eval";
-    if (isTier2WriteTool(nextJob.tool_name) || isWriteEffectUiWorkflow || isMutatingUiStep || isBrowserEval) {
+    // Belt-and-braces (2 of 3): a Tier-2 API write job is only handed out when
+    // its linked approval row exists and is 'approved' or it belongs to an
+    // approved task order. Browser/eval/UI jobs are intentionally ungated for
+    // watched interactive sessions; API writes keep the exact scoped-linkage
+    // rule because they can mutate CRM without visible UI evidence.
+    if (isTier2WriteTool(nextJob.tool_name)) {
       let taskOrderApproved = false;
       if (nextJob.task_order_id) {
         const { data: order, error: orderError } = await auth.service
@@ -103,12 +94,10 @@ export async function POST(request: Request) {
         if (approvalError) {
           return NextResponse.json({ error: approvalError.message }, { status: 500 });
         }
-        decision = isWriteEffectUiWorkflow || isMutatingUiStep || isBrowserEval
-          ? approvalGatedClaimDecision({ approval_id: nextJob.approval_id ?? null }, (approval?.status as string) ?? null)
-          : tier2ClaimDecision(
-              { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
-              (approval?.status as string) ?? null
-            );
+        decision = tier2ClaimDecision(
+          { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
+          (approval?.status as string) ?? null
+        );
       }
       if (!decision.claimable) {
         await auth.service

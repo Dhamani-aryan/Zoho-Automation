@@ -1,5 +1,34 @@
 # V2 Decisions
 
+## Phase G follow-up Step 1: approvals flag and default ungated execution (2026-07-10, build)
+
+Started the section 8 follow-ups by putting the reviewed gate machinery behind `users.approvals_enabled`, default false. Settings now exposes the flag, with admin-only edits.
+
+When approval cards are off, Tier-2 API writes still build the normal before-value summary/snapshot, create an approved approval row, and enqueue a linked tool job so the extension's API-write refusal stays intact. Task orders auto-approve as budgeted work logs. browser_eval and watched UI jobs run immediately; claim-route and extension-side linkage checks were relaxed only for browser/eval/UI jobs, not for Tier-2 API writes.
+
+Also fixed task-order Tier-2 writes to go through buildApprovalRequest before enqueueing, so batch/task-order writes now keep the same before-value evidence needed for audit and undo.
+
+## DECISION: all approval gates OFF by default (Aryan, 2026-07-10)
+
+Follow-on from the same-day interactive-ungating decision. Aryan: "people are already giving specific instructions and there's nothing that cannot be undone so why have them." ALL approval cards are removed from the default experience - including batch task orders and Tier-2 API write cards.
+
+Implementation rule (chat): do not delete the reviewed gate machinery; put it behind a per-user setting `users.approvals_enabled` (default FALSE). When FALSE: Tier-2 API writes, batch tasks, eval, and UI steps all execute immediately; task orders auto-approve (still recorded, still budgeted, still reported). When TRUE: prior behavior. Flipping the flag is a settings change, not a rebuild - intended for future teammates.
+
+What REMAINS regardless of the flag (these are what make "undoable" true, so they are not optional): before/after capture on every write; read-back verification; full audit incl. eval code; stop conditions (identity mismatch, Zoho errors, logged out, 3-fail/20%); schedule-never-send; no deletes; org/module allowlist; budgets on batch runs. Chat's on-record caveat: the one irreversible action in scope is a scheduled email that actually SENDS to a real recipient before a mistake is noticed - schedule-never-send plus verification of recipient/date/time in the Scheduled view is the remaining protection there.
+
+Follow-up accepted by implication of Aryan's undoability argument: build an UNDO capability - per-record and per-task revert using the logged before values (fields/owner/tags). Specced as Phase G section 8 item 6.
+
+## DECISION: interactive browser work is ungated; guides auto-load; observe must see the composer (Aryan, 2026-07-10, after first Phase G live run)
+
+Live run: "type this in the open composer" produced a task-order approval card for three typing actions, then failed with "UI target was not found" (composer fields are inside Zoho's compose overlay/iframe; browser_observe does not descend into frames; no guide was in context).
+
+Aryan's decisions:
+1. NO approval cards for interactive browser work. ui_step, browser_observe, and browser_eval run immediately when the user is directing the session - the user watching the dedicated window IS the approval. This extends the 2026-07-10 full-eval decision; chat's earlier per-task-card compromise is narrowed: propose_task_order (one card) remains ONLY for unattended/batch multi-record tasks (e.g. the 50-email file), and Tier-2 API write tools keep their existing per-call cards when used outside an order. Teach mode stops being a permission gate; it remains only as a walkthrough label that triggers guide drafting.
+2. Guides must load AUTOMATICALLY by intent: email work (e.g. clicking Compose) must pull the email-scheduling guide into context without being asked - deterministic keyword/intent routing plus the read_skill_guide tool for depth. The KD Blitz playbook section 9 selector map and composer gotchas must be in the seeded email guide.
+3. The Chrome debugger banner is acceptable; CDP control preferred where it is more reliable.
+
+Risk note (chat, on record): with interactive eval/UI ungated, protection for interactive sessions = visibility of the driven window + audit + verification + stop conditions + the schedule-never-send / no-delete instructions; the remaining hard gates are batch task orders and API-write cards. Aryan accepted this explicitly.
+
 ## Phase G Step 5: learn-by-doing rule and final build verification (2026-07-10, build)
 
 Tightened the learn-by-doing prompt rule: after completing any task with no matching guide, the agent must draft everything needed to redo the task without being walked through, including params for values that vary, then propose save_skill_guide behind a confirmation card.

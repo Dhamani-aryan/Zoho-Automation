@@ -551,24 +551,8 @@ async function runDomUiStep(tabId: number, step: Record<string, unknown>): Promi
   }
 }
 
-// Step types that can mutate CRM state. Kept in sync with the server-side
-// save-time classification in lib/agent/ui-tools.ts stepLooksMutating().
-const MUTATING_UI_STEPS = new Set(["click", "fill_field", "press_key"]);
-
-function isMutatingUiStepJob(job: ToolJob) {
-  const step = (job.args.step ?? {}) as Record<string, unknown>;
-  return MUTATING_UI_STEPS.has(String(step.type ?? ""));
-}
-
 async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
   const steps = Array.isArray(job.args.steps) ? (job.args.steps as Array<Record<string, unknown>>) : [];
-  // Refuse unapproved replays when EITHER the declared effect is write OR any
-  // step could mutate state (defense in depth: do not trust the effect label
-  // alone if the two ever disagree).
-  const hasMutatingStep = steps.some((step) => MUTATING_UI_STEPS.has(String(step?.type ?? "")));
-  if ((job.args.effect === "write" || hasMutatingStep) && !job.approval_id && !job.task_order_id) {
-    return { ok: false, error_message: "write workflow without approval or task order refused by extension" };
-  }
 
   const workflowName = String(job.args.name ?? "ui workflow");
   const outcomes: Array<{ index: number; step_type: string; ok: boolean; observed?: unknown; error_message?: string }> = [];
@@ -618,9 +602,6 @@ async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
   if (job.tool_name === "ui_step") {
-    if (isMutatingUiStepJob(job) && !job.approval_id && !job.task_order_id) {
-      return { ok: false, error_message: "mutating ui_step without approval or task order refused by extension" };
-    }
     return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
   }
   if (job.tool_name === "ui_workflow") return runUiWorkflow(tabId, job);
@@ -646,9 +627,6 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     }
   }
   if (job.tool_name === "browser_eval") {
-    if (!job.approval_id && !job.task_order_id) {
-      return { ok: false, error_message: "browser_eval without approval or task order refused by extension" };
-    }
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
     try {

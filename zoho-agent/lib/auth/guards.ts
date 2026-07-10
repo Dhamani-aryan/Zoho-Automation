@@ -7,6 +7,7 @@ export type AuthorizedUser = {
   id: string;
   email: string | null;
   role: UserRole;
+  approvals_enabled: boolean;
 };
 
 export async function requireApiRole(allowedRoles: UserRole[]) {
@@ -31,7 +32,7 @@ export async function requireApiRole(allowedRoles: UserRole[]) {
 
   const { data: profile, error: profileError } = await supabase
     .from("users")
-    .select("role,email")
+    .select("role,email,approvals_enabled")
     .eq("id", user.id)
     .single();
 
@@ -52,7 +53,8 @@ export async function requireApiRole(allowedRoles: UserRole[]) {
     user: {
       id: user.id,
       email: profile.email ?? user.email ?? null,
-      role: profile.role as UserRole
+      role: profile.role as UserRole,
+      approvals_enabled: Boolean((profile as { approvals_enabled?: boolean | null }).approvals_enabled)
     } satisfies AuthorizedUser
   };
 }
@@ -69,7 +71,7 @@ export async function requirePageRole(allowedRoles: UserRole[]) {
 
   const { data: profile } = await supabase
     .from("users")
-    .select("role,email")
+    .select("role,email,approvals_enabled")
     .eq("id", user.id)
     .single();
 
@@ -82,7 +84,8 @@ export async function requirePageRole(allowedRoles: UserRole[]) {
     user: {
       id: user.id,
       email: profile.email ?? user.email ?? null,
-      role: profile.role as UserRole
+      role: profile.role as UserRole,
+      approvals_enabled: Boolean((profile as { approvals_enabled?: boolean | null }).approvals_enabled)
     } satisfies AuthorizedUser
   };
 }

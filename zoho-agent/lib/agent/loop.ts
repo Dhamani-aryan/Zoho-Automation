@@ -105,17 +105,17 @@ Source clarity:
 
 Method order for Zoho:
 1. Deterministic tools first. Use Tier-0 mirror search/list tools to resolve records, Tier-1 live Zoho reads for current state, db_sync_records for mirror sync, and Tier-2 write tools for supported field/owner/tag changes. These are cheaper, validated, and preferred.
-2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). Use it to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. browser_eval is allowed only under an approved task order or a per-call approval card showing the full code.
+2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). Use it to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. Always state the purpose and verify the result.
 3. UI automation last. Use browser_observe to find controls, then ui_step only for UI-only flows or when the user asks to open/click/show something. In teach mode, take the user's goal and autonomously chain observe -> act -> verify while the user watches the dedicated Chrome window. Do not require one instruction per UI step.
 
 Task orders:
-- For multi-step or batch work, call propose_task_order before changing Zoho. scope=read auto-approves; scope=write shows one approval card covering the expected changes for the whole task.
-- After a write task order is approved, execute the task end to end without asking for per-step permission. The Stop button is the user's abort lever.
+- Call propose_task_order only for unattended or batch work (>3 records, file-driven runs, or work the user is not actively directing). Do not create task orders for simple watched browser steps such as opening a deal, clicking Compose, typing in a visible composer, or reading the page.
+- A task order is a budgeted work log when approval cards are off and an approval gate when cards are on. After it is approved or auto-approved, execute the task end to end without asking for per-step permission. The Stop button is the user's abort lever.
 - Stay within the task order plan and budgets. If the scope changes, expected records change materially, or the work becomes unsafe, stop and explain.
 - Finish active orders with complete_task_order. The report must include counts, per-record status, Zoho links when known, failures with reasons, and expected-vs-actual reconciliation.
 
 CRM writes and safety:
-- The old per-call approval cards still apply for small one-off writes outside a task order.
+- When approval cards are enabled, per-call approval cards apply for small one-off writes outside a task order. When cards are disabled, these writes execute immediately with before/after evidence and read-back verification.
 - No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Schedule means schedule; never send immediately.
 - Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
@@ -289,8 +289,33 @@ async function handleTier2Call({
     sessionId,
     userId: user.id,
     snapshot,
-    summary
+    summary,
+    status: user.approvals_enabled ? "pending" : "approved"
   });
+
+  if (!user.approvals_enabled) {
+    const { error: jobError } = await service.from("tool_jobs").insert({
+      user_id: user.id,
+      session_id: sessionId,
+      tool_name: snapshot.tool_name,
+      args: snapshot,
+      approval_id: approvalId
+    });
+    if (jobError) throw jobError;
+    await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+    const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
+    const jobResult = job.result as Record<string, unknown> | null;
+    return {
+      ok: job.ok,
+      result: {
+        approval_id: approvalId,
+        status: job.ok ? "executed" : "failed",
+        auto_approved: true,
+        ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult })
+      },
+      pausedMs: job.waitedMs
+    };
+  }
 
   await emit({
     type: "approval_required",
@@ -448,15 +473,21 @@ async function saveSkillGuide({
       user_id: user.id,
       tool_name: "save_skill_guide",
       args: guide,
-      summary
+      summary,
+      status: user.approvals_enabled ? "pending" : "approved",
+      decided_at: user.approvals_enabled ? null : new Date().toISOString()
     })
     .select("id")
     .single();
   if (approvalError) throw approvalError;
 
   const approvalId = (approval as { id: string }).id;
-  await emit({ type: "approval_required", call_id: call.id, approval_id: approvalId, tool_name: "save_skill_guide", summary });
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (user.approvals_enabled) {
+    await emit({ type: "approval_required", call_id: call.id, approval_id: approvalId, tool_name: "save_skill_guide", summary });
+  }
+  const decision = user.approvals_enabled
+    ? await waitForApprovalOutcome({ service, approvalId, userId: user.id })
+    : { outcome: "approved" as const, waitedMs: 0 };
   if (decision.outcome === "rejected" || decision.outcome === "expired") {
     return {
       ok: false,
@@ -486,7 +517,7 @@ async function saveSkillGuide({
 
   return {
     ok: true,
-    result: { approval_id: approvalId, status: "saved", guide: saved },
+    result: { approval_id: approvalId, status: "saved", auto_approved: !user.approvals_enabled, guide: saved },
     pausedMs: decision.waitedMs
   };
 }
@@ -582,9 +613,9 @@ async function proposeTaskOrder({
         expected_changes: args.expected_changes
       },
       scope: args.scope,
-      status: args.scope === "read" ? "approved" : "proposed",
+      status: args.scope === "read" || !user.approvals_enabled ? "approved" : "proposed",
       budget,
-      decided_at: args.scope === "read" ? nowIso : null
+      decided_at: args.scope === "read" || !user.approvals_enabled ? nowIso : null
     })
     .select("id,goal,scope,status,budget")
     .single();
@@ -598,10 +629,16 @@ async function proposeTaskOrder({
     metadata: { session_id: sessionId, task_order_id: taskOrderId, scope: args.scope, budget }
   });
 
-  if (args.scope === "read") {
+  if (args.scope === "read" || !user.approvals_enabled) {
     return {
       ok: true,
-      result: { task_order_id: taskOrderId, status: "approved", scope: "read", budget },
+      result: {
+        task_order_id: taskOrderId,
+        status: "approved",
+        scope: args.scope,
+        budget,
+        auto_approved: args.scope !== "read" && !user.approvals_enabled
+      },
       pausedMs: 0
     };
   }
@@ -768,6 +805,7 @@ async function waitForToolJobById({
 }
 
 async function runTier2UnderTaskOrder({
+  supabase,
   service,
   user,
   sessionId,
@@ -775,6 +813,7 @@ async function runTier2UnderTaskOrder({
   order,
   emit
 }: {
+  supabase: SupabaseClient;
   service: SupabaseClient;
   user: AuthorizedUser;
   sessionId: string;
@@ -790,15 +829,27 @@ async function runTier2UnderTaskOrder({
         .eq("module", moduleGuess)
     : { data: [] as Array<{ module: string; api_name: string; data_type: string | null; picklist_values: unknown }> };
   const prepared = validateTier2Call(call, { fieldMeta: metaRows ?? [], role: user.role });
+  const liveFetch = makeLiveFetch(service, user, sessionId);
+  const { summary, snapshot } = await buildApprovalRequest({ supabase, prepared, liveFetch });
+  const approvalId = await createPendingApproval({
+    service,
+    sessionId,
+    userId: user.id,
+    snapshot,
+    summary,
+    status: "approved",
+    taskOrderId: order.id
+  });
 
   const { data: inserted, error } = await service
     .from("tool_jobs")
     .insert({
       user_id: user.id,
       session_id: sessionId,
-      tool_name: prepared.tool_name,
-      args: prepared,
-      task_order_id: order.id
+      tool_name: snapshot.tool_name,
+      args: snapshot,
+      task_order_id: order.id,
+      approval_id: approvalId
     })
     .select("id")
     .single();
@@ -810,17 +861,12 @@ async function runTier2UnderTaskOrder({
     ok: job.ok,
     result: {
       task_order_id: order.id,
+      approval_id: approvalId,
       status: job.ok ? "executed" : "failed",
       ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
     },
     pausedMs: job.waitedMs
   };
-}
-
-function uiStepCouldMutate(call: AgentToolCall) {
-  const step = (call.args as { step?: { type?: unknown } } | null)?.step;
-  const type = typeof step?.type === "string" ? step.type : "";
-  return type === "click" || type === "fill_field" || type === "press_key";
 }
 
 async function runUiStepUnderTaskOrder({
@@ -990,6 +1036,27 @@ async function runBrowserEvalTool({
     };
   }
 
+  if (!user.approvals_enabled) {
+    const job = await enqueueBrowserEval({
+      service,
+      user,
+      sessionId,
+      call,
+      args,
+      emit
+    });
+    return {
+      ok: job.ok,
+      result: {
+        status: job.ok ? "executed" : "failed",
+        code_sha256: codeHash(args.code),
+        auto_approved: true,
+        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      },
+      pausedMs: job.waitedMs
+    };
+  }
+
   const summary = browserEvalSummary(args);
   const { data: approval, error: approvalError } = await service
     .from("pending_approvals")
@@ -1041,13 +1108,15 @@ async function runBrowserEvalTool({
   };
 }
 
-function instructionsForTurn(teachMode: boolean) {
+function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean) {
   return `${AGENT_INSTRUCTIONS}
 
-Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. ${
-    teachMode
-      ? "Teach mode is a watched walkthrough mode: use browser_observe, ui_step, browser_eval when approved, and verification to accomplish the user's goal and learn the method."
-      : "Outside teach mode, mutating UI steps require an approved write task order. Read-only observation and crm.zoho.com open/show navigation are allowed when useful."
+Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}; approval cards are ${
+    approvalsEnabled ? "ON" : "OFF"
+  }. Watched browser work can use browser_observe, ui_step, and browser_eval immediately, then verify honestly. ${
+    approvalsEnabled
+      ? "When approval cards are ON, unattended/batch task orders and Tier-2 API writes pause for cards."
+      : "When approval cards are OFF, batch task orders auto-approve as work logs and Tier-2 API writes run immediately with before/after evidence."
   }`;
 }
 
@@ -1089,22 +1158,28 @@ async function saveUiWorkflow({
       user_id: user.id,
       tool_name: "save_ui_workflow",
       args: workflow,
-      summary
+      summary,
+      status: user.approvals_enabled ? "pending" : "approved",
+      decided_at: user.approvals_enabled ? null : new Date().toISOString()
     })
     .select("id")
     .single();
   if (approvalError) throw approvalError;
 
   const approvalId = (approval as { id: string }).id;
-  await emit({
-    type: "approval_required",
-    call_id: call.id,
-    approval_id: approvalId,
-    tool_name: "save_ui_workflow",
-    summary
-  });
+  if (user.approvals_enabled) {
+    await emit({
+      type: "approval_required",
+      call_id: call.id,
+      approval_id: approvalId,
+      tool_name: "save_ui_workflow",
+      summary
+    });
+  }
 
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  const decision = user.approvals_enabled
+    ? await waitForApprovalOutcome({ service, approvalId, userId: user.id })
+    : { outcome: "approved" as const, waitedMs: 0 };
   if (decision.outcome === "rejected") {
     return {
       ok: false,
@@ -1152,7 +1227,7 @@ async function saveUiWorkflow({
 
   return {
     ok: true,
-    result: { approval_id: approvalId, status: "saved", workflow: saved },
+    result: { approval_id: approvalId, status: "saved", auto_approved: !user.approvals_enabled, workflow: saved },
     pausedMs: decision.waitedMs
   };
 }
@@ -1239,13 +1314,42 @@ async function runUiWorkflowTool({
         user_id: user.id,
         tool_name: "ui_workflow",
         args: jobCall.args,
-        summary
+        summary,
+        status: user.approvals_enabled ? "pending" : "approved",
+        decided_at: user.approvals_enabled ? null : new Date().toISOString()
       })
       .select("id")
       .single();
     if (approvalError) throw approvalError;
 
     const approvalId = (approval as { id: string }).id;
+    if (!user.approvals_enabled) {
+      const { error: jobError } = await service.from("tool_jobs").insert({
+        user_id: user.id,
+        session_id: sessionId,
+        tool_name: "ui_workflow",
+        args: jobCall.args,
+        approval_id: approvalId
+      });
+      if (jobError) throw jobError;
+      await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+      const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
+      const verified = await markWorkflowTrusted(service, replay, job.result);
+      const replayOk = job.ok && verified;
+      return {
+        ok: replayOk,
+        result: {
+          approval_id: approvalId,
+          status: replayOk ? "executed" : "failed",
+          auto_approved: true,
+          ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
+          trusted_before: replay.trusted,
+          trusted_after: verified ? true : replay.trusted
+        },
+        pausedMs: job.waitedMs
+      };
+    }
+
     await emit({
       type: "approval_required",
       call_id: call.id,
@@ -1407,7 +1511,7 @@ export async function runAgentTurn({
     }
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const model = await provider.runTools({
-      instructions: instructionsForTurn(teachMode),
+      instructions: instructionsForTurn(teachMode, user.approvals_enabled),
       messages: transcript,
       tools: AGENT_TOOL_DEFINITIONS
     });
@@ -1552,10 +1656,6 @@ export async function runAgentTurn({
               result = stepped.result;
               pausedMs += stepped.pausedMs;
             } else {
-              await ensureTeachMode(service, user, sessionId);
-              if (uiStepCouldMutate(call)) {
-                throw new Error("Mutating UI steps require an approved write task order.");
-              }
               const validatedCall = validateUiToolCall(call);
               result = await runBridgedTool({
                 service,
@@ -1569,7 +1669,7 @@ export async function runAgentTurn({
         } else if (isTier2Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for approvals.");
           const gated = approvedOrder
-            ? await runTier2UnderTaskOrder({ service, user, sessionId, call, order: approvedOrder, emit })
+            ? await runTier2UnderTaskOrder({ supabase, service, user, sessionId, call, order: approvedOrder, emit })
             : await handleTier2Call({ supabase, service, user, sessionId, call, emit });
           ok = gated.ok;
           result = gated.result;

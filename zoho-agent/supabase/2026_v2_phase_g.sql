@@ -2,6 +2,9 @@
 -- Run after supabase/2026_v2_phase_f.sql and the Phase F follow-up commits.
 -- Additive and idempotent.
 
+alter table public.users
+  add column if not exists approvals_enabled boolean not null default false;
+
 alter table public.tool_jobs
   add column if not exists approval_id uuid references public.pending_approvals(id) on delete set null;
 
@@ -25,6 +28,9 @@ create table if not exists public.task_orders (
   completed_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.pending_approvals
+  add column if not exists task_order_id uuid references public.task_orders(id) on delete set null;
 
 create table if not exists public.skill_guides (
   id uuid primary key default gen_random_uuid(),

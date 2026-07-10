@@ -242,13 +242,17 @@ export async function createPendingApproval({
   sessionId,
   userId,
   snapshot,
-  summary
+  summary,
+  status = "pending",
+  taskOrderId = null
 }: {
   service: SupabaseClient;
   sessionId: string;
   userId: string;
   snapshot: Tier2Snapshot;
   summary: ApprovalSummaryRecord[];
+  status?: "pending" | "approved";
+  taskOrderId?: string | null;
 }): Promise<string> {
   const { data, error } = await service
     .from("pending_approvals")
@@ -257,7 +261,10 @@ export async function createPendingApproval({
       user_id: userId,
       tool_name: snapshot.tool_name,
       args: snapshot,
-      summary
+      summary,
+      status,
+      decided_at: status === "approved" ? new Date().toISOString() : null,
+      task_order_id: taskOrderId
     })
     .select("id")
     .single();
