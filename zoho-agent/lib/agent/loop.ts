@@ -140,6 +140,7 @@ CRM writes and safety:
 - Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
 - Verify every write by read-back before reporting success. For scheduled email, confirm recipient, subject, date/time, and scheduled state.
+- For composer verification, use browser_observe.composer first: committed To/CC chips, subject, body_text, and signature_present. A truncated general observation is not a reason to stop because the compact composer summary survives truncation. If any required field is still unavailable, perform one targeted read-only browser_eval (window.document for top composer fields and frame_selector #z_editor for body/signature) before reporting that verification is impossible.
 - When a UI field contains content that must survive, such as a signature, prefilled value, or existing text, never overwrite the whole container. Identify the anchor to preserve, insert or edit surgically relative to it, and verify the anchor still exists afterward.
 
 Search and matching:

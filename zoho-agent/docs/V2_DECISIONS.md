@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Phase G live defect fix: observable composer read-back (2026-07-10, build)
+
+Live retry opened the Emails area but again reported that composer fields could not be verified. browser_observe previously returned labels/selectors but not input values, omitted Zoho's committed recipient chips, and emitted generic navigation controls before useful dialog/iframe evidence; truncation made that worse.
+
+browser_observe now emits a compact composer object before the general control dump with committed to_chips/cc_chips, safe current To/CC inputs, subject, body_text, signature_present, and signature_text. General controls expose safe values and prioritize composer/dialog/iframe evidence; password input values are never captured. The compact composer summary and verification_hint remain top-level even when the 16 KB observation is truncated. Agent instructions and the email guide require this summary first, then one targeted read-only eval before claiming verification is impossible. Verified npm run typecheck, npm run lint, npm run build:extension, generated-bundle composer/password checks, balanced SQL dollar quoting, and embedded recipe syntax.
+
 ## Phase G live defect fix: browser eval/observe require the dedicated Chrome window (2026-07-10, build)
 
 Live composer retry used the user's ordinary CRM window despite the accepted requirement that visible browser work run in a separate same-profile Chrome window. Root cause: extension isUiJob classified only ui_step/ui_workflow as visible work; browser_observe/browser_eval followed the quiet API path and could adopt any CRM tab. Stored tab ids also had no marker distinguishing an extension-created agent window from an adopted ordinary tab.

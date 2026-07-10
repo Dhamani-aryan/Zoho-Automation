@@ -245,6 +245,21 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
     return (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
   }
 
+  function valueOf(element: Element, maxLength = 1000): string | null {
+    if (element instanceof HTMLInputElement) {
+      if (element.type.toLowerCase() === "password") return null;
+      if (element.type === "checkbox" || element.type === "radio") return element.checked ? "checked" : "unchecked";
+      return element.value.slice(0, maxLength);
+    }
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+      return element.value.slice(0, maxLength);
+    }
+    if (element instanceof HTMLElement && element.isContentEditable) {
+      return (element.innerText || element.textContent || "").replace(/\r/g, "").trim().slice(0, maxLength);
+    }
+    return null;
+  }
+
   function selectorFor(element: Element) {
     const el = element as HTMLElement;
     if (el.id) return `#${CSS.escape(el.id)}`;
@@ -356,7 +371,7 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
     .flatMap((context) =>
       Array.from(
         context.root.querySelectorAll?.(
-          "button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true']"
+          "button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true'],[id^='ceToAddrDetails'] li.selectedEmail,[id^='ceCCAddrDetails'] li.selectedEmail,#ecw_signature"
         ) ?? []
       )
         .filter(isVisible)
@@ -364,6 +379,10 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
           const el = element as HTMLElement;
           const rect = element.getBoundingClientRect();
           const dialogSelector = dialogSelectorFor(element);
+          const value = valueOf(element);
+          const composerEvidence = element.matches(
+            "#ceToAddr_1,#ceCCAddr_1,#ceSubject_1,#editorDiv,#ecw_signature,[id^='ceToAddrDetails'] li.selectedEmail,[id^='ceCCAddrDetails'] li.selectedEmail"
+          );
           return {
             tag: element.tagName.toLowerCase(),
             role: el.getAttribute("role") ?? "",
@@ -373,17 +392,52 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
               el.getAttribute("placeholder") ||
               el.getAttribute("title") ||
               "",
+            ...(value !== null ? { value } : {}),
             selector: selectorFor(element),
             frame: context.frame,
             ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
             ...(dialogSelector ? { dialog_selector: dialogSelector } : {}),
             x: Math.round(context.offsetX + rect.left + rect.width / 2),
-            y: Math.round(context.offsetY + rect.top + rect.height / 2)
+            y: Math.round(context.offsetY + rect.top + rect.height / 2),
+            _priority:
+              (composerEvidence ? 20 : 0) +
+              (value !== null ? 8 : 0) +
+              (context.frameSelector ? 5 : 0) +
+              (dialogSelector ? 3 : 0)
           };
         })
     )
+    .sort((a, b) => b._priority - a._priority)
     .slice(0, 160)
-    .filter((item) => item.text || item.selector);
+    .filter((item) => item.text || item.selector)
+    .map(({ _priority, ...item }) => item);
+
+  function elementsAcrossContexts(selector: string) {
+    return allContexts.flatMap((context) => Array.from(context.doc.querySelectorAll(selector)));
+  }
+
+  const subject = elementsAcrossContexts("#ceSubject_1")[0] ?? null;
+  const toInput = elementsAcrossContexts("#ceToAddr_1")[0] ?? null;
+  const ccInput = elementsAcrossContexts("#ceCCAddr_1")[0] ?? null;
+  const editor = elementsAcrossContexts("#editorDiv")[0] ?? null;
+  const signature = elementsAcrossContexts("#ecw_signature")[0] ?? null;
+  const toChips = elementsAcrossContexts('[id^="ceToAddrDetails"] li.selectedEmail').map(textOf).filter(Boolean);
+  const ccChips = elementsAcrossContexts('[id^="ceCCAddrDetails"] li.selectedEmail').map(textOf).filter(Boolean);
+  const composerDetected = Boolean(subject || toInput || editor || signature || toChips.length || ccChips.length);
+  const composer = composerDetected
+    ? {
+        to_chips: toChips,
+        cc_chips: ccChips,
+        to_input: toInput ? valueOf(toInput) : null,
+        cc_input: ccInput ? valueOf(ccInput) : null,
+        subject: subject ? valueOf(subject) : null,
+        body_text: editor
+          ? (editor.textContent ?? "").replace(/\r/g, "").trim().slice(0, 4000)
+          : null,
+        signature_present: Boolean(signature?.isConnected),
+        signature_text: signature ? textOf(signature) : null
+      }
+    : null;
 
   const recoveryHint = location.pathname.includes("/tab/Home")
     ? "Zoho Home is a recoverable navigation state. If the task or recent conversation contains a known record URL/id, use ui_step open_url to navigate there, wait for the expected record, and continue. Stop only when the target identity is unknown or ambiguous."
@@ -392,6 +446,10 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
     url: location.href,
     title: document.title,
     recovery_hint: recoveryHint,
+    verification_hint: composerDetected
+      ? "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
+      : null,
+    composer,
     scope_selector: scopeSelector || null,
     frames_observed: allContexts.map((context) => context.frame),
     warnings: scoped.warnings,
@@ -406,6 +464,8 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
       url: result.url,
       title: result.title,
       recovery_hint: result.recovery_hint,
+      verification_hint: result.verification_hint,
+      composer: result.composer,
       truncated: true,
       preview: json.slice(0, LIMIT)
     }
