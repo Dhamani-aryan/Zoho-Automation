@@ -126,12 +126,23 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   }
 }
 
-function browserObservePageRunner() {
+function browserObservePageRunner(input?: { args?: { scope_selector?: string } }) {
   const LIMIT = 16 * 1024;
+  const scopeSelector = typeof input?.args?.scope_selector === "string" ? input.args.scope_selector.trim() : "";
+
+  type ObserveContext = {
+    doc: Document;
+    root: ParentNode;
+    frame: string;
+    frameSelector: string | null;
+    offsetX: number;
+    offsetY: number;
+  };
 
   function isVisible(element: Element) {
     const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
+    const view = element.ownerDocument.defaultView ?? window;
+    const style = view.getComputedStyle(element);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
 
@@ -151,34 +162,140 @@ function browserObservePageRunner() {
     return element.tagName.toLowerCase();
   }
 
-  const headings = Array.from(document.querySelectorAll("h1,h2,h3,[role='heading']"))
-    .filter(isVisible)
-    .slice(0, 40)
-    .map((element) => ({ tag: element.tagName.toLowerCase(), text: textOf(element) }))
+  function dialogSelectorFor(element: Element) {
+    const dialog = element.closest("dialog,[role='dialog'],[aria-modal='true'],.modal,.popup,.lyteModal,.lyteModalContent");
+    if (dialog) return selectorFor(dialog);
+    let parent = element.parentElement;
+    while (parent) {
+      const classes = String(parent.getAttribute("class") ?? "").toLowerCase();
+      if (classes.includes("modal") || classes.includes("popup") || classes.includes("overlay")) return selectorFor(parent);
+      parent = parent.parentElement;
+    }
+    return null;
+  }
+
+  function iframeContext(iframe: HTMLIFrameElement, parent: ObserveContext): ObserveContext | null {
+    try {
+      const childDoc = iframe.contentDocument ?? iframe.contentWindow?.document ?? null;
+      if (!childDoc?.body) return null;
+      const rect = iframe.getBoundingClientRect();
+      const frameSelector = selectorFor(iframe);
+      const frame = parent.frame === "main" ? frameSelector : `${parent.frame} ${frameSelector}`;
+      return {
+        doc: childDoc,
+        root: childDoc,
+        frame,
+        frameSelector,
+        offsetX: parent.offsetX + rect.left,
+        offsetY: parent.offsetY + rect.top
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function collectContexts() {
+    const contexts: ObserveContext[] = [
+      { doc: document, root: document, frame: "main", frameSelector: null, offsetX: 0, offsetY: 0 }
+    ];
+    for (let index = 0; index < contexts.length; index += 1) {
+      const context = contexts[index];
+      const iframes = Array.from(context.root.querySelectorAll?.("iframe") ?? []) as HTMLIFrameElement[];
+      for (const iframe of iframes) {
+        if (!isVisible(iframe)) continue;
+        const child = iframeContext(iframe, context);
+        if (child) contexts.push(child);
+      }
+    }
+    return contexts;
+  }
+
+  function scopedContexts(contexts: ObserveContext[]) {
+    if (!scopeSelector) return { contexts, warnings: [] as string[] };
+    const warnings: string[] = [];
+    const scoped: ObserveContext[] = [];
+    for (const context of contexts) {
+      let matches: Element[] = [];
+      try {
+        matches = Array.from(context.root.querySelectorAll?.(scopeSelector) ?? []);
+      } catch {
+        return { contexts: [] as ObserveContext[], warnings: [`Invalid scope_selector: ${scopeSelector}`] };
+      }
+      for (const match of matches) {
+        if (!isVisible(match)) continue;
+        if (match.tagName.toLowerCase() === "iframe") {
+          const child = iframeContext(match as HTMLIFrameElement, context);
+          if (child) scoped.push(child);
+          else warnings.push(`scope_selector matched iframe ${selectorFor(match)} but it was not same-origin/readable`);
+          continue;
+        }
+        scoped.push({ ...context, root: match });
+      }
+    }
+    if (scoped.length === 0) warnings.push(`No visible matches for scope_selector: ${scopeSelector}`);
+    return { contexts: scoped, warnings };
+  }
+
+  const allContexts = collectContexts();
+  const scoped = scopedContexts(allContexts);
+  if (scopeSelector && scoped.contexts.length === 0) {
+    return { ok: false, error_message: scoped.warnings.join("; ") || `No visible matches for ${scopeSelector}.` };
+  }
+
+  const headings = scoped.contexts
+    .flatMap((context) =>
+      Array.from(context.root.querySelectorAll?.("h1,h2,h3,[role='heading']") ?? [])
+        .filter(isVisible)
+        .map((element) => ({
+          tag: element.tagName.toLowerCase(),
+          text: textOf(element),
+          frame: context.frame,
+          ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
+          ...(dialogSelectorFor(element) ? { dialog_selector: dialogSelectorFor(element) } : {})
+        }))
+    )
+    .slice(0, 60)
     .filter((item) => item.text);
 
-  const controls = Array.from(
-    document.querySelectorAll("button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true']")
-  )
-    .filter(isVisible)
-    .slice(0, 120)
-    .map((element) => {
-      const el = element as HTMLElement;
-      const rect = element.getBoundingClientRect();
-      return {
-        tag: element.tagName.toLowerCase(),
-        role: el.getAttribute("role") ?? "",
-        text: textOf(element) || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || "",
-        selector: selectorFor(element),
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2)
-      };
-    })
+  const controls = scoped.contexts
+    .flatMap((context) =>
+      Array.from(
+        context.root.querySelectorAll?.(
+          "button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true']"
+        ) ?? []
+      )
+        .filter(isVisible)
+        .map((element) => {
+          const el = element as HTMLElement;
+          const rect = element.getBoundingClientRect();
+          const dialogSelector = dialogSelectorFor(element);
+          return {
+            tag: element.tagName.toLowerCase(),
+            role: el.getAttribute("role") ?? "",
+            text:
+              textOf(element) ||
+              el.getAttribute("aria-label") ||
+              el.getAttribute("placeholder") ||
+              el.getAttribute("title") ||
+              "",
+            selector: selectorFor(element),
+            frame: context.frame,
+            ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
+            ...(dialogSelector ? { dialog_selector: dialogSelector } : {}),
+            x: Math.round(context.offsetX + rect.left + rect.width / 2),
+            y: Math.round(context.offsetY + rect.top + rect.height / 2)
+          };
+        })
+    )
+    .slice(0, 160)
     .filter((item) => item.text || item.selector);
 
   const result = {
     url: location.href,
     title: document.title,
+    scope_selector: scopeSelector || null,
+    frames_observed: allContexts.map((context) => context.frame),
+    warnings: scoped.warnings,
     headings,
     controls
   };
@@ -612,7 +729,8 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        func: browserObservePageRunner
+        func: browserObservePageRunner,
+        args: [{ args: job.args }]
       });
       const result = results?.[0]?.result as PageResult | undefined;
       if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {

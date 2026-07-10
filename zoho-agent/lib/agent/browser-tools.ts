@@ -7,6 +7,10 @@ const browserEvalSchema = z.object({
   await_promise: z.boolean().optional()
 });
 
+const browserObserveSchema = z.object({
+  scope_selector: z.string().trim().min(1).max(500).optional()
+});
+
 export type BrowserEvalArgs = z.infer<typeof browserEvalSchema>;
 
 export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
@@ -18,7 +22,12 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     parameters: {
       type: "object",
       additionalProperties: false,
-      properties: {}
+      properties: {
+        scope_selector: {
+          type: "string",
+          description: "Optional CSS selector for a dialog, overlay, iframe, or region to observe instead of the full page."
+        }
+      }
     }
   },
   {
@@ -44,7 +53,7 @@ export function isBrowserTool(name: string) {
 }
 
 export function validateBrowserToolCall(call: AgentToolCall) {
-  if (call.name === "browser_observe") return { ...call, args: {} };
+  if (call.name === "browser_observe") return { ...call, args: browserObserveSchema.parse(call.args ?? {}) };
   if (call.name === "browser_eval") return { ...call, args: browserEvalSchema.parse(call.args) };
   throw new Error(`Unknown browser tool: ${call.name}`);
 }

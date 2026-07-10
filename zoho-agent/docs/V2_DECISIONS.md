@@ -14,6 +14,10 @@ Added deterministic per-turn skill-guide routing. The agent now loads the top ma
 
 Rebuilt the `email-scheduling` seed from the KD Blitz playbook section 9 selector map and the real acceptance drafts file format. It now records To/Cc chip selectors, real Enter commit, subject input, body iframe `#z_editor` -> `#editorDiv`, Verdana 13.33px body insertion above `#ecw_signature`, schedule-never-send flow, chip read-back, Scheduled-tab verification, and the manual Scheduled-tab path for non-revertible scheduled emails. The seed upsert now updates existing guide rows instead of doing nothing on conflict.
 
+## Phase G follow-up Step 3: browser_observe frames and scoped overlays (2026-07-10, build)
+
+Expanded `browser_observe` with optional `scope_selector`. The extension runner now observes the top document plus readable same-origin iframes, tags headings/controls with `frame` and `frame_selector`, marks dialog/overlay ancestry, and returns CSS-pixel coordinates adjusted back into the main viewport. This is intended to make the Zoho compose overlay and `#z_editor` body iframe visible to the agent without increasing the 16 KB result cap.
+
 ## DECISION: all approval gates OFF by default (Aryan, 2026-07-10)
 
 Follow-on from the same-day interactive-ungating decision. Aryan: "people are already giving specific instructions and there's nothing that cannot be undone so why have them." ALL approval cards are removed from the default experience - including batch task orders and Tier-2 API write cards.
