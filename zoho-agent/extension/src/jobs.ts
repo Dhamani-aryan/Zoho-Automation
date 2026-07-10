@@ -102,6 +102,8 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   const code = typeof job.args.code === "string" ? job.args.code : "";
   const awaitPromise = job.args.await_promise === true;
   const frameSelector = typeof job.args.frame_selector === "string" ? job.args.frame_selector.trim() : "";
+  let signatureRemoved = false;
+  let signatureRestored = false;
   if (!code.trim()) return { ok: false, error_message: "browser_eval code is empty." };
   try {
     // Zoho renders the email composer body (and some dialogs) inside a
@@ -117,11 +119,57 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
       }
       boundDocument = frame.contentDocument;
     }
+    function findSignatureDocument(root: Document): Document | null {
+      if (root.querySelector("#ecw_signature")) return root;
+      for (const iframe of root.querySelectorAll("iframe")) {
+        try {
+          const child = iframe.contentDocument;
+          if (!child) continue;
+          const found = findSignatureDocument(child);
+          if (found) return found;
+        } catch {
+          // Cross-origin frames are outside the Zoho composer and inaccessible.
+        }
+      }
+      return null;
+    }
+    const signatureDocument = findSignatureDocument(document) ?? boundDocument;
+    const signature = signatureDocument.querySelector("#ecw_signature");
+    const signatureBackup = signature ? (signature.cloneNode(true) as Element) : null;
+    const signatureParent = signature?.parentElement ?? null;
+    const signatureNextSibling = signature?.nextSibling ?? null;
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     // `document` is shadowed by the bound (possibly frame) document; `window`
     // and `window.document` stay top-level so callers can still read #token.
     const fn = awaitPromise ? new AsyncFunction("document", code) : new Function("document", code);
-    const raw = awaitPromise ? await fn(boundDocument) : fn(boundDocument);
+    let raw: unknown;
+    try {
+      raw = awaitPromise ? await fn(boundDocument) : fn(boundDocument);
+    } finally {
+      if (signatureBackup && !signatureDocument.querySelector("#ecw_signature")) {
+        signatureRemoved = true;
+        const restoreParent = signatureParent?.isConnected
+          ? signatureParent
+          : signatureDocument.querySelector("#editorDiv");
+        if (restoreParent) {
+          if (signatureNextSibling?.parentNode === restoreParent) {
+            restoreParent.insertBefore(signatureBackup, signatureNextSibling);
+          } else {
+            restoreParent.appendChild(signatureBackup);
+          }
+          signatureRestored = true;
+        }
+      }
+    }
+    if (signatureRemoved) {
+      return {
+        ok: false,
+        error_message: signatureRestored
+          ? "browser_eval attempted to remove the existing Zoho email signature; the extension restored it. Insert body content before #ecw_signature and verify by read-back."
+          : "browser_eval removed the existing Zoho email signature and the extension could not restore it. Stop and reopen a fresh composer.",
+        result: { signature_removed: true, signature_restored: signatureRestored }
+      };
+    }
     const json = JSON.stringify(raw ?? null);
     if (json.length > 64 * 1024) {
       return {
@@ -459,6 +507,17 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
           null;
       }
       if (!element) return { ok: false, error_message: "UI target was not found." };
+      if (
+        rawStep.type === "fill_field" &&
+        element instanceof HTMLElement &&
+        element.querySelector("#ecw_signature")
+      ) {
+        return {
+          ok: false,
+          error_message:
+            "Refused to replace an editor containing #ecw_signature. Insert the email body before the signature with browser_eval."
+        };
+      }
 
       element.scrollIntoView({ block: "center", inline: "center" });
       const rect = element.getBoundingClientRect();

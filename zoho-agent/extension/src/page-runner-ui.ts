@@ -130,6 +130,13 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
     if (type === "fill_field") {
       const element = await waitForTarget(5000);
       if (!element) return { ok: false, error_message: "UI field was not found." };
+      if (element instanceof HTMLElement && element.querySelector("#ecw_signature")) {
+        return {
+          ok: false,
+          error_message:
+            "Refused to replace an editor containing #ecw_signature. Insert the email body before the signature with browser_eval."
+        };
+      }
       element.scrollIntoView({ block: "center", inline: "center" });
       setNativeValue(element, String(step.value ?? ""));
       if (step.press_enter === true) pressKey("Enter");

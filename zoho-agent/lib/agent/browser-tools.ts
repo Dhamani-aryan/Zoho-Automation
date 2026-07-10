@@ -40,7 +40,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_eval",
     tier: 2,
     description:
-      "Run model-written JavaScript in the active crm.zoho.com page MAIN world. The code receives `document` as its execution document. To target the email composer body or a dialog rendered in a same-origin iframe, pass frame_selector (a CSS selector for the iframe) and `document` will be bound to that frame's document. `window` and `window.document` stay top-level; when frame_selector is set, read Zoho's #token from window.document before making fetch()-based API calls. Gated only when the user has approvals enabled.",
+      "Run model-written JavaScript in the active crm.zoho.com page MAIN world. The code receives `document` as its execution document. To target the email composer body or a dialog rendered in a same-origin iframe, pass frame_selector (a CSS selector for the iframe) and `document` will be bound to that frame's document. `window` and `window.document` stay top-level; when frame_selector is set, read Zoho's #token from window.document before making fetch()-based API calls. In the Zoho email editor, never replace #editorDiv innerHTML/textContent or call replaceChildren: insert body nodes before #ecw_signature and verify the signature remains. The extension restores and rejects an eval that removes an existing signature. Gated only when the user has approvals enabled.",
     parameters: {
       type: "object",
       additionalProperties: false,

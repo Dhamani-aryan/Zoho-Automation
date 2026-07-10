@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase G live defect fix: preserve composer signatures (2026-07-10, build)
+
+Live retry proved the eval did fill the composer despite returning null, but its whole-editor replacement removed the existing Zoho signature. browser_eval now finds and snapshots #ecw_signature across readable same-origin frames before model code runs, restores it if removed (including when code throws), and rejects that unsafe eval with an explicit result. Both CDP and DOM ui_step fill_field paths refuse to replace an editor containing the signature. Agent instructions and the email-scheduling seed now require inserting body nodes immediately before #ecw_signature, prohibit whole-editor innerHTML/textContent/replaceChildren and ui_step fill_field, and require signature read-back before scheduling. Verified npm run typecheck, npm run lint, and npm run build:extension.
+
 ## Phase G live defect fix: blank optional browser selectors (2026-07-10, build)
 
 Live retry exposed browser_eval validation rejecting frame_selector="" even though the field is optional. Browser tool validation now normalizes an empty or whitespace-only frame_selector/scope_selector to omitted before applying the non-empty selector constraint. Non-empty selectors retain the 500-character bound.
