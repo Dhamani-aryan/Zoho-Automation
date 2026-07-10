@@ -33,10 +33,22 @@ export function responsesInputFromMessages(messages: AgentPromptMessage[]) {
     return responsesInputFromText(composeAgentInput(messages));
   }
 
+  const toolCallIds = new Set(
+    messages
+      .filter((message) => message.role === "tool_call" && message.callId)
+      .map((message) => message.callId as string)
+  );
+  const toolOutputIds = new Set(
+    messages
+      .filter((message) => message.role === "tool" && message.callId)
+      .map((message) => message.callId as string)
+  );
+  const completeToolCallIds = new Set([...toolCallIds].filter((callId) => toolOutputIds.has(callId)));
+
   const input: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     if (message.role === "tool_call") {
-      if (!message.toolName || !message.callId) continue;
+      if (!message.toolName || !message.callId || !completeToolCallIds.has(message.callId)) continue;
       input.push({
         type: "function_call",
         call_id: message.callId,
@@ -47,7 +59,7 @@ export function responsesInputFromMessages(messages: AgentPromptMessage[]) {
     }
 
     if (message.role === "tool") {
-      if (!message.callId) {
+      if (!message.callId || !completeToolCallIds.has(message.callId)) {
         input.push({
           type: "message",
           role: "user",

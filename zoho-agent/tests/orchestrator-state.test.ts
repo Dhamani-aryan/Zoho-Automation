@@ -27,6 +27,31 @@ import {
   workflowEffectForSteps
 } from "../lib/agent/ui-tools";
 import { taskOrderBudgetDecision } from "../lib/agent/task-orders";
+import { responsesInputFromMessages } from "../lib/llm/tool-calls";
+
+test("Responses transcript includes only complete tool call/output pairs", () => {
+  const input = responsesInputFromMessages([
+    { role: "user", content: "Start" },
+    { role: "tool_call", content: "", toolName: "browser_eval", callId: "paired", args: { code: "return 1" } },
+    { role: "tool", content: "{\"result\":1}", toolName: "browser_eval", callId: "paired" },
+    { role: "tool_call", content: "", toolName: "undo_task", callId: "missing-output", args: {} },
+    { role: "tool", content: "orphaned result", toolName: "browser_observe", callId: "missing-call" }
+  ]);
+
+  assert.equal(input.some((item) => item.type === "function_call" && item.call_id === "paired"), true);
+  assert.equal(input.some((item) => item.type === "function_call_output" && item.call_id === "paired"), true);
+  assert.equal(input.some((item) => item.call_id === "missing-output"), false);
+  assert.equal(input.some((item) => item.type === "function_call_output" && item.call_id === "missing-call"), false);
+  assert.equal(
+    input.some(
+      (item) =>
+        item.type === "message" &&
+        Array.isArray(item.content) &&
+        (item.content as Array<{ text?: string }>).some((part) => part.text?.includes("orphaned result"))
+    ),
+    true
+  );
+});
 
 test("run transitions allow only the Phase 3 lifecycle", () => {
   assert.equal(canTransitionRun("preview_ready", "approved"), true);

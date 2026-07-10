@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase G live defect fix: self-heal interrupted tool transcripts (2026-07-10, build)
+
+After the composer turn, the next Codex request failed with HTTP 400 "No tool output found for function call". A turn interruption can persist an assistant function-call marker before its tool-result row, and the structured Responses serializer previously replayed that orphan. responsesInputFromMessages now emits structured function_call/function_call_output items only for call ids present on both sides. Orphan calls are omitted; orphan outputs are retained as plain TOOL RESULT context. Added regression coverage to the orchestrator test suite. Verified npm run test:orchestrator (16/16), npm run typecheck, and npm run lint.
+
 ## Phase G live defect fix: explicit browser_eval no-return result (2026-07-10, build)
 
 The live composer eval changed fields but omitted return, and the runner converted undefined to null; the model then treated null as no evidence and incorrectly reported the visible work as not done. browser_eval now returns an explicit executed/returned=false/possible_state_change/verification_required observation when code omits return. Tool and agent instructions require state-changing evals to return exact JSON read-back values and require observation before retry or completion when returned=false. The email guide requires exact composer values plus signature_present=true in the fill result. Verified npm run typecheck, npm run lint, and npm run build:extension.

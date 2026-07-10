@@ -16,6 +16,8 @@
     "lib/agent/task-orders.ts",
     "lib/agent/turn-lock.ts",
     "lib/agent/ui-tools.ts",
+    "lib/llm/provider.ts",
+    "lib/llm/tool-calls.ts",
     "tests/orchestrator-state.test.ts"
   ]
 }
