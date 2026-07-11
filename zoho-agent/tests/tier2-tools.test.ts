@@ -228,4 +228,8 @@ test("Zoho task preparation uses API writes with deal and history read-back", ()
   assert.match(source, /Activities_Chronological_View_History/);
   assert.match(source, /getRecord\("Tasks", taskId/);
   assert.match(source, /\$se_module: "Deals"/);
+  assert.match(source, /"write_ok_unverified"/);
+  assert.match(source, /"adopt-history"/);
+  assert.match(source, /receipts/);
+  assert.match(source, /JSON\.parse\(JSON\.stringify\(result\)\)/);
 });

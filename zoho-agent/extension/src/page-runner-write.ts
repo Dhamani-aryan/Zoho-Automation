@@ -397,6 +397,43 @@ export async function zohoWritePageRunner(job: {
   }
 
   type TaskRow = Record<string, unknown> & { id?: string; Subject?: string; Status?: string; Due_Date?: string };
+  type TaskReceipt = {
+    op: "task.create" | "task.complete";
+    status: "verified" | "write_ok_unverified" | "failed";
+    id: string | null;
+    subject: string;
+    verified_fields: Record<string, unknown>;
+    via: "read-back" | "adopt-open" | "adopt-history" | "write" | "verify-error";
+    request_id: string;
+    elapsed_ms: number;
+    checked_at: string;
+    error: string | null;
+  };
+
+  function taskReceipt(
+    op: TaskReceipt["op"],
+    status: TaskReceipt["status"],
+    id: string | null,
+    subject: string,
+    verifiedFields: Record<string, unknown>,
+    via: TaskReceipt["via"],
+    requestId: string,
+    started: number,
+    error: string | null = null
+  ): TaskReceipt {
+    return {
+      op,
+      status,
+      id,
+      subject,
+      verified_fields: verifiedFields,
+      via,
+      request_id: requestId,
+      elapsed_ms: Date.now() - started,
+      checked_at: new Date().toISOString(),
+      error
+    };
+  }
 
   function lookupId(value: unknown) {
     return value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string"
@@ -441,6 +478,7 @@ export async function zohoWritePageRunner(job: {
     const dealId = String(args.deal_zoho_id ?? "");
     const dealName = String(args.deal_name ?? "");
     const contactId = String(args.contact_zoho_id ?? "");
+    const requestId = String(args.request_id ?? "task-preparation");
     const newTasks = (Array.isArray(args.new_tasks) ? args.new_tasks : []) as Array<{
       subject?: unknown;
       due_date?: unknown;
@@ -459,10 +497,19 @@ export async function zohoWritePageRunner(job: {
     const created: Array<Record<string, unknown>> = [];
     const alreadyOpen: Array<Record<string, unknown>> = [];
     const completed: Array<Record<string, unknown>> = [];
+    const receipts: TaskReceipt[] = [];
+    let closedTasks: TaskRow[] | null = null;
+    const history = async () => {
+      if (!closedTasks) closedTasks = await getDealTasks(dealId, true);
+      return closedTasks;
+    };
 
-    for (const raw of newTasks) {
+    for (let index = 0; index < newTasks.length; index += 1) {
+      const raw = newTasks[index];
+      const operationStarted = Date.now();
       const subject = String(raw.subject ?? "").trim();
       const dueDate = String(raw.due_date ?? "").trim();
+      const operationId = `${requestId}:create:${index}`;
       if (!subject || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
         return { ok: false, error_code: "invalid_args", error_message: "Every new task needs a subject and YYYY-MM-DD due date." };
       }
@@ -479,6 +526,50 @@ export async function zohoWritePageRunner(job: {
         });
         if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Existing task "${subject}" failed read-back verification.` };
         alreadyOpen.push({ id: matches[0].id, subject, status: matches[0].Status, verified: true });
+        receipts.push(
+          taskReceipt(
+            "task.create",
+            "verified",
+            String(matches[0].id),
+            subject,
+            { Subject: subject, Status: matches[0].Status ?? "Not Started", Due_Date: matches[0].Due_Date ?? null },
+            "adopt-open",
+            operationId,
+            operationStarted
+          )
+        );
+        continue;
+      }
+
+      const completedMatches = (await history()).filter(
+        (task) => valuesEqual(task.Subject, subject) && valuesEqual(task.Due_Date, dueDate)
+      );
+      if (completedMatches.length > 1) {
+        return { ok: false, error_code: "ambiguous_task", error_message: `Completed task "${subject}" is ambiguous (${completedMatches.length} exact matches).` };
+      }
+      if (completedMatches.length === 1) {
+        const taskId = String(completedMatches[0].id);
+        const checked = await verifyTask(taskId, {
+          subject,
+          status: "Completed",
+          due_date: dueDate,
+          deal_id: dealId,
+          contact_id: contactId
+        });
+        if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Completed task "${subject}" failed adoption read-back.` };
+        completed.push({ id: taskId, subject, status: "Completed", verified: true, adopted: true });
+        receipts.push(
+          taskReceipt(
+            "task.create",
+            "verified",
+            taskId,
+            subject,
+            { Subject: subject, Status: "Completed", Due_Date: dueDate },
+            "adopt-history",
+            operationId,
+            operationStarted
+          )
+        );
         continue;
       }
 
@@ -500,30 +591,95 @@ export async function zohoWritePageRunner(job: {
       if (code !== "SUCCESS" || !taskId) {
         return { ok: false, error_code: "write_failed", error_message: `Zoho did not create task "${subject}" (code ${code}).` };
       }
-      const checked = await verifyTask(taskId, {
-        subject,
-        status: "Not Started",
-        due_date: dueDate,
-        deal_id: dealId,
-        contact_id: contactId
-      });
+      let checked: Awaited<ReturnType<typeof verifyTask>>;
+      try {
+        checked = await verifyTask(taskId, {
+          subject,
+          status: "Not Started",
+          due_date: dueDate,
+          deal_id: dealId,
+          contact_id: contactId
+        });
+      } catch (error) {
+        const receipt = taskReceipt(
+          "task.create",
+          "write_ok_unverified",
+          taskId,
+          subject,
+          {},
+          "verify-error",
+          operationId,
+          operationStarted,
+          error instanceof Error ? error.message : "Task read-back failed."
+        );
+        return { ok: false, error_code: "verify_failed", error_message: `Created task "${subject}" could not be read back.`, result: { receipts: [...receipts, receipt] } };
+      }
       if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Created task "${subject}" failed API read-back verification.` };
       const result = { id: taskId, subject, due_date: dueDate, status: "Not Started", verified: true };
       created.push(result);
+      receipts.push(
+        taskReceipt(
+          "task.create",
+          "verified",
+          taskId,
+          subject,
+          { Subject: subject, Status: "Not Started", Due_Date: dueDate },
+          "read-back",
+          operationId,
+          operationStarted
+        )
+      );
       openTasks.push({ id: taskId, Subject: subject, Due_Date: dueDate, Status: "Not Started" });
     }
 
-    for (const raw of tasksToComplete) {
+    for (let index = 0; index < tasksToComplete.length; index += 1) {
+      const raw = tasksToComplete[index];
+      const operationStarted = Date.now();
       const subject = String(raw.subject ?? "").trim();
+      const operationId = `${requestId}:complete:${index}`;
       if (!subject) return { ok: false, error_code: "invalid_args", error_message: "Every task completion needs a subject." };
       const matches = openTasks.filter((task) => valuesEqual(task.Subject, subject));
+      if (matches.length === 0) {
+        const completedMatches = (await history()).filter(
+          (task) => valuesEqual(task.Subject, subject) && valuesEqual(task.Status, "Completed")
+        );
+        if (completedMatches.length === 1) {
+          const taskId = String(completedMatches[0].id);
+          const checked = await verifyTask(taskId, {
+            subject,
+            status: "Completed",
+            deal_id: dealId,
+            contact_id: contactId
+          });
+          if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Completed task "${subject}" failed adoption read-back.` };
+          if (!completed.some((entry) => entry.id === taskId)) completed.push({ id: taskId, subject, status: "Completed", verified: true, adopted: true });
+          receipts.push(
+            taskReceipt(
+              "task.complete",
+              "verified",
+              taskId,
+              subject,
+              { Subject: subject, Status: "Completed" },
+              "adopt-history",
+              operationId,
+              operationStarted
+            )
+          );
+          continue;
+        }
+        return {
+          ok: false,
+          error_code: completedMatches.length ? "ambiguous_task" : "task_not_found",
+          error_message: completedMatches.length
+            ? `Completed task "${subject}" is ambiguous (${completedMatches.length} exact matches).`
+            : `Open or completed task "${subject}" was not found.`
+        };
+      }
       if (matches.length !== 1) {
         return {
           ok: false,
-          error_code: matches.length ? "ambiguous_task" : "task_not_found",
-          error_message: matches.length
-            ? `Open task "${subject}" is ambiguous (${matches.length} exact matches).`
-            : `Open task "${subject}" was not found.`
+          error_code: "ambiguous_task",
+          error_message: `Open task "${subject}" is ambiguous (${matches.length} exact matches).`
         };
       }
       const taskId = String(matches[0].id);
@@ -533,33 +689,73 @@ export async function zohoWritePageRunner(job: {
       if (code !== "SUCCESS") {
         return { ok: false, error_code: "write_failed", error_message: `Zoho did not complete task "${subject}" (code ${code}).` };
       }
-      const checked = await verifyTask(taskId, {
-        subject,
-        status: "Completed",
-        deal_id: dealId,
-        contact_id: contactId
-      });
+      let checked: Awaited<ReturnType<typeof verifyTask>>;
+      try {
+        checked = await verifyTask(taskId, {
+          subject,
+          status: "Completed",
+          deal_id: dealId,
+          contact_id: contactId
+        });
+      } catch (error) {
+        const receipt = taskReceipt(
+          "task.complete",
+          "write_ok_unverified",
+          taskId,
+          subject,
+          {},
+          "verify-error",
+          operationId,
+          operationStarted,
+          error instanceof Error ? error.message : "Task read-back failed."
+        );
+        return { ok: false, error_code: "verify_failed", error_message: `Completed task "${subject}" could not be read back.`, result: { receipts: [...receipts, receipt] } };
+      }
       if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Completed task "${subject}" failed API read-back verification.` };
       completed.push({ id: taskId, subject, before_status: matches[0].Status ?? null, status: "Completed", verified: true });
+      receipts.push(
+        taskReceipt(
+          "task.complete",
+          "verified",
+          taskId,
+          subject,
+          { Subject: subject, Status: "Completed" },
+          "read-back",
+          operationId,
+          operationStarted
+        )
+      );
       openTasks = openTasks.filter((task) => task.id !== taskId);
     }
 
-    const closedTasks = tasksToComplete.length > 0 ? await getDealTasks(dealId, true) : [];
+    closedTasks = tasksToComplete.length > 0 ? await getDealTasks(dealId, true) : closedTasks ?? [];
     for (const entry of completed) {
       if (!closedTasks.some((task) => task.id === entry.id && valuesEqual(task.Status, "Completed"))) {
         return { ok: false, error_code: "verify_failed", error_message: `Completed task "${entry.subject}" was not found in activity history.` };
       }
     }
 
-    return { ok: true, result: { tool: "zoho_prepare_tasks", deal_id: dealId, created, already_open: alreadyOpen, completed, verified: true } };
+    return { ok: true, result: { tool: "zoho_prepare_tasks", deal_id: dealId, created, already_open: alreadyOpen, completed, receipts, verified: true } };
+  }
+
+  function jsonSafe(result: WritePageResult): WritePageResult {
+    try {
+      return JSON.parse(JSON.stringify(result)) as WritePageResult;
+    } catch (error) {
+      return {
+        ok: false,
+        error_code: "receipt_serialize_failed",
+        error_message: error instanceof Error ? error.message : "Write receipt serialization failed."
+      };
+    }
   }
 
   try {
-    if (job.tool_name === "zoho_update_fields") return await runUpdateFields(job.args);
-    if (job.tool_name === "zoho_change_owner") return await runChangeOwner(job.args);
-    if (job.tool_name === "zoho_add_tags") return await runTags(job.args, true);
-    if (job.tool_name === "zoho_remove_tags") return await runTags(job.args, false);
-    if (job.tool_name === "zoho_prepare_tasks") return await runPrepareTasks(job.args);
+    if (job.tool_name === "zoho_update_fields") return jsonSafe(await runUpdateFields(job.args));
+    if (job.tool_name === "zoho_change_owner") return jsonSafe(await runChangeOwner(job.args));
+    if (job.tool_name === "zoho_add_tags") return jsonSafe(await runTags(job.args, true));
+    if (job.tool_name === "zoho_remove_tags") return jsonSafe(await runTags(job.args, false));
+    if (job.tool_name === "zoho_prepare_tasks") return jsonSafe(await runPrepareTasks(job.args));
     return { ok: false, error_message: `Write tool ${job.tool_name} is not supported by this extension version.` };
   } catch (error) {
     return {
