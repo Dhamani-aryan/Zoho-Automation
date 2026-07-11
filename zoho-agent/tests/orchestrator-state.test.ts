@@ -48,6 +48,10 @@ import {
   isEmailSchedulingExtensionJob,
   scheduleZohoEmailBatchSchema
 } from "../lib/agent/email-scheduling-tools";
+import {
+  allowsToolAfterTaskPreparationFailure,
+  hasTaskPreparationFailure
+} from "../lib/agent/email-recovery-policy";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -512,6 +516,27 @@ test("deterministic email contract keeps blank CC empty and requires safe schedu
       ]
     })
   );
+});
+
+test("task preparation failures block model-driven scheduling recovery", () => {
+  const failure = {
+    status: "failed",
+    records: [
+      {
+        result: {
+          status: "failed",
+          result: { error_code: "TASK_PREPARATION_FAILED", result: { timings_ms: { prepare_tasks: 1303 } } }
+        }
+      }
+    ]
+  };
+  assert.equal(hasTaskPreparationFailure(failure), true);
+  assert.equal(hasTaskPreparationFailure({ error_code: "COMPOSER_OPEN_FAILED" }), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("browser_eval", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("browser_observe", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("zoho_read_api", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("schedule_zoho_email_batch", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("complete_task_order", true), true);
 });
 
 test("ui_step validation and teach-mode gate are strict", () => {

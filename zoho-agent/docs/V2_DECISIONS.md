@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Deterministic task-failure hard stop (2026-07-12, fix)
+
+Live order 909ff1b0-a6cd-4697-9346-a81b4305b202 spent more than a minute on model-driven Zoho reads and browser evaluation after the deterministic worker had already returned TASK_PREPARATION_FAILED. Prompt instructions were insufficient. The server now detects that nested error code, removes scheduling, Zoho read, browser, and UI recovery tools from subsequent model turns, tells the model to complete the active order from the deterministic result, and audits deterministic_task_recovery_blocked. Composer-specific failures remain eligible for the existing single focused recovery because they do not activate this task-failure policy.
+
 ## Unattended dedicated browser window (2026-07-12, fix)
 
 Agent browser jobs now create and reuse a dedicated Zoho window without focusing, activating, normalizing, or resizing it. Navigation updates the dedicated tab URL without making that tab active. Script injection and CDP input target the stored tab id directly, so they do not move the operating-system cursor and do not require Chrome to be the foreground application. UI jobs never fall back to an arbitrary CRM tab that the user may be working in. API jobs may still reuse an existing CRM tab quietly because they do not drive its UI.
