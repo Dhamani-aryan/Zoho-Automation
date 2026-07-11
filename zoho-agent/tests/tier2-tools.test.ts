@@ -214,8 +214,10 @@ test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
   assert.deepEqual(extensionNames, [...TIER2_WRITE_TOOL_NAMES, "schedule_zoho_email"].sort());
   assert.match(source, /job\.tool_name === "schedule_zoho_email"/);
   assert.match(source, /write without approval or task order refused by extension/);
-  assert.match(source, /row\.querySelector\("span\.markAsCompletedIcon"\)/);
-  assert.doesNotMatch(source, /document\.querySelector\("span\.markAsCompletedIcon"\)/);
+  assert.match(source, /prepareDealTasksWithApi/);
+  assert.match(source, /tool_name: "zoho_prepare_tasks"/);
+  assert.doesNotMatch(source, /markAsCompletedIcon/);
+  assert.doesNotMatch(source, /task_subject/);
 });
 
 test("Zoho task preparation uses API writes with deal and history read-back", () => {

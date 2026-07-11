@@ -914,6 +914,7 @@ type EmailJobArgs = {
   deal_url: string;
   deal_zoho_id: string;
   deal_name: string;
+  contact_zoho_id: string;
   contact_name: string;
   to: string;
   cc: string[];
@@ -933,6 +934,7 @@ function emailJobArgs(args: Record<string, unknown>): EmailJobArgs {
     deal_url: String(args.deal_url ?? ""),
     deal_zoho_id: String(args.deal_zoho_id ?? ""),
     deal_name: String(args.deal_name ?? ""),
+    contact_zoho_id: String(args.contact_zoho_id ?? ""),
     contact_name: String(args.contact_name ?? ""),
     to: String(args.to ?? "").trim().toLowerCase(),
     cc: Array.isArray(args.cc) ? args.cc.map((value) => String(value).trim().toLowerCase()).filter(Boolean) : [],
@@ -1012,148 +1014,28 @@ async function inspectDealPage(tabId: number, args: EmailJobArgs) {
     | undefined;
 }
 
-async function prepareDealTasks(tabId: number, args: EmailJobArgs) {
+async function prepareDealTasksWithApi(tabId: number, args: EmailJobArgs) {
   if (args.new_tasks.length === 0 && args.tasks_to_complete.length === 0) {
-    return { ok: true, created: [], already_open: [], completed: [], verification: [] };
+    return { ok: true as const, result: { created: [], already_open: [], completed: [], verified: true } };
   }
-  const newTasks = args.new_tasks.map((task) => ({ ...task, due_date: zohoDisplayDate(task.due_date) }));
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: async (toCreate: Array<{ subject: string; due_date: string }>, toComplete: Array<{ subject: string }>) => {
-      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      const visible = (element: Element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
-      };
-      const exactVisible = (text: string, selector = "a,button,span,div,li") =>
-        [...document.querySelectorAll(selector)].filter(
-          (element) => visible(element) && (element.textContent ?? "").replace(/\s+/g, " ").trim() === text
-        );
-      const waitFor = async (find: () => Element | null, timeoutMs: number) => {
-        const started = Date.now();
-        while (Date.now() - started < timeoutMs) {
-          const found = find();
-          if (found) return found;
-          await sleep(100);
+    func: zohoWritePageRunner,
+    args: [
+      {
+        tool_name: "zoho_prepare_tasks",
+        args: {
+          deal_zoho_id: args.deal_zoho_id,
+          deal_name: args.deal_name,
+          contact_zoho_id: args.contact_zoho_id,
+          new_tasks: args.new_tasks,
+          tasks_to_complete: args.tasks_to_complete
         }
-        return null;
-      };
-      const clickLikeUser = (element: Element) => {
-        element.scrollIntoView({ block: "center", inline: "center" });
-        const rect = element.getBoundingClientRect();
-        const options = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: rect.left + rect.width / 2,
-          clientY: rect.top + rect.height / 2
-        };
-        for (const type of ["mousedown", "mouseup", "click"]) element.dispatchEvent(new MouseEvent(type, options));
-      };
-      const setNative = (element: HTMLInputElement, value: string) => {
-        const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
-        if (!descriptor?.set) throw new Error(`Native setter missing for #${element.id}.`);
-        descriptor.set.call(element, value);
-        element.dispatchEvent(new Event("input", { bubbles: true }));
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-        element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
-      };
-      const openActivities = exactVisible("Open Activities")[0];
-      if (!(openActivities instanceof HTMLElement)) throw new Error("Open Activities control is missing.");
-      openActivities.click();
-      await sleep(500);
-
-      const created: string[] = [];
-      const alreadyOpen: string[] = [];
-      const completed: string[] = [];
-      const verification: Array<Record<string, unknown>> = [];
-
-      for (const task of toCreate) {
-        const existing = exactVisible(task.subject).filter((element) => element.children.length === 0);
-        if (existing.length > 0) {
-          alreadyOpen.push(task.subject);
-          verification.push({ subject: task.subject, action: "create", status: "already_open" });
-          continue;
-        }
-        const addNew = exactVisible("Add New", "button")[0];
-        if (!addNew) throw new Error(`Add New is missing before creating task "${task.subject}".`);
-        clickLikeUser(addNew);
-        const taskOption = await waitFor(
-          () =>
-            exactVisible("Task", "li,div").find(
-              (element) => element.className.includes("robotoRegular") || element.className.includes("fillAspLi")
-            ) ?? null,
-          3000
-        );
-        if (!taskOption) throw new Error(`Task menu option is missing for "${task.subject}".`);
-        clickLikeUser(taskOption);
-        const subjectInput = await waitFor(
-          () => document.getElementById("task_subject") as HTMLInputElement | null,
-          5000
-        );
-        const dueInput = document.getElementById("Crm_Tasks_DUEDATE");
-        if (!(subjectInput instanceof HTMLInputElement) || !(dueInput instanceof HTMLInputElement)) {
-          throw new Error(`Task form fields are missing for "${task.subject}".`);
-        }
-        setNative(subjectInput, task.subject);
-        setNative(dueInput, task.due_date);
-        const save = document.getElementById("saveCall");
-        if (!save) throw new Error(`Task Save is missing for "${task.subject}".`);
-        clickLikeUser(save);
-        const saved = await waitFor(
-          () => exactVisible(task.subject).find((element) => element.children.length === 0) ?? null,
-          7000
-        );
-        if (!saved) throw new Error(`Created task "${task.subject}" was not visible in Open Activities.`);
-        created.push(task.subject);
-        verification.push({ subject: task.subject, action: "create", status: "open", due_date: task.due_date });
       }
-
-      for (const task of toComplete) {
-        const matches = exactVisible(task.subject).filter((element) => element.children.length === 0);
-        if (matches.length !== 1) {
-          throw new Error(
-            matches.length === 0
-              ? `Open task "${task.subject}" was not found.`
-              : `Open task "${task.subject}" is ambiguous (${matches.length} matches).`
-          );
-        }
-        let row: Element | null = matches[0];
-        let icon: Element | null = null;
-        for (let depth = 0; row && depth < 8; depth += 1) {
-          icon = row.querySelector("span.markAsCompletedIcon");
-          if (icon) break;
-          row = row.parentElement;
-        }
-        if (!icon) {
-          await sleep(500);
-          row = matches[0];
-          for (let depth = 0; row && depth < 8; depth += 1) {
-            icon = row.querySelector("span.markAsCompletedIcon");
-            if (icon) break;
-            row = row.parentElement;
-          }
-        }
-        if (!icon) throw new Error(`Completion control is missing for task "${task.subject}".`);
-        clickLikeUser(icon);
-        const removed = await waitFor(
-          () => (exactVisible(task.subject).filter((element) => element.children.length === 0).length === 0 ? document.body : null),
-          5000
-        );
-        if (!removed) throw new Error(`Task "${task.subject}" still appears open after completion.`);
-        completed.push(task.subject);
-        verification.push({ subject: task.subject, action: "complete", status: "completed" });
-      }
-
-      return { ok: true, created, already_open: alreadyOpen, completed, verification };
-    },
-    args: [newTasks, args.tasks_to_complete]
+    ]
   });
-  return results?.[0]?.result as
-    | { ok: true; created: string[]; already_open: string[]; completed: string[]; verification: Array<Record<string, unknown>> }
-    | undefined;
+  return results?.[0]?.result as Awaited<ReturnType<typeof zohoWritePageRunner>> | undefined;
 }
 
 async function clearComposerAddresses(tabId: number) {
@@ -1415,14 +1297,20 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
   }
 
   phaseStarted = Date.now();
-  let taskPreparation: Awaited<ReturnType<typeof prepareDealTasks>>;
+  let taskPreparation: Awaited<ReturnType<typeof prepareDealTasksWithApi>>;
   try {
-    taskPreparation = await prepareDealTasks(tabId, args);
+    taskPreparation = await prepareDealTasksWithApi(tabId, args);
   } catch (error) {
     return fail("TASK_PREPARATION_FAILED", error instanceof Error ? error.message : "Task preparation failed.");
   }
   mark("prepare_tasks", phaseStarted);
-  if (!taskPreparation?.ok) return fail("TASK_PREPARATION_FAILED", "Task preparation returned no verification.");
+  if (!taskPreparation?.ok) {
+    return fail(
+      "TASK_PREPARATION_FAILED",
+      taskPreparation?.error_message ?? "Task preparation returned no verification.",
+      { task_preparation: taskPreparation?.result }
+    );
+  }
 
   phaseStarted = Date.now();
   let compose = await executeUiStep(tabId, { type: "click", selector: 'button[aria-label="Send Email"]' });
