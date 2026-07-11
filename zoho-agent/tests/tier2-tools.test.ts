@@ -217,3 +217,13 @@ test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
   assert.match(source, /row\.querySelector\("span\.markAsCompletedIcon"\)/);
   assert.doesNotMatch(source, /document\.querySelector\("span\.markAsCompletedIcon"\)/);
 });
+
+test("Zoho task preparation uses API writes with deal and history read-back", () => {
+  const source = readFileSync(resolve(process.cwd(), "extension/src/page-runner-write.ts"), "utf8");
+  assert.match(source, /job\.tool_name === "zoho_prepare_tasks"/);
+  assert.match(source, /request\("POST", "\/crm\/v2\.2\/Tasks"/);
+  assert.match(source, /request\("PUT", "\/crm\/v2\.2\/Tasks"/);
+  assert.match(source, /Activities_Chronological_View_History/);
+  assert.match(source, /getRecord\("Tasks", taskId/);
+  assert.match(source, /\$se_module: "Deals"/);
+});

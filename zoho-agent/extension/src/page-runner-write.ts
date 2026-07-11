@@ -396,11 +396,170 @@ export async function zohoWritePageRunner(job: {
     return { ok: true, result: { tool: action, module: moduleName, records: results } };
   }
 
+  type TaskRow = Record<string, unknown> & { id?: string; Subject?: string; Status?: string; Due_Date?: string };
+
+  function lookupId(value: unknown) {
+    return value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string"
+      ? (value as { id: string }).id
+      : "";
+  }
+
+  function taskRows(body: Record<string, unknown>): TaskRow[] {
+    if (!Array.isArray(body.data)) return [];
+    return (body.data as TaskRow[]).filter((row) => {
+      const moduleName = typeof row.$module === "string" ? row.$module : "Tasks";
+      return moduleName === "Tasks" && typeof row.id === "string";
+    });
+  }
+
+  async function getDealTasks(dealId: string, history: boolean) {
+    const relation = history ? "Activities_Chronological_View_History" : "Activities_Chronological_View";
+    const body = await request("GET", `/crm/v3/Deals/${dealId}/${relation}`, {
+      fields: "Subject,Status,Due_Date,What_Id,Who_Id,Owner"
+    });
+    return taskRows(body);
+  }
+
+  async function verifyTask(
+    taskId: string,
+    expected: { subject: string; status: string; due_date?: string; deal_id: string; contact_id: string }
+  ) {
+    const body = await getRecord("Tasks", taskId, ["Subject", "Status", "Due_Date", "What_Id", "Who_Id"]);
+    const row = firstRecord(body);
+    const verified = Boolean(
+      row &&
+        valuesEqual(row.Subject, expected.subject) &&
+        valuesEqual(row.Status, expected.status) &&
+        (!expected.due_date || valuesEqual(row.Due_Date, expected.due_date)) &&
+        lookupId(row.What_Id) === expected.deal_id &&
+        (!expected.contact_id || lookupId(row.Who_Id) === expected.contact_id)
+    );
+    return { verified, row };
+  }
+
+  async function runPrepareTasks(args: Record<string, unknown>): Promise<WritePageResult> {
+    const dealId = String(args.deal_zoho_id ?? "");
+    const dealName = String(args.deal_name ?? "");
+    const contactId = String(args.contact_zoho_id ?? "");
+    const newTasks = (Array.isArray(args.new_tasks) ? args.new_tasks : []) as Array<{
+      subject?: unknown;
+      due_date?: unknown;
+    }>;
+    const tasksToComplete = (Array.isArray(args.tasks_to_complete) ? args.tasks_to_complete : []) as Array<{
+      subject?: unknown;
+    }>;
+    if (!dealId || !dealName) return { ok: false, error_code: "invalid_args", error_message: "Task preparation needs a deal id and name." };
+
+    const dealBody = await getRecord("Deals", dealId, ["Deal_Name"]);
+    const deal = firstRecord(dealBody);
+    if (!deal) return { ok: false, error_code: "not_found", error_message: `Deal ${dealId} was not found.` };
+    if (!valuesEqual(deal.Deal_Name, dealName)) return identityMismatch(dealId, dealName, deal.Deal_Name);
+
+    let openTasks = await getDealTasks(dealId, false);
+    const created: Array<Record<string, unknown>> = [];
+    const alreadyOpen: Array<Record<string, unknown>> = [];
+    const completed: Array<Record<string, unknown>> = [];
+
+    for (const raw of newTasks) {
+      const subject = String(raw.subject ?? "").trim();
+      const dueDate = String(raw.due_date ?? "").trim();
+      if (!subject || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+        return { ok: false, error_code: "invalid_args", error_message: "Every new task needs a subject and YYYY-MM-DD due date." };
+      }
+      const matches = openTasks.filter((task) => valuesEqual(task.Subject, subject));
+      if (matches.length > 1) {
+        return { ok: false, error_code: "ambiguous_task", error_message: `Open task "${subject}" is ambiguous (${matches.length} exact matches).` };
+      }
+      if (matches.length === 1) {
+        const checked = await verifyTask(String(matches[0].id), {
+          subject,
+          status: String(matches[0].Status ?? "Not Started"),
+          deal_id: dealId,
+          contact_id: contactId
+        });
+        if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Existing task "${subject}" failed read-back verification.` };
+        alreadyOpen.push({ id: matches[0].id, subject, status: matches[0].Status, verified: true });
+        continue;
+      }
+
+      const createBody = await request("POST", "/crm/v2.2/Tasks", {}, {
+        data: [
+          {
+            Subject: subject,
+            Due_Date: dueDate,
+            Status: "Not Started",
+            What_Id: { id: dealId },
+            ...(contactId ? { Who_Id: { id: contactId } } : {}),
+            $se_module: "Deals"
+          }
+        ]
+      });
+      const createRow = (Array.isArray(createBody.data) ? createBody.data[0] : {}) as Record<string, unknown>;
+      const code = typeof createRow.code === "string" ? createRow.code : "UNKNOWN";
+      const taskId = responseRowId(createRow);
+      if (code !== "SUCCESS" || !taskId) {
+        return { ok: false, error_code: "write_failed", error_message: `Zoho did not create task "${subject}" (code ${code}).` };
+      }
+      const checked = await verifyTask(taskId, {
+        subject,
+        status: "Not Started",
+        due_date: dueDate,
+        deal_id: dealId,
+        contact_id: contactId
+      });
+      if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Created task "${subject}" failed API read-back verification.` };
+      const result = { id: taskId, subject, due_date: dueDate, status: "Not Started", verified: true };
+      created.push(result);
+      openTasks.push({ id: taskId, Subject: subject, Due_Date: dueDate, Status: "Not Started" });
+    }
+
+    for (const raw of tasksToComplete) {
+      const subject = String(raw.subject ?? "").trim();
+      if (!subject) return { ok: false, error_code: "invalid_args", error_message: "Every task completion needs a subject." };
+      const matches = openTasks.filter((task) => valuesEqual(task.Subject, subject));
+      if (matches.length !== 1) {
+        return {
+          ok: false,
+          error_code: matches.length ? "ambiguous_task" : "task_not_found",
+          error_message: matches.length
+            ? `Open task "${subject}" is ambiguous (${matches.length} exact matches).`
+            : `Open task "${subject}" was not found.`
+        };
+      }
+      const taskId = String(matches[0].id);
+      const updateBody = await request("PUT", "/crm/v2.2/Tasks", {}, { data: [{ id: taskId, Status: "Completed" }] });
+      const updateRow = (Array.isArray(updateBody.data) ? updateBody.data[0] : {}) as Record<string, unknown>;
+      const code = typeof updateRow.code === "string" ? updateRow.code : "UNKNOWN";
+      if (code !== "SUCCESS") {
+        return { ok: false, error_code: "write_failed", error_message: `Zoho did not complete task "${subject}" (code ${code}).` };
+      }
+      const checked = await verifyTask(taskId, {
+        subject,
+        status: "Completed",
+        deal_id: dealId,
+        contact_id: contactId
+      });
+      if (!checked.verified) return { ok: false, error_code: "verify_failed", error_message: `Completed task "${subject}" failed API read-back verification.` };
+      completed.push({ id: taskId, subject, before_status: matches[0].Status ?? null, status: "Completed", verified: true });
+      openTasks = openTasks.filter((task) => task.id !== taskId);
+    }
+
+    const closedTasks = tasksToComplete.length > 0 ? await getDealTasks(dealId, true) : [];
+    for (const entry of completed) {
+      if (!closedTasks.some((task) => task.id === entry.id && valuesEqual(task.Status, "Completed"))) {
+        return { ok: false, error_code: "verify_failed", error_message: `Completed task "${entry.subject}" was not found in activity history.` };
+      }
+    }
+
+    return { ok: true, result: { tool: "zoho_prepare_tasks", deal_id: dealId, created, already_open: alreadyOpen, completed, verified: true } };
+  }
+
   try {
     if (job.tool_name === "zoho_update_fields") return await runUpdateFields(job.args);
     if (job.tool_name === "zoho_change_owner") return await runChangeOwner(job.args);
     if (job.tool_name === "zoho_add_tags") return await runTags(job.args, true);
     if (job.tool_name === "zoho_remove_tags") return await runTags(job.args, false);
+    if (job.tool_name === "zoho_prepare_tasks") return await runPrepareTasks(job.args);
     return { ok: false, error_message: `Write tool ${job.tool_name} is not supported by this extension version.` };
   } catch (error) {
     return {
