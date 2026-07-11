@@ -37,6 +37,7 @@ import {
   TASK_ORDER_TOOL_DEFINITIONS,
   expandedAgentLimits,
   taskOrderBudgetDecision,
+  taskOrderRecordUsage,
   taskOrderProposalDecision,
   validateTaskOrderToolCall,
   type ActiveTaskOrder,
@@ -913,25 +914,6 @@ async function failTaskOrder(service: SupabaseClient, user: AuthorizedUser, orde
     .eq("id", orderId)
     .eq("user_id", user.id)
     .eq("status", "approved");
-}
-
-function recordsTouchedByResult(result: unknown) {
-  const seen = new Set<string>();
-  const visit = (value: unknown) => {
-    if (!value || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    const record = value as Record<string, unknown>;
-    for (const key of ["zoho_id", "id", "record_id"]) {
-      const item = record[key];
-      if (typeof item === "string" && item.trim()) seen.add(item);
-    }
-    Object.values(record).forEach(visit);
-  };
-  visit(result);
-  return seen.size;
 }
 
 async function waitForToolJobById({
@@ -2498,7 +2480,7 @@ export async function runAgentTurn({
       });
       if (activeTaskOrderId && !isTaskOrderTool(call.name)) {
         taskOrderToolCalls += 1;
-        taskOrderRecordsTouched += recordsTouchedByResult(result);
+        taskOrderRecordsTouched += taskOrderRecordUsage(call.name, call.args);
       }
       transcript.push({
         role: "tool",

@@ -30,7 +30,8 @@ import {
   defaultTaskOrderBudget,
   expandedAgentLimits,
   taskOrderBudgetDecision,
-  taskOrderProposalDecision
+  taskOrderProposalDecision,
+  taskOrderRecordUsage
 } from "../lib/agent/task-orders";
 import { responsesInputFromMessages } from "../lib/llm/tool-calls";
 import { routeCoreSkillGuides } from "../lib/agent/guide-routing";
@@ -303,6 +304,29 @@ test("task order budgets stop on tool, wall-clock, or record limits", () => {
     }).ok,
     false
   );
+});
+
+test("task order record usage counts writes only and ignores nested read ids", () => {
+  assert.equal(
+    taskOrderRecordUsage("schedule_zoho_email_batch", {
+      emails: [{ reference: "one" }, { reference: "two" }]
+    }),
+    2
+  );
+  assert.equal(
+    taskOrderRecordUsage("zoho_update_fields", {
+      updates: [{ zoho_id: "D1" }, { zoho_id: "D1" }, { zoho_id: "D2" }]
+    }),
+    2
+  );
+  assert.equal(
+    taskOrderRecordUsage("zoho_get_record", {
+      zoho_id: "D1",
+      result: { id: "D1", Owner: { id: "U1" }, Account_Name: { id: "A1" }, Contact_Name: { id: "C1" } }
+    }),
+    0
+  );
+  assert.equal(taskOrderRecordUsage("browser_observe", { id: "nested-read-id" }), 0);
 });
 
 test("verified Tier-2 writes require live read-back before mirror sync", () => {

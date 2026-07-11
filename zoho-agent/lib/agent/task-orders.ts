@@ -178,3 +178,23 @@ export function taskOrderBudgetDecision(input: BudgetDecisionInput): { ok: true 
   }
   return { ok: true };
 }
+
+function uniqueStringCount(values: unknown[]) {
+  return new Set(values.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))).size;
+}
+
+export function taskOrderRecordUsage(toolName: string, args: unknown) {
+  const input = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  if (toolName === "schedule_zoho_email_batch") {
+    return Array.isArray(input.emails) ? input.emails.length : 0;
+  }
+  if (toolName === "zoho_update_fields") {
+    const updates = Array.isArray(input.updates) ? (input.updates as Array<Record<string, unknown>>) : [];
+    return uniqueStringCount(updates.map((update) => update.zoho_id));
+  }
+  if (toolName === "zoho_change_owner" || toolName === "zoho_add_tags" || toolName === "zoho_remove_tags") {
+    return Array.isArray(input.zoho_ids) ? uniqueStringCount(input.zoho_ids) : 0;
+  }
+  if (toolName === "undo_record") return 1;
+  return 0;
+}

@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic scheduler live acceptance: record budget accounting (2026-07-11, fix)
+
+The first live recovery reads caused "task order record budget exceeded (3)" because the loop recursively counted every nested id in tool results, including Owner, Account, and Contact ids from read-only zoho_get_record output. Task-order record usage is now derived only from mutating tool arguments: schedule_zoho_email_batch counts its email rows, Tier-2 writes count unique targets, undo_record counts one, and reads/browser observations count zero.
+
+Verified npm run test:orchestrator (23/23) and npm run typecheck.
+
 ## Deterministic scheduler live acceptance: Zoho SPA identity wait (2026-07-11, fix)
 
 The first live run resolved the correct Test|Cloud ERP URL but failed DEAL_IDENTITY_MISMATCH because Chrome reported network complete before Zoho's SPA rendered the Deal title. inspectDealPage now waits up to 15 seconds for both canonical Potential id and rendered Deal identity, preserving the wrong-record stop. Scheduler screenshots now use CDP Page.captureScreenshot as bounded JPEG evidence instead of captureVisibleTab, which failed without transient activeTab permission; the 500 KB cap remains enforced.
