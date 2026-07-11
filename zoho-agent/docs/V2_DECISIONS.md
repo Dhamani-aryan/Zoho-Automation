@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: contract and resolver (2026-07-11, build)
+
+Started the low-latency scheduling follow-up from the live 50-call trace and HeySnap handoff. Added a strict schedule_zoho_email_batch contract for 1-100 records and a deterministic Supabase resolver that maps recipient identity to Contact, Account, and related Deal before opening Chrome. Blank CC normalizes to an empty list and can never inherit recipients from a skill guide. Ambiguous contacts or deals are returned as failures rather than guessed.
+
+Verified npm run typecheck.
+
 ## Agent email draft template: variable schedule and task fields (2026-07-11, build)
 
 Aryan clarified that the sample draft must not make schedule time constant. Updated the Claude handoff template so schedule date/time are variable fields, and centered the format on the required operational fields: direct Zoho links, email format, CC, subject, new tasks, and closed tasks. The agent instruction now parses those sections and resolves missing contact/deal/account/task links itself, asking only for missing schedule date/time or true ambiguity.
