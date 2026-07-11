@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   CLAIM_STALE_MS,
   canApproveRun,
@@ -65,6 +67,13 @@ test("workspace file reader is confined, paginated, and can read the real drafts
   assert.match(page.content, /KD Blitz Batch 3 All Contacts Email Drafts/);
   assert.match(page.content, /Schedule date: TBD/);
   assert.equal(typeof page.next_start_line, "number");
+
+  const selfResolving = readFileSync(resolve(process.cwd(), "imports/samples/Test SAP ERP Email Draft.md"), "utf8");
+  assert.match(selfResolving, /Contact name: Test Test/);
+  assert.match(selfResolving, /New tasks:/);
+  assert.match(selfResolving, /Tasks to complete:/);
+  assert.doesNotMatch(selfResolving, /Zoho record link:/);
+  assert.doesNotMatch(selfResolving, /^To:/m);
 });
 
 test("core playbooks route deterministically and carry recent intent", () => {
