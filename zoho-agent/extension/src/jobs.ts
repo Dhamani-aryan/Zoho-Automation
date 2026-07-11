@@ -7,7 +7,13 @@ import { loadSettings, saveLastJobStatus } from "./storage";
 // Tier-2 write tools. Kept in sync with lib/agent/tier2-tools.ts
 // TIER2_WRITE_TOOL_NAMES; the lib-side extensionAcceptsWriteJob() encodes the
 // same rule and is unit-tested.
-const WRITE_TOOLS = new Set(["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"]);
+const WRITE_TOOLS = new Set([
+  "zoho_update_fields",
+  "zoho_change_owner",
+  "zoho_add_tags",
+  "zoho_remove_tags",
+  "schedule_zoho_email"
+]);
 
 const ACTIVE_POLL_MS = 1500;
 const IDLE_POLL_MS = 15000;
@@ -69,6 +75,9 @@ function isCrmUrl(url: unknown) {
 }
 
 function initialUrlForJob(job: ToolJob) {
+  if (job.tool_name === "schedule_zoho_email" && isCrmUrl(job.args.deal_url)) {
+    return String(job.args.deal_url);
+  }
   if (job.tool_name === "ui_step") {
     const step = (job.args.step ?? {}) as Record<string, unknown>;
     if (step.type === "open_url" && isCrmUrl(step.url)) return String(step.url);
@@ -112,7 +121,8 @@ function isWatchedBrowserJob(job: ToolJob) {
     job.tool_name === "ui_step" ||
     job.tool_name === "ui_workflow" ||
     job.tool_name === "browser_observe" ||
-    job.tool_name === "browser_eval"
+    job.tool_name === "browser_eval" ||
+    job.tool_name === "schedule_zoho_email"
   );
 }
 
@@ -885,10 +895,461 @@ async function runUiWorkflow(tabId: number, job: ToolJob): Promise<PageResult> {
   };
 }
 
+type EmailJobArgs = {
+  reference: string;
+  deal_url: string;
+  deal_zoho_id: string;
+  deal_name: string;
+  contact_name: string;
+  to: string;
+  cc: string[];
+  subject: string;
+  body: string;
+  schedule_date: string;
+  schedule_time: string;
+  timezone: string;
+  preserve_signature: true;
+};
+
+function emailJobArgs(args: Record<string, unknown>): EmailJobArgs {
+  return {
+    reference: String(args.reference ?? "email"),
+    deal_url: String(args.deal_url ?? ""),
+    deal_zoho_id: String(args.deal_zoho_id ?? ""),
+    deal_name: String(args.deal_name ?? ""),
+    contact_name: String(args.contact_name ?? ""),
+    to: String(args.to ?? "").trim().toLowerCase(),
+    cc: Array.isArray(args.cc) ? args.cc.map((value) => String(value).trim().toLowerCase()).filter(Boolean) : [],
+    subject: String(args.subject ?? ""),
+    body: String(args.body ?? ""),
+    schedule_date: String(args.schedule_date ?? ""),
+    schedule_time: String(args.schedule_time ?? ""),
+    timezone: String(args.timezone ?? "Asia/Kolkata"),
+    preserve_signature: true
+  };
+}
+
+function zohoDisplayDate(isoDate: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!match) return "";
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][
+    Number(match[2]) - 1
+  ];
+  return month ? `${month} ${Number(match[3])}, ${match[1]}` : "";
+}
+
+function scheduleParts(raw: string) {
+  const value = raw.trim().toUpperCase();
+  const twelveHour = /^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/.exec(value);
+  if (twelveHour) {
+    return { hour: String(Number(twelveHour[1])), minute: twelveHour[2], ampm: twelveHour[3] };
+  }
+  const twentyFourHour = /^(\d{1,2}):([0-5]\d)$/.exec(value);
+  if (!twentyFourHour) return null;
+  const hour24 = Number(twentyFourHour[1]);
+  return {
+    hour: String(hour24 % 12 || 12),
+    minute: twentyFourHour[2],
+    ampm: hour24 >= 12 ? "PM" : "AM"
+  };
+}
+
+async function inspectDealPage(tabId: number, args: EmailJobArgs) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (expectedId: string, expectedName: string) => {
+      const title = document.title.replace(/\s+/g, " ").trim();
+      return {
+        url: location.href,
+        title,
+        id_matches: location.href.includes(`/tab/Potentials/${expectedId}`),
+        name_matches: title.toLowerCase().includes(expectedName.toLowerCase())
+      };
+    },
+    args: [args.deal_zoho_id, args.deal_name]
+  });
+  return results?.[0]?.result as
+    | { url: string; title: string; id_matches: boolean; name_matches: boolean }
+    | undefined;
+}
+
+async function clearComposerAddresses(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      for (const selector of [
+        '[id^="ceToAddrDetails"] li.selectedEmail .closeIconB',
+        '[id^="ceCCAddrDetails"] li.selectedEmail .closeIconB'
+      ]) {
+        for (const close of [...document.querySelectorAll(selector)]) {
+          if (close instanceof HTMLElement) close.click();
+        }
+      }
+      for (const id of ["ceToAddr_1", "ceCCAddr_1"]) {
+        const input = document.getElementById(id);
+        if (input instanceof HTMLInputElement) input.value = "";
+      }
+      return { cleared: true };
+    }
+  });
+  return results?.[0]?.result as { cleared?: boolean } | undefined;
+}
+
+async function revealCcInput(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      const input = document.getElementById("ceCCAddr_1");
+      if (input instanceof HTMLElement && input.getBoundingClientRect().width > 0) return { visible: true };
+      const candidates = [...document.querySelectorAll("a,button,span,div")].filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && (element.textContent ?? "").trim() === "Cc";
+      });
+      const candidate = candidates.find((element) => element.closest('[role="dialog"],.lyteModal,.modal')) ?? candidates[0];
+      if (candidate instanceof HTMLElement) candidate.click();
+      const next = document.getElementById("ceCCAddr_1");
+      return { visible: next instanceof HTMLElement && next.getBoundingClientRect().width > 0 };
+    }
+  });
+  return results?.[0]?.result as { visible?: boolean } | undefined;
+}
+
+async function setComposerContent(tabId: number, args: EmailJobArgs) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (subject: string, body: string) => {
+      const subjectInput = document.getElementById("ceSubject_1");
+      const frame = document.getElementById("z_editor");
+      if (!(subjectInput instanceof HTMLInputElement)) throw new Error("Composer subject field is missing.");
+      if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) throw new Error("Composer body frame is missing.");
+      const frameDocument = frame.contentDocument;
+      const editor = frameDocument.getElementById("editorDiv");
+      const signature = frameDocument.getElementById("ecw_signature");
+      if (!editor || !signature || !editor.contains(signature)) throw new Error("Composer signature is missing.");
+
+      subjectInput.focus();
+      subjectInput.value = subject;
+      subjectInput.dispatchEvent(new Event("input", { bubbles: true }));
+      subjectInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+      let signatureAnchor = signature;
+      while (signatureAnchor.parentElement && signatureAnchor.parentElement !== editor) {
+        signatureAnchor = signatureAnchor.parentElement;
+      }
+      if (signatureAnchor.parentElement !== editor) throw new Error("Signature anchor is outside the editor.");
+      for (const node of [...editor.childNodes]) {
+        if (node === signatureAnchor) break;
+        node.remove();
+      }
+
+      const lines = body.replace(/\r\n/g, "\n").split("\n");
+      while (lines[0]?.trim() === "") lines.shift();
+      while (lines.at(-1)?.trim() === "") lines.pop();
+      const container = frameDocument.createElement("div");
+      const style = "font-family: Verdana, Geneva, sans-serif; font-size: 13.33px;";
+      for (const line of lines) {
+        const div = frameDocument.createElement("div");
+        div.style.cssText = style;
+        if (line === "") div.appendChild(frameDocument.createElement("br"));
+        else div.textContent = line;
+        container.appendChild(div);
+      }
+      for (let index = 0; index < 2; index += 1) {
+        const spacer = frameDocument.createElement("div");
+        spacer.style.cssText = style;
+        spacer.appendChild(frameDocument.createElement("br"));
+        container.appendChild(spacer);
+      }
+      editor.insertBefore(container, signatureAnchor);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      return {
+        subject: subjectInput.value,
+        body_text: container.innerText,
+        first_body_line: lines.find((line) => line.trim()) ?? "",
+        signature_present: signature.isConnected && editor.contains(signature),
+        signature_after_body: Boolean(container.compareDocumentPosition(signature) & Node.DOCUMENT_POSITION_FOLLOWING)
+      };
+    },
+    args: [args.subject, args.body]
+  });
+  return results?.[0]?.result as
+    | {
+        subject: string;
+        body_text: string;
+        first_body_line: string;
+        signature_present: boolean;
+        signature_after_body: boolean;
+      }
+    | undefined;
+}
+
+async function readComposerVerification(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      function chipEmails(selector: string) {
+        return [...document.querySelectorAll(selector)]
+          .map((element) => (element.getAttribute("email") || element.getAttribute("title") || "").trim().toLowerCase())
+          .filter(Boolean);
+      }
+      const frame = document.getElementById("z_editor");
+      const frameDocument = frame instanceof HTMLIFrameElement ? frame.contentDocument : null;
+      const editor = frameDocument?.getElementById("editorDiv") ?? null;
+      const signature = frameDocument?.getElementById("ecw_signature") ?? null;
+      return {
+        to: chipEmails('[id^="ceToAddrDetails"] li.selectedEmail'),
+        cc: chipEmails('[id^="ceCCAddrDetails"] li.selectedEmail'),
+        to_input: (document.getElementById("ceToAddr_1") as HTMLInputElement | null)?.value ?? "",
+        cc_input: (document.getElementById("ceCCAddr_1") as HTMLInputElement | null)?.value ?? "",
+        subject: (document.getElementById("ceSubject_1") as HTMLInputElement | null)?.value ?? "",
+        body_text: editor?.innerText ?? "",
+        signature_present: Boolean(signature && editor?.contains(signature))
+      };
+    }
+  });
+  return results?.[0]?.result as
+    | { to: string[]; cc: string[]; to_input: string; cc_input: string; subject: string; body_text: string; signature_present: boolean }
+    | undefined;
+}
+
+async function configureAndSubmitSchedule(tabId: number, date: string, time: ReturnType<typeof scheduleParts>, timezone: string) {
+  if (!time) return null;
+  const displayDate = zohoDisplayDate(date);
+  const timezoneValue = timezone === "Asia/Kolkata" ? "Asia/Calcutta" : timezone;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (expectedDate: string, hour: string, minute: string, ampm: string, expectedTimezone: string) => {
+      const root = document.getElementById("etSchedulePopId");
+      if (!root) throw new Error("Schedule popup is missing.");
+      const custom = root.querySelector("#ecSchduleTime");
+      if (custom instanceof HTMLInputElement) custom.checked = true;
+      const dateInput = root.querySelector("#startDate");
+      if (dateInput instanceof HTMLInputElement) {
+        dateInput.value = expectedDate;
+        dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const timeInput = root.querySelector("#schTimeMail");
+      if (timeInput instanceof HTMLInputElement) {
+        timeInput.value = `${hour.padStart(2, "0")}:${minute}`;
+        timeInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const hourInput = root.querySelector('input[name="startDatehour"]');
+      const minuteInput = root.querySelector("#startDateminute");
+      const ampmInput = root.querySelector("#startDateampm");
+      const timezoneInput = root.querySelector("#timeZone");
+      if (hourInput instanceof HTMLInputElement) hourInput.value = hour;
+      if (minuteInput instanceof HTMLInputElement) minuteInput.value = minute;
+      if (ampmInput instanceof HTMLInputElement) ampmInput.value = ampm;
+      if (timezoneInput instanceof HTMLInputElement || timezoneInput instanceof HTMLSelectElement) {
+        timezoneInput.value = expectedTimezone;
+        timezoneInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const confirm = [...root.querySelectorAll("button,span,a,div,input")].find(
+        (element) => ((element.textContent || (element as HTMLInputElement).value || "").trim() === "Schedule & Close")
+      );
+      if (!(confirm instanceof HTMLElement)) throw new Error("Schedule & Close button is missing.");
+      confirm.click();
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      const popup = document.getElementById("etSchedulePopId");
+      return {
+        date: dateInput instanceof HTMLInputElement ? dateInput.value : "",
+        time: `${hour}:${minute} ${ampm}`,
+        timezone: expectedTimezone,
+        popup_still_open: Boolean(popup && !popup.className.includes("hide")),
+        composer_open: Boolean(document.getElementById("ceSubject_1")),
+        success_text: [...document.querySelectorAll("body *")]
+          .map((element) => (element.textContent ?? "").trim())
+          .find((text) => /mail has been scheduled successfully/i.test(text)) ?? ""
+      };
+    },
+    args: [displayDate, time.hour, time.minute, time.ampm, timezoneValue]
+  });
+  return results?.[0]?.result as
+    | { date: string; time: string; timezone: string; popup_still_open: boolean; composer_open: boolean; success_text: string }
+    | undefined;
+}
+
+async function verifyScheduledRow(tabId: number, args: EmailJobArgs) {
+  const displayDate = zohoDisplayDate(args.schedule_date);
+  const time = scheduleParts(args.schedule_time);
+  const expectedTime = time ? `${time.hour.padStart(2, "0")}:${time.minute} ${time.ampm}` : args.schedule_time;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (subject: string, email: string, contactName: string, date: string, scheduleTime: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const bodyText = document.body.innerText.replace(/\s+/g, " ");
+      const subjectFound = bodyText.includes(subject);
+      const recipientFound = bodyText.toLowerCase().includes(email.toLowerCase()) || bodyText.includes(contactName);
+      const dateFound = bodyText.includes(date);
+      const timeFound = bodyText.toUpperCase().includes(scheduleTime.toUpperCase());
+      const scheduledFound = /\bScheduled\b/i.test(bodyText);
+      return { subject_found: subjectFound, recipient_found: recipientFound, date_found: dateFound, time_found: timeFound, scheduled_found: scheduledFound };
+    },
+    args: [args.subject, args.to, args.contact_name, displayDate, expectedTime]
+  });
+  return results?.[0]?.result as
+    | { subject_found: boolean; recipient_found: boolean; date_found: boolean; time_found: boolean; scheduled_found: boolean }
+    | undefined;
+}
+
+function sameEmails(actual: string[], expected: string[]) {
+  const left = [...new Set(actual.map((value) => value.toLowerCase()))].sort();
+  const right = [...new Set(expected.map((value) => value.toLowerCase()))].sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageResult> {
+  const args = emailJobArgs(job.args);
+  const started = Date.now();
+  const timings: Record<string, number> = {};
+  const mark = (name: string, phaseStarted: number) => {
+    timings[name] = Date.now() - phaseStarted;
+  };
+  const fail = async (code: string, message: string, result: Record<string, unknown> = {}): Promise<PageResult> => ({
+    ok: false,
+    error_code: code,
+    error_message: message,
+    result: { reference: args.reference, deal_url: args.deal_url, timings_ms: timings, ...result, evidence: await captureEvidence() }
+  });
+
+  if (!isCrmUrl(args.deal_url) || !args.deal_zoho_id || !args.to || !args.subject || !args.body) {
+    return fail("INVALID_EMAIL_JOB", "Resolved email job is missing required fields.");
+  }
+
+  let phaseStarted = Date.now();
+  const opened = await executeUiStep(tabId, { type: "open_url", url: args.deal_url });
+  if (!opened.ok) return fail("DEAL_NAVIGATION_FAILED", opened.error_message ?? "Could not open deal.");
+  const deal = await inspectDealPage(tabId, args);
+  mark("open_deal", phaseStarted);
+  if (!deal?.id_matches || !deal.name_matches) {
+    return fail("DEAL_IDENTITY_MISMATCH", "Loaded deal did not match the resolved deal.", { observed_deal: deal });
+  }
+
+  phaseStarted = Date.now();
+  let compose = await executeUiStep(tabId, { type: "click", selector: 'button[aria-label="Send Email"]' });
+  let composerReady = compose.ok
+    ? await executeUiStep(tabId, { type: "wait_for", selector: "#ceToAddr_1", timeout_ms: 10000 })
+    : compose;
+  if (!composerReady.ok) {
+    compose = await executeUiStep(tabId, { type: "click", text: "Compose Email" });
+    composerReady = compose.ok
+      ? await executeUiStep(tabId, { type: "wait_for", selector: "#ceToAddr_1", timeout_ms: 10000 })
+      : compose;
+  }
+  if (!composerReady.ok) return fail("COMPOSER_OPEN_FAILED", composerReady.error_message ?? "Composer did not open.");
+  await clearComposerAddresses(tabId);
+
+  const toFill = await executeUiStep(tabId, {
+    type: "fill_field",
+    selector: "#ceToAddr_1",
+    value: args.to,
+    press_enter: true
+  });
+  if (!toFill.ok) return fail("TO_COMMIT_FAILED", toFill.error_message ?? "Could not commit recipient chip.");
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  if (args.cc.length > 0) {
+    const revealed = await revealCcInput(tabId);
+    if (!revealed?.visible) return fail("CC_REVEAL_FAILED", "Could not reveal the scoped CC input.");
+    for (const cc of args.cc) {
+      const ccFill = await executeUiStep(tabId, {
+        type: "fill_field",
+        selector: "#ceCCAddr_1",
+        value: cc,
+        press_enter: true
+      });
+      if (!ccFill.ok) return fail("CC_COMMIT_FAILED", ccFill.error_message ?? `Could not commit CC ${cc}.`);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+
+  const content = await setComposerContent(tabId, args);
+  const draft = await readComposerVerification(tabId);
+  mark("compose_and_verify", phaseStarted);
+  if (!content || !draft) return fail("DRAFT_READBACK_FAILED", "Composer read-back returned no result.");
+  if (!sameEmails(draft.to, [args.to]) || draft.to_input.trim()) {
+    return fail("TO_MISMATCH", "Committed To chips did not exactly match the resolved recipient.", { draft });
+  }
+  if (!sameEmails(draft.cc, args.cc) || draft.cc_input.trim()) {
+    return fail("CC_MISMATCH", "Committed CC chips did not exactly match the draft CC list.", { draft });
+  }
+  if (draft.subject !== args.subject) return fail("SUBJECT_MISMATCH", "Subject read-back did not match.", { draft });
+  if (!content.signature_present || !content.signature_after_body || !draft.signature_present) {
+    return fail("SIGNATURE_MISSING", "Existing Zoho signature was not preserved after the body.", { draft, content });
+  }
+
+  phaseStarted = Date.now();
+  const scheduleClick = await executeUiStep(tabId, { type: "click", text: "Schedule" });
+  if (!scheduleClick.ok) return fail("SCHEDULE_OPEN_FAILED", scheduleClick.error_message ?? "Could not click Schedule.");
+  const scheduleReady = await executeUiStep(tabId, { type: "wait_for", selector: "#etSchedulePopId", timeout_ms: 8000 });
+  if (!scheduleReady.ok) return fail("SCHEDULE_POPUP_MISSING", scheduleReady.error_message ?? "Schedule popup did not open.");
+  const schedule = await configureAndSubmitSchedule(tabId, args.schedule_date, scheduleParts(args.schedule_time), args.timezone);
+  mark("schedule_submit", phaseStarted);
+  if (!schedule || schedule.popup_still_open) {
+    return fail("SCHEDULE_UNCONFIRMED", "Schedule & Close did not produce a confirmed close state. Submission was not retried.", {
+      schedule
+    });
+  }
+
+  phaseStarted = Date.now();
+  const scheduledTab = await executeUiStep(tabId, { type: "click", text: "Scheduled" });
+  if (!scheduledTab.ok) return fail("SCHEDULED_TAB_FAILED", scheduledTab.error_message ?? "Could not open Scheduled tab.");
+  const verification = await verifyScheduledRow(tabId, args);
+  mark("scheduled_readback", phaseStarted);
+  const verified = Boolean(
+    verification?.subject_found &&
+      verification.recipient_found &&
+      verification.date_found &&
+      verification.time_found &&
+      verification.scheduled_found
+  );
+  if (!verified) return fail("SCHEDULED_ROW_MISMATCH", "Scheduled-tab read-back did not match every required value.", { verification });
+
+  timings.total = Date.now() - started;
+  return {
+    ok: true,
+    result: {
+      ok: true,
+      status: "scheduled",
+      reference: args.reference,
+      deal: { id: args.deal_zoho_id, name: args.deal_name, url: args.deal_url },
+      draft_verification: {
+        to: draft.to,
+        cc: draft.cc,
+        subject: draft.subject,
+        first_body_line: content.first_body_line,
+        signature_preserved: true
+      },
+      schedule_verification: {
+        date: args.schedule_date,
+        time: args.schedule_time,
+        timezone: args.timezone,
+        row_found: true,
+        status: "Scheduled"
+      },
+      timings_ms: timings,
+      evidence: await captureEvidence()
+    }
+  };
+}
+
 // Runs the read-only executor in the page's MAIN world via chrome.scripting.
 // Inline <script> injection is blocked by Zoho's CSP; executeScript is not.
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
+  if (job.tool_name === "schedule_zoho_email") {
+    if (!job.approval_id && !job.task_order_id) {
+      return { ok: false, error_message: "write without approval or task order refused by extension" };
+    }
+    return runScheduleZohoEmail(tabId, job);
+  }
   if (job.tool_name === "ui_step") {
     return executeUiStep(tabId, (job.args.step ?? {}) as Record<string, unknown>);
   }

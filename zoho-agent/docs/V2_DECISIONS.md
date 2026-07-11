@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: extension runner (2026-07-11, build)
+
+Added the scoped schedule_zoho_email extension job. One claimed job now navigates directly to the resolved Deal, verifies Deal identity, opens the composer, clears and commits exact To/CC chips with trusted CDP input, sets Subject by exact selector, inserts Verdana body nodes above #ecw_signature, performs exact draft read-back, submits the custom schedule once using the proven hidden hour/minute/AM-PM fields, and verifies recipient/subject/date/time/status in Scheduled. The job refuses unlinked writes, wrong Deal identity, any field mismatch, missing signature, or unproven Scheduled state. Blank CC remains empty. Results include compact per-phase timings and screenshot evidence.
+
+Verified npm run typecheck and npm run build:extension.
+
 ## Deterministic batch email scheduling: contract and resolver (2026-07-11, build)
 
 Started the low-latency scheduling follow-up from the live 50-call trace and HeySnap handoff. Added a strict schedule_zoho_email_batch contract for 1-100 records and a deterministic Supabase resolver that maps recipient identity to Contact, Account, and related Deal before opening Chrome. Blank CC normalizes to an empty list and can never inherit recipients from a skill guide. Ambiguous contacts or deals are returned as failures rather than guessed.
