@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic scheduler live acceptance: Zoho SPA identity wait (2026-07-11, fix)
+
+The first live run resolved the correct Test|Cloud ERP URL but failed DEAL_IDENTITY_MISMATCH because Chrome reported network complete before Zoho's SPA rendered the Deal title. inspectDealPage now waits up to 15 seconds for both canonical Potential id and rendered Deal identity, preserving the wrong-record stop. Scheduler screenshots now use CDP Page.captureScreenshot as bounded JPEG evidence instead of captureVisibleTab, which failed without transient activeTab permission; the 500 KB cap remains enforced.
+
+Verified npm run typecheck and npm run build:extension.
+
 ## Deterministic task preparation: regression checkpoint (2026-07-11, build)
 
 Added contract tests for explicit task creation/completion arrays and due-date validation. Extended the extension grep proof to require completion-icon lookup scoped through the matched task row and to reject a generic document-level first completion icon.

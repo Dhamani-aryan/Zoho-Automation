@@ -547,9 +547,23 @@ async function assertCrmTab(tabId: number): Promise<PageResult | null> {
   return { ok: false, error_message: "UI steps can run only in crm.zoho.com tabs." };
 }
 
-async function captureEvidence() {
+async function captureEvidence(tabId?: number) {
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+    let dataUrl: string;
+    if (typeof tabId === "number") {
+      const captured = (await withDebugger(tabId, (target) =>
+        debuggerApi().sendCommand(target, "Page.captureScreenshot", {
+          format: "jpeg",
+          quality: 60,
+          fromSurface: true,
+          captureBeyondViewport: false
+        })
+      )) as { data?: unknown };
+      if (typeof captured.data !== "string" || !captured.data) throw new Error("CDP screenshot returned no data.");
+      dataUrl = `data:image/jpeg;base64,${captured.data}`;
+    } else {
+      dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+    }
     if (dataUrl.length > 500 * 1024) {
       return { screenshot_error: "Screenshot exceeded the 500 KB cap." };
     }
@@ -969,14 +983,27 @@ async function inspectDealPage(tabId: number, args: EmailJobArgs) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: (expectedId: string, expectedName: string) => {
-      const title = document.title.replace(/\s+/g, " ").trim();
-      return {
-        url: location.href,
-        title,
-        id_matches: location.href.includes(`/tab/Potentials/${expectedId}`),
-        name_matches: title.toLowerCase().includes(expectedName.toLowerCase())
-      };
+    func: async (expectedId: string, expectedName: string) => {
+      const started = Date.now();
+      let observation = { url: location.href, title: document.title, id_matches: false, name_matches: false };
+      while (Date.now() - started < 15000) {
+        const title = document.title.replace(/\s+/g, " ").trim();
+        const expected = expectedName.toLowerCase();
+        const visibleIdentity = [...document.querySelectorAll("h1,h2,h3,[role='heading'],span,div")].some((element) => {
+          const rect = element.getBoundingClientRect();
+          const text = (element.textContent ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+          return rect.width > 0 && rect.height > 0 && text === expected;
+        });
+        observation = {
+          url: location.href,
+          title,
+          id_matches: location.href.includes(`/tab/Potentials/${expectedId}`),
+          name_matches: title.toLowerCase().includes(expected) || visibleIdentity
+        };
+        if (observation.id_matches && observation.name_matches) return observation;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return observation;
     },
     args: [args.deal_zoho_id, args.deal_name]
   });
@@ -1371,7 +1398,7 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
     ok: false,
     error_code: code,
     error_message: message,
-    result: { reference: args.reference, deal_url: args.deal_url, timings_ms: timings, ...result, evidence: await captureEvidence() }
+    result: { reference: args.reference, deal_url: args.deal_url, timings_ms: timings, ...result, evidence: await captureEvidence(tabId) }
   });
 
   if (!isCrmUrl(args.deal_url) || !args.deal_zoho_id || !args.to || !args.subject || !args.body) {
@@ -1501,7 +1528,7 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
       },
       task_verification: taskPreparation,
       timings_ms: timings,
-      evidence: await captureEvidence()
+      evidence: await captureEvidence(tabId)
     }
   };
 }
