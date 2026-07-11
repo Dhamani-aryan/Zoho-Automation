@@ -104,8 +104,8 @@ async function usableStoredTab(requireDedicated: boolean) {
   return null;
 }
 
-async function createAgentWindow(url: string, focus: boolean) {
-  const created = await chrome.windows.create({ url, focused: focus, type: "normal" });
+async function createAgentWindow(url: string) {
+  const created = await chrome.windows.create({ url, focused: false, type: "normal" });
   const tab = created.tabs?.find((item) => typeof item.id === "number") ?? null;
   const tabId = tab?.id ?? null;
   await saveAgentTarget(created.id ?? null, tabId, true);
@@ -113,10 +113,10 @@ async function createAgentWindow(url: string, focus: boolean) {
   return tabId ? await chrome.tabs.get(tabId) : null;
 }
 
-// Watched browser jobs drive or inspect the visible page, so they always use
-// the dedicated agent window. Deterministic API session jobs can still reuse a
-// CRM tab quietly without stealing focus.
-function isWatchedBrowserJob(job: ToolJob) {
+// Browser jobs use a dedicated tab so they never drive a CRM tab the user is
+// actively working in. The dedicated window stays unfocused; script injection
+// and CDP target its tab id directly and do not need the OS cursor or foreground.
+function requiresDedicatedAgentWindow(job: ToolJob) {
   return (
     job.tool_name === "ui_step" ||
     job.tool_name === "ui_workflow" ||
@@ -482,41 +482,28 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
   };
 }
 
-async function focusTab(tab: chrome.tabs.Tab) {
-  if (typeof tab.windowId === "number") {
-    await chrome.windows.update(tab.windowId, { focused: true, state: "normal" }).catch(() => undefined);
-  }
-  if (typeof tab.id === "number") await chrome.tabs.update(tab.id, { active: true });
-}
-
 async function crmTabForJob(job: ToolJob) {
-  const focus = isWatchedBrowserJob(job);
-  const stored = await usableStoredTab(focus);
-  if (stored?.id) {
-    if (focus) await focusTab(stored);
-    return stored;
+  const dedicated = requiresDedicatedAgentWindow(job);
+  const stored = await usableStoredTab(dedicated);
+  if (stored?.id) return stored;
+
+  if (dedicated) {
+    // Never fall back to a user's arbitrary CRM tab for UI work. Create a
+    // separate background window and drive it by tab id.
+    return createAgentWindow(initialUrlForJob(job));
   }
 
-  if (focus) {
-    // UI jobs: the dedicated window is the point - the user must always know
-    // which page is being driven. Create it before falling back to arbitrary
-    // existing tabs.
-    const created = await createAgentWindow(initialUrlForJob(job), true);
-    if (created?.id) return created;
-  }
-
-  // API jobs (and UI fallback if window creation failed): reuse any open CRM
-  // tab quietly - no focus/activation, the session call runs in the background.
+  // API jobs can reuse any open CRM tab quietly; session calls do not need the
+  // tab or its window to become active.
   const tabs = await crmTabs();
   const existing = tabs.find((tab) => typeof tab.id === "number") ?? null;
   if (existing?.id) {
     await saveAgentTarget(existing.windowId ?? null, existing.id, false);
-    if (focus) await focusTab(existing);
     return existing;
   }
 
-  // No CRM tab anywhere: open the dedicated window (quietly for API jobs).
-  return createAgentWindow(initialUrlForJob(job), focus);
+  // No CRM tab anywhere: open the dedicated window quietly.
+  return createAgentWindow(initialUrlForJob(job));
 }
 
 function waitForTabComplete(tabId: number): Promise<void> {
@@ -786,7 +773,7 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
     if (parsed.hostname !== "crm.zoho.com") {
       return { ok: false, error_message: "open_url is limited to crm.zoho.com." };
     }
-    await chrome.tabs.update(tabId, { url: parsed.toString(), active: true });
+    await chrome.tabs.update(tabId, { url: parsed.toString() });
     await waitForTabComplete(tabId);
     return { ok: true, result: { observed: parsed.toString() } };
   }

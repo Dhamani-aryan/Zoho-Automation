@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Unattended dedicated browser window (2026-07-12, fix)
+
+Agent browser jobs now create and reuse a dedicated Zoho window without focusing, activating, normalizing, or resizing it. Navigation updates the dedicated tab URL without making that tab active. Script injection and CDP input target the stored tab id directly, so they do not move the operating-system cursor and do not require Chrome to be the foreground application. UI jobs never fall back to an arbitrary CRM tab that the user may be working in. API jobs may still reuse an existing CRM tab quietly because they do not drive its UI.
+
 ## Supported task-module verification reads (2026-07-12, fix)
 
 Live order 909ff1b0-a6cd-4697-9346-a81b4305b202 stopped before writes because Zoho rejected the UI-only Deals/Activities_Chronological_View relation with INVALID_DATA. Task preparation now reads the supported /crm/v3/Tasks module in bounded 200-row pages, filters every row to the exact Deal through What_Id, separates open and completed statuses locally, and retains per-record Tasks/{id} read-back after writes. Completion verification refreshes the supported Tasks module and confirms the exact task id is Completed. The unsupported activity relation is no longer used.
