@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic task preparation: regression checkpoint (2026-07-11, build)
+
+Added contract tests for explicit task creation/completion arrays and due-date validation. Extended the extension grep proof to require completion-icon lookup scoped through the matched task row and to reject a generic document-level first completion icon.
+
+Verified npm run test:orchestrator (22/22), npm run test:tier2 (15/15), npm run typecheck, and npm run lint.
+
 ## Deterministic batch email scheduling: task preparation (2026-07-11, build)
 
 Extended each schedule_zoho_email job with explicit new_tasks and tasks_to_complete. Before composing, the deterministic runner opens Open Activities, duplicate-checks each requested new task, creates it through the proven Add New -> Task selectors, verifies subject/due date in Open Activities, locates each completion request by exact subject, scopes markAsCompletedIcon to that task row, and verifies it no longer appears open. Missing or ambiguous tasks fail the record before email composition; guides cannot invent task values. The agent now passes task sections in the same batch call instead of returning to an exploratory task loop.

@@ -412,12 +412,16 @@ test("deterministic email contract keeps blank CC empty and requires safe schedu
         schedule_date: "2026-07-15",
         schedule_time: "10:00 AM",
         timezone: "Asia/Kolkata",
-        preserve_signature: true
+        preserve_signature: true,
+        new_tasks: [{ subject: "Follow up", due_date: "2026-07-17" }],
+        tasks_to_complete: [{ subject: "Prepare follow-up" }]
       }
     ]
   });
   assert.deepEqual(parsed.emails[0].cc, []);
   assert.equal(parsed.emails[0].preserve_signature, true);
+  assert.deepEqual(parsed.emails[0].new_tasks, [{ subject: "Follow up", due_date: "2026-07-17" }]);
+  assert.deepEqual(parsed.emails[0].tasks_to_complete, [{ subject: "Prepare follow-up" }]);
   assert.equal(isEmailSchedulingExtensionJob("schedule_zoho_email"), true);
   assert.equal(isEmailSchedulingExtensionJob("browser_eval"), false);
 
@@ -449,6 +453,22 @@ test("deterministic email contract keeps blank CC empty and requires safe schedu
           schedule_date: "2026-07-15",
           schedule_time: "10:00 AM",
           preserve_signature: false
+        }
+      ]
+    })
+  );
+  assert.throws(() =>
+    scheduleZohoEmailBatchSchema.parse({
+      emails: [
+        {
+          reference: "Bad task date",
+          contact_name: "Test",
+          subject: "Follow-up",
+          body: "Body",
+          schedule_date: "2026-07-15",
+          schedule_time: "10:00 AM",
+          preserve_signature: true,
+          new_tasks: [{ subject: "Follow up", due_date: "next Friday" }]
         }
       ]
     })
