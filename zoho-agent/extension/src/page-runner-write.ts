@@ -449,12 +449,22 @@ export async function zohoWritePageRunner(job: {
     });
   }
 
-  async function getDealTasks(dealId: string, history: boolean) {
-    const relation = history ? "Activities_Chronological_View_History" : "Activities_Chronological_View";
-    const body = await request("GET", `/crm/v3/Deals/${dealId}/${relation}`, {
-      fields: "Subject,Status,Due_Date,What_Id,Who_Id,Owner"
-    });
-    return taskRows(body);
+  async function getDealTasks(dealId: string) {
+    const matches: TaskRow[] = [];
+    for (let page = 1; page <= 10; page += 1) {
+      const body = await request("GET", "/crm/v3/Tasks", {
+        fields: "Subject,Status,Due_Date,What_Id,Who_Id,Owner",
+        page: String(page),
+        per_page: "200"
+      });
+      matches.push(...taskRows(body).filter((task) => lookupId(task.What_Id) === dealId));
+      const info = body.info;
+      const moreRecords = Boolean(
+        info && typeof info === "object" && (info as { more_records?: unknown }).more_records === true
+      );
+      if (!moreRecords) return matches;
+    }
+    throw new Error("Task lookup exceeded 2000 records before reaching the end of the supported Tasks API.");
   }
 
   async function verifyTask(
@@ -493,16 +503,13 @@ export async function zohoWritePageRunner(job: {
     if (!deal) return { ok: false, error_code: "not_found", error_message: `Deal ${dealId} was not found.` };
     if (!valuesEqual(deal.Deal_Name, dealName)) return identityMismatch(dealId, dealName, deal.Deal_Name);
 
-    let openTasks = await getDealTasks(dealId, false);
+    const dealTasks = await getDealTasks(dealId);
+    let openTasks = dealTasks.filter((task) => !valuesEqual(task.Status, "Completed"));
     const created: Array<Record<string, unknown>> = [];
     const alreadyOpen: Array<Record<string, unknown>> = [];
     const completed: Array<Record<string, unknown>> = [];
     const receipts: TaskReceipt[] = [];
-    let closedTasks: TaskRow[] | null = null;
-    const history = async () => {
-      if (!closedTasks) closedTasks = await getDealTasks(dealId, true);
-      return closedTasks;
-    };
+    let closedTasks = dealTasks.filter((task) => valuesEqual(task.Status, "Completed"));
 
     for (let index = 0; index < newTasks.length; index += 1) {
       const raw = newTasks[index];
@@ -541,7 +548,7 @@ export async function zohoWritePageRunner(job: {
         continue;
       }
 
-      const completedMatches = (await history()).filter(
+      const completedMatches = closedTasks.filter(
         (task) => valuesEqual(task.Subject, subject) && valuesEqual(task.Due_Date, dueDate)
       );
       if (completedMatches.length > 1) {
@@ -640,7 +647,7 @@ export async function zohoWritePageRunner(job: {
       if (!subject) return { ok: false, error_code: "invalid_args", error_message: "Every task completion needs a subject." };
       const matches = openTasks.filter((task) => valuesEqual(task.Subject, subject));
       if (matches.length === 0) {
-        const completedMatches = (await history()).filter(
+        const completedMatches = closedTasks.filter(
           (task) => valuesEqual(task.Subject, subject) && valuesEqual(task.Status, "Completed")
         );
         if (completedMatches.length === 1) {
@@ -728,10 +735,12 @@ export async function zohoWritePageRunner(job: {
       openTasks = openTasks.filter((task) => task.id !== taskId);
     }
 
-    closedTasks = tasksToComplete.length > 0 ? await getDealTasks(dealId, true) : closedTasks ?? [];
+    closedTasks = tasksToComplete.length > 0
+      ? (await getDealTasks(dealId)).filter((task) => valuesEqual(task.Status, "Completed"))
+      : closedTasks;
     for (const entry of completed) {
       if (!closedTasks.some((task) => task.id === entry.id && valuesEqual(task.Status, "Completed"))) {
-        return { ok: false, error_code: "verify_failed", error_message: `Completed task "${entry.subject}" was not found in activity history.` };
+        return { ok: false, error_code: "verify_failed", error_message: `Completed task "${entry.subject}" was not found in the supported task-list read-back.` };
       }
     }
 

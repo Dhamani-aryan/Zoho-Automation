@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Supported task-module verification reads (2026-07-12, fix)
+
+Live order 909ff1b0-a6cd-4697-9346-a81b4305b202 stopped before writes because Zoho rejected the UI-only Deals/Activities_Chronological_View relation with INVALID_DATA. Task preparation now reads the supported /crm/v3/Tasks module in bounded 200-row pages, filters every row to the exact Deal through What_Id, separates open and completed statuses locally, and retains per-record Tasks/{id} read-back after writes. Completion verification refreshes the supported Tasks module and confirms the exact task id is Completed. The unsupported activity relation is no longer used.
+
 ## Low-latency verification receipts (2026-07-12, fix)
 
 The latest live run (session 9e110cd3-1951-439c-9aee-6824ce596c1e, order 977f4a65-3d12-4f13-bf23-fe815e9b6beb) showed the task operation completing in about six seconds but returning no structured result. The scheduler therefore stopped before compose, and the model spent the rest of the 126-second turn attempting ad hoc task reads with invalid CSRF/header context. Those recovery reads returned PATTERN_NOT_MATCHED or 401 and could never prove the already-visible task writes.
