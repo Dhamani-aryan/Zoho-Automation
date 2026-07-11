@@ -6,6 +6,8 @@ The second live acceptance reached the correct Deal but left Zoho's task dialog 
 
 Commits 02a3f1d and 421af58 add the internal API operation and replace the dialog path. The extension-side approval/task-order refusal remains unchanged. Verified npm run typecheck, npm run test:tier2 (16/16), and npm run build:extension.
 
+Live cloud guide checkpoint: updated email-scheduling to version 6 and task-create-complete to version 2 with API-first task instructions. Both writes produced skill_guide_updated audit events with source phase-g-live-task-api-fix.
+
 ## Deterministic scheduler acceptance fixture correction (2026-07-11, fix)
 
 The scheduler correctly stopped before email composition because the sample requested completion of the exact open task "Prepare Test SAP ERP follow-up" but the fixture never created that task. Updated the test draft to create the preparatory task first and then complete that same exact task. The previously created "Follow up on Test SAP ERP email" remains an intended open task and will be duplicate-skipped on retry.
