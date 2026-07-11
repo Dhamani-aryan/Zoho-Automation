@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Agent email draft template: variable schedule and task fields (2026-07-11, build)
+
+Aryan clarified that the sample draft must not make schedule time constant. Updated the Claude handoff template so schedule date/time are variable fields, and centered the format on the required operational fields: direct Zoho links, email format, CC, subject, new tasks, and closed tasks. The agent instruction now parses those sections and resolves missing contact/deal/account/task links itself, asking only for missing schedule date/time or true ambiguity.
+
+Verified npm run typecheck and npm run lint.
+
 ## Agent email draft template: Claude-to-Zoho scheduling handoff (2026-07-11, build)
 
 Added imports/samples/Claude Email Draft Template.md as a reusable Markdown format Aryan can give to Claude when drafting batch emails. The template captures header rules, per-contact lookup keys, body boundaries, CC, schedule-never-send, signature preservation, and TO_RESOLVE placeholders for contact/deal/account links.
