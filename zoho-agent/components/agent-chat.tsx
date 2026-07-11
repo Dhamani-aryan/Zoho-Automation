@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  FileText,
   GraduationCap,
   Loader2,
   Pencil,
@@ -73,6 +74,17 @@ type TimelineItem =
       summary: ApprovalSummaryRecord[];
       status: string; // pending | approved | rejected | expired | executed | failed
     };
+
+type AttachedContextFile = {
+  id: string;
+  name: string;
+  size: number;
+  text: string;
+};
+
+const ATTACHMENT_MAX_FILES = 4;
+const ATTACHMENT_MAX_BYTES = 750_000;
+const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".csv", ".tsv"]);
 
 function buildTimeline(rows: AgentMessageRow[], approvals: ApprovalRow[]): TimelineItem[] {
   type Stamped = { at: string; seq: number; item: TimelineItem };
@@ -287,9 +299,11 @@ export function AgentChat({
   const [input, setInput] = useState(initialDraft);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedContextFile[]>([]);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -369,6 +383,62 @@ export function AgentChat({
       );
     }
     setTimeline(buildTimeline(payload.messages ?? [], payload.approvals ?? []));
+  }
+
+  function extensionFor(name: string) {
+    const dot = name.lastIndexOf(".");
+    return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  }
+
+  function formatBytes(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function attachContextFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;
+    setError(null);
+    try {
+      const slots = ATTACHMENT_MAX_FILES - attachedFiles.length;
+      if (slots <= 0) throw new Error(`You can attach up to ${ATTACHMENT_MAX_FILES} files per message.`);
+      const nextFiles: AttachedContextFile[] = [];
+      for (const file of files.slice(0, slots)) {
+        const extension = extensionFor(file.name);
+        if (!ATTACHMENT_ALLOWED_EXTENSIONS.has(extension)) {
+          throw new Error(`Attach Markdown, text, CSV, or TSV files only. ${file.name} is not supported.`);
+        }
+        if (file.size > ATTACHMENT_MAX_BYTES) {
+          throw new Error(`${file.name} is ${formatBytes(file.size)}. Keep chat attachments under ${formatBytes(ATTACHMENT_MAX_BYTES)}.`);
+        }
+        const text = await file.text();
+        if (text.includes("\0")) throw new Error(`${file.name} looks like a binary file.`);
+        nextFiles.push({ id: crypto.randomUUID(), name: file.name, size: file.size, text });
+      }
+      setAttachedFiles((current) => [...current, ...nextFiles]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not attach file.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function messageWithAttachments(content: string) {
+    if (attachedFiles.length === 0) return content;
+    const fileBlocks = attachedFiles.map((file) =>
+      [
+        `--- ATTACHED FILE: ${file.name} (${formatBytes(file.size)}) ---`,
+        file.text.trimEnd(),
+        `--- END ATTACHED FILE: ${file.name} ---`
+      ].join("\n")
+    );
+    return [content, "Use the attached file context below for this request.", ...fileBlocks].join("\n\n");
+  }
+
+  function displayMessageWithAttachmentNames(content: string) {
+    if (attachedFiles.length === 0) return content;
+    return `${content}\n\nAttached: ${attachedFiles.map((file) => file.name).join(", ")}`;
   }
 
   async function toggleTeachMode() {
@@ -483,7 +553,7 @@ export function AgentChat({
     }
   }
 
-  async function runTurn(rawContent: string) {
+  async function runTurn(rawContent: string, displayContent = rawContent) {
     const content = rawContent.trim();
     if (!content || loading) return;
     setError(null);
@@ -493,7 +563,7 @@ export function AgentChat({
 
     try {
       const sessionId = activeSessionId || (await createSession());
-      setTimeline((current) => [...current, { id: crypto.randomUUID(), kind: "user", content }]);
+      setTimeline((current) => [...current, { id: crypto.randomUUID(), kind: "user", content: displayContent.trim() }]);
 
       const response = await fetch(`/api/agent/sessions/${sessionId}/messages`, {
         method: "POST",
@@ -538,9 +608,12 @@ export function AgentChat({
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = input.trim();
-    if (!content || loading) return;
+    if ((!content && attachedFiles.length === 0) || loading) return;
+    const finalContent = messageWithAttachments(content || "Use the attached file context.");
+    const displayContent = displayMessageWithAttachmentNames(content || "Use the attached file context.");
     setInput("");
-    await runTurn(content);
+    setAttachedFiles([]);
+    await runTurn(finalContent, displayContent);
   }
 
   // Stop the active task order, then stop watching the current stream.
@@ -769,7 +842,53 @@ export function AgentChat({
         </div>
 
         <form onSubmit={sendMessage} className="shrink-0 border-t border-line p-4">
+          {attachedFiles.length > 0 ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {attachedFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className="inline-flex max-w-full items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
+                  <span className="max-w-64 truncate font-medium">{file.name}</span>
+                  <span className="shrink-0 text-muted">{formatBytes(file.size)}</span>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => setAttachedFiles((current) => current.filter((item) => item.id !== file.id))}
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-white hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                    title={`Remove ${file.name}`}
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="flex gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".md,.markdown,.txt,.csv,.tsv,text/markdown,text/plain,text/csv"
+              className="hidden"
+              onChange={(event) => {
+                attachContextFiles(event.target.files).catch((err: unknown) => {
+                  setError(err instanceof Error ? err.message : "Could not attach file.");
+                });
+              }}
+            />
+            <button
+              type="button"
+              disabled={loading || attachedFiles.length >= ATTACHMENT_MAX_FILES}
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-line bg-white text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+              title="Attach context files"
+              aria-label="Attach context files"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
             <textarea
               ref={textareaRef}
               value={input}
@@ -801,7 +920,7 @@ export function AgentChat({
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim()}
+                disabled={!input.trim() && attachedFiles.length === 0}
                 className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-ink text-white disabled:cursor-not-allowed disabled:opacity-50"
                 title="Send"
                 aria-label="Send message"

@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Agent chat attachments: plus-button context files (2026-07-11, build)
+
+Added a composer plus button in /agent for Markdown, text, CSV, and TSV context files. Files are read client-side, shown as removable chips, and folded into the submitted user message inside explicit ATTACHED FILE blocks so the agent can parse Claude-written drafts or batch instructions in the same turn. The visible chat bubble stays compact by listing only the attachment names.
+
+Guardrails: max four files per message, 750 KB per file, text-only/NUL rejection, no new database write path, and no broad filesystem access. This complements read_workspace_file for repo-local drafts while giving Aryan a direct chat upload path.
+
 ## Snap-like agent rewrite Step 4: write feedback drives live read-back and mirror sync (2026-07-11, build)
 
 The prompt already told the model to sync Supabase after verified Zoho writes, but that instruction could be skipped during long autonomous loops. Added a server-side tool-result follow-up for successful Tier-2 Account/Contact/Deal writes. The result now explicitly marks live_readback_required and mirror_sync_required, then names the required next actions: zoho_get_record for the authoritative live fields and db_sync_records using exactly the returned live records.
