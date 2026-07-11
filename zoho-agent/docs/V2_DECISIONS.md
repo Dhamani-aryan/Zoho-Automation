@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic scheduler first live acceptance: fix checkpoint (2026-07-11, review)
+
+The first real run correctly used propose_task_order -> schedule_zoho_email_batch but exposed three implementation defects before any email write: premature SPA identity inspection, screenshot capture tied to transient activeTab permission, and recursive record-budget counting of nested read ids. It also exposed the recurring implicit-id read retry. Commits 8d7c35b, 84f77c9, and 5e086b6 fix those paths with focused regression coverage. The failed task order c34d8345-cf32-4d69-9cdc-957307275c87 remains terminal and must not be reused.
+
+Final verification: npm run test:orchestrator (24/24), npm run test:tier2 (15/15), npm run typecheck, npm run lint, npm run build, npm run build:extension, and git diff --check passed. Reload the unpacked extension before starting a new live acceptance order.
+
 ## Deterministic scheduler live acceptance: implicit Zoho id reads (2026-07-11, fix)
 
 The recovery model requested fields including id and hit "Unknown Deals field(s): id" even though Zoho returns record id implicitly. zoho_get_record now removes case-insensitive id from the requested field list before metadata validation and extension dispatch, dedupes the remaining fields, and rejects an id-only request with a focused message. The tool description now tells the model not to request id.
