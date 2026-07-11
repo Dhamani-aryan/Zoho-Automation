@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: focused regression tests (2026-07-11, build)
+
+Added regression coverage for the deterministic email contract, blank-CC normalization, signature-preservation requirement, schedule format rejection, file-driven task-order eligibility, exact extension write-set membership, and extension refusal without approval/order linkage. Existing Tier-2 write names remain unchanged; schedule_zoho_email is asserted as the one additional scoped extension write job.
+
+Verified npm run test:orchestrator (22/22) and npm run test:tier2 (15/15).
+
 ## Deterministic batch email scheduling: agent routing (2026-07-11, build)
 
 Made schedule_zoho_email_batch the mandatory first method for structured email scheduling. Attached files are parsed once, file-driven/batch runs use one task order, and the batch tool is called once with all records. Generic browser tools are now limited to one focused recovery after a specific deterministic failure. Skill guides may supply method/selectors only: current-request values always win, blank CC is exactly empty, and the KD Blitz fixed CC/time rules apply only to that named source file. Updated the Phase G email-scheduling seed with the same rule and deterministic method.

@@ -211,5 +211,7 @@ test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
   const match = source.match(/const WRITE_TOOLS = new Set\(\[([^\]]+)\]\)/);
   assert.ok(match, "extension WRITE_TOOLS literal was not found");
   const extensionNames = [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
-  assert.deepEqual(extensionNames, [...TIER2_WRITE_TOOL_NAMES].sort());
+  assert.deepEqual(extensionNames, [...TIER2_WRITE_TOOL_NAMES, "schedule_zoho_email"].sort());
+  assert.match(source, /job\.tool_name === "schedule_zoho_email"/);
+  assert.match(source, /write without approval or task order refused by extension/);
 });

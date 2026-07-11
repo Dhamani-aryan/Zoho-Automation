@@ -40,6 +40,10 @@ import {
   workspaceRootFromCwd
 } from "../lib/agent/workspace-files";
 import { verifiedWriteFollowup } from "../lib/agent/tier2-tools";
+import {
+  isEmailSchedulingExtensionJob,
+  scheduleZohoEmailBatchSchema
+} from "../lib/agent/email-scheduling-tools";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -388,7 +392,67 @@ test("task orders require batch records or explicit unattended intent", () => {
     reason: "batch",
     recordCount: 4
   });
+  assert.deepEqual(taskOrderProposalDecision(oneRecordChanges, "Use the attached draft file"), {
+    allowed: true,
+    reason: "file_driven",
+    recordCount: 1
+  });
   assert.equal(defaultTaskOrderBudget(oneRecordChanges).max_records_touched, 2);
+});
+
+test("deterministic email contract keeps blank CC empty and requires safe schedule inputs", () => {
+  const parsed = scheduleZohoEmailBatchSchema.parse({
+    emails: [
+      {
+        reference: "Test email",
+        contact_name: "Test",
+        deal_name: "Test SAP ERP",
+        subject: "Follow-up",
+        body: "Hi Test,\n\nChecking in.",
+        schedule_date: "2026-07-15",
+        schedule_time: "10:00 AM",
+        timezone: "Asia/Kolkata",
+        preserve_signature: true
+      }
+    ]
+  });
+  assert.deepEqual(parsed.emails[0].cc, []);
+  assert.equal(parsed.emails[0].preserve_signature, true);
+  assert.equal(isEmailSchedulingExtensionJob("schedule_zoho_email"), true);
+  assert.equal(isEmailSchedulingExtensionJob("browser_eval"), false);
+
+  assert.throws(
+    () =>
+      scheduleZohoEmailBatchSchema.parse({
+        emails: [
+          {
+            reference: "Bad schedule",
+            contact_name: "Test",
+            subject: "Follow-up",
+            body: "Body",
+            schedule_date: "07/15/2026",
+            schedule_time: "tomorrow",
+            preserve_signature: true
+          }
+        ]
+      }),
+    /YYYY-MM-DD|HH:MM/
+  );
+  assert.throws(() =>
+    scheduleZohoEmailBatchSchema.parse({
+      emails: [
+        {
+          reference: "Unsafe signature",
+          contact_name: "Test",
+          subject: "Follow-up",
+          body: "Body",
+          schedule_date: "2026-07-15",
+          schedule_time: "10:00 AM",
+          preserve_signature: false
+        }
+      ]
+    })
+  );
 });
 
 test("ui_step validation and teach-mode gate are strict", () => {
