@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic scheduler task API recovery (2026-07-11, fix)
+
+The second live acceptance reached the correct Deal but left Zoho's task dialog open and returned no verification from the UI script. Task creation and completion now use the extension's existing authenticated Zoho request transport inside the already approval/order-linked schedule_zoho_email job. The runner reads exact open Tasks from Deal activities, duplicate-skips or rejects ambiguity, creates Tasks with Deal and Contact lookups, completes only one exact open match, reads Tasks/{id} back after each write, and confirms completion in Deal activity history. The browser remains responsible only for compose, schedule-never-send, and Scheduled-tab verification.
+
+Commits 02a3f1d and 421af58 add the internal API operation and replace the dialog path. The extension-side approval/task-order refusal remains unchanged. Verified npm run typecheck, npm run test:tier2 (16/16), and npm run build:extension.
+
 ## Deterministic scheduler acceptance fixture correction (2026-07-11, fix)
 
 The scheduler correctly stopped before email composition because the sample requested completion of the exact open task "Prepare Test SAP ERP follow-up" but the fixture never created that task. Updated the test draft to create the preparatory task first and then complete that same exact task. The previously created "Follow up on Test SAP ERP email" remains an intended open task and will be duplicate-skipped on retry.
