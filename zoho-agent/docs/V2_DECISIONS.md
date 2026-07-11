@@ -1,5 +1,15 @@
 # V2 Decisions
 
+## Low-latency verification receipts (2026-07-12, fix)
+
+The latest live run (session 9e110cd3-1951-439c-9aee-6824ce596c1e, order 977f4a65-3d12-4f13-bf23-fe815e9b6beb) showed the task operation completing in about six seconds but returning no structured result. The scheduler therefore stopped before compose, and the model spent the rest of the 126-second turn attempting ad hoc task reads with invalid CSRF/header context. Those recovery reads returned PATTERN_NOT_MATCHED or 401 and could never prove the already-visible task writes.
+
+Adopted the useful design from Zoho Browser Agent Verification Architecture.md: task create/complete operations now return compact JSON-safe receipts with enum status, Zoho id, verified fields, correlation id, path, elapsed time, and error. A write that acked but whose read-back throws returns write_ok_unverified with the id instead of losing the mutation outcome. Natural-key recovery adopts exact open tasks or exact completed-history tasks, including create-then-complete requests, and refuses ambiguity.
+
+The schedule worker now performs one deterministic adoption retry when the receipt is missing, unserializable, or write_ok_unverified. If both attempts return no receipt, it emits task_receipt_missing with the correlation id instead of vague prose. Agent instructions prohibit browser_eval/browser_observe task-verification recovery; focused recovery remains available only for composer UI failures. Commits efe5bea and 272c86c implement the change without altering approval/order gates or verify-by-readback requirements.
+
+Verified npm run typecheck, npm run test:tier2 (16/16), npm run test:orchestrator (24/24), and npm run build:extension.
+
 ## Attachment-only CRM work requests (2026-07-11, fix)
 
 Simplified imports/samples/Test SAP ERP Email Draft.md so it supplies only business identity, email content, schedule values, and task actions; it no longer asks for a recipient address or Zoho links. Agent instructions now treat an attachment-only message, "Process this", or "Do this" as complete authorization to infer operations from the file sections, resolve Contact/Account/Deal/email/ids/links itself, route the work through the deterministic scheduler, and verify all requested changes. It must not ask the user for resolvable CRM data, tools, selectors, or a walkthrough.
