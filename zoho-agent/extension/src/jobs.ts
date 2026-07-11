@@ -1014,28 +1014,45 @@ async function inspectDealPage(tabId: number, args: EmailJobArgs) {
     | undefined;
 }
 
-async function prepareDealTasksWithApi(tabId: number, args: EmailJobArgs) {
+async function prepareDealTasksWithApi(tabId: number, args: EmailJobArgs, requestId: string) {
   if (args.new_tasks.length === 0 && args.tasks_to_complete.length === 0) {
     return { ok: true as const, result: { created: [], already_open: [], completed: [], verified: true } };
   }
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: zohoWritePageRunner,
-    args: [
-      {
-        tool_name: "zoho_prepare_tasks",
-        args: {
-          deal_zoho_id: args.deal_zoho_id,
-          deal_name: args.deal_name,
-          contact_zoho_id: args.contact_zoho_id,
-          new_tasks: args.new_tasks,
-          tasks_to_complete: args.tasks_to_complete
+  let lastResult: Awaited<ReturnType<typeof zohoWritePageRunner>> | undefined;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: zohoWritePageRunner,
+      args: [
+        {
+          tool_name: "zoho_prepare_tasks",
+          args: {
+            request_id: requestId,
+            deal_zoho_id: args.deal_zoho_id,
+            deal_name: args.deal_name,
+            contact_zoho_id: args.contact_zoho_id,
+            new_tasks: args.new_tasks,
+            tasks_to_complete: args.tasks_to_complete
+          }
         }
-      }
-    ]
-  });
-  return results?.[0]?.result as Awaited<ReturnType<typeof zohoWritePageRunner>> | undefined;
+      ]
+    });
+    lastResult = results?.[0]?.result as Awaited<ReturnType<typeof zohoWritePageRunner>> | undefined;
+    const payload = lastResult && !lastResult.ok && lastResult.result && typeof lastResult.result === "object"
+      ? (lastResult.result as { receipts?: Array<{ status?: string }> })
+      : null;
+    const recoverableReceipt = payload?.receipts?.some((receipt) => receipt.status === "write_ok_unverified") === true;
+    const missingOrUnserialized = !lastResult || (!lastResult.ok && lastResult.error_code === "receipt_serialize_failed");
+    if (!missingOrUnserialized && !recoverableReceipt) return lastResult;
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return lastResult ?? {
+    ok: false,
+    error_code: "task_receipt_missing",
+    error_message: "Task writes may have succeeded, but the extension returned no receipt after deterministic adoption recovery.",
+    result: { request_id: requestId, recovery_attempts: 2 }
+  };
 }
 
 async function clearComposerAddresses(tabId: number) {
@@ -1299,7 +1316,7 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
   phaseStarted = Date.now();
   let taskPreparation: Awaited<ReturnType<typeof prepareDealTasksWithApi>>;
   try {
-    taskPreparation = await prepareDealTasksWithApi(tabId, args);
+    taskPreparation = await prepareDealTasksWithApi(tabId, args, job.id);
   } catch (error) {
     return fail("TASK_PREPARATION_FAILED", error instanceof Error ? error.message : "Task preparation failed.");
   }
