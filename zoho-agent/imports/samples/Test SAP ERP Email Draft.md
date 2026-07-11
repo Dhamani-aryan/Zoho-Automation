@@ -1,12 +1,11 @@
-# Test Email Schedule Request
+# Test CRM Work Request
+
+Process every action below against the matching live Zoho records and verify each result.
 
 --- Email 1 ---
-Contact name: Test
-Company: Test Company
-Job title: Test Contact
-Deal name: Test SAP ERP
-Zoho record link:
-To:
+Contact name: Test Test
+Company: sdas
+Deal name: Test|Cloud ERP
 CC:
 Subject: Test SAP ERP follow-up
 Body:
@@ -24,13 +23,8 @@ Keep existing signature: Yes
 New tasks:
 - Subject: Follow up on Test SAP ERP email
   Due date: 2026-07-17
-  Related to: Test SAP ERP
-  Owner:
 - Subject: Prepare Test SAP ERP follow-up
   Due date: 2026-07-16
-  Related to: Test SAP ERP
-  Owner:
 
 Tasks to complete:
 - Subject: Prepare Test SAP ERP follow-up
-  Related to: Test SAP ERP
