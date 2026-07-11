@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Attachment-only CRM work requests (2026-07-11, fix)
+
+Simplified imports/samples/Test SAP ERP Email Draft.md so it supplies only business identity, email content, schedule values, and task actions; it no longer asks for a recipient address or Zoho links. Agent instructions now treat an attachment-only message, "Process this", or "Do this" as complete authorization to infer operations from the file sections, resolve Contact/Account/Deal/email/ids/links itself, route the work through the deterministic scheduler, and verify all requested changes. It must not ask the user for resolvable CRM data, tools, selectors, or a walkthrough.
+
+Commits be5009f and 523c068 implement the sample and instruction changes. Verified npm run typecheck, npm run lint, and npm run test:orchestrator (24/24).
+
 ## Deterministic scheduler task API recovery (2026-07-11, fix)
 
 The second live acceptance reached the correct Deal but left Zoho's task dialog open and returned no verification from the UI script. Task creation and completion now use the extension's existing authenticated Zoho request transport inside the already approval/order-linked schedule_zoho_email job. The runner reads exact open Tasks from Deal activities, duplicate-skips or rejects ambiguity, creates Tasks with Deal and Contact lookups, completes only one exact open match, reads Tasks/{id} back after each write, and confirms completion in Deal activity history. The browser remains responsible only for compose, schedule-never-send, and Scheduled-tab verification.
