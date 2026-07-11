@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Deterministic scheduler acceptance fixture correction (2026-07-11, fix)
+
+The scheduler correctly stopped before email composition because the sample requested completion of the exact open task "Prepare Test SAP ERP follow-up" but the fixture never created that task. Updated the test draft to create the preparatory task first and then complete that same exact task. The previously created "Follow up on Test SAP ERP email" remains an intended open task and will be duplicate-skipped on retry.
+
 ## Deterministic scheduler first live acceptance: fix checkpoint (2026-07-11, review)
 
 The first real run correctly used propose_task_order -> schedule_zoho_email_batch but exposed three implementation defects before any email write: premature SPA identity inspection, screenshot capture tied to transient activeTab permission, and recursive record-budget counting of nested read ids. It also exposed the recurring implicit-id read retry. Commits 8d7c35b, 84f77c9, and 5e086b6 fix those paths with focused regression coverage. The failed task order c34d8345-cf32-4d69-9cdc-957307275c87 remains terminal and must not be reused.

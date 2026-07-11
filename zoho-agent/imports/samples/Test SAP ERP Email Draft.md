@@ -26,6 +26,10 @@ New tasks:
   Due date: 2026-07-17
   Related to: Test SAP ERP
   Owner:
+- Subject: Prepare Test SAP ERP follow-up
+  Due date: 2026-07-16
+  Related to: Test SAP ERP
+  Owner:
 
 Tasks to complete:
 - Subject: Prepare Test SAP ERP follow-up
