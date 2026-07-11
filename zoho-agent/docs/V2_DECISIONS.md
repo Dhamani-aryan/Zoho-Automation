@@ -1,5 +1,13 @@
 # V2 Decisions
 
+## Agent email draft template: Claude-to-Zoho scheduling handoff (2026-07-11, build)
+
+Added imports/samples/Claude Email Draft Template.md as a reusable Markdown format Aryan can give to Claude when drafting batch emails. The template captures header rules, per-contact lookup keys, body boundaries, CC, schedule-never-send, signature preservation, and TO_RESOLVE placeholders for contact/deal/account links.
+
+Updated the agent instructions so attached or referenced Claude-written email draft files are parsed as scheduling inputs: resolve missing direct Zoho links from Supabase first and live Zoho when needed, prefer contact email as the strongest identity key, stop only for true ambiguity/missing required content/TBD schedule date, and never ask the user for links, tool choices, or selectors.
+
+Verified npm run typecheck and npm run lint.
+
 ## Agent chat attachments: plus-button context files (2026-07-11, build)
 
 Added a composer plus button in /agent for Markdown, text, CSV, and TSV context files. Files are read client-side, shown as removable chips, and folded into the submitted user message inside explicit ATTACHED FILE blocks so the agent can parse Claude-written drafts or batch instructions in the same turn. The visible chat bubble stays compact by listing only the attachment names.
