@@ -20,3 +20,13 @@ Schedule date: 2026-07-15
 Schedule time: 10:00 AM
 Time zone: Asia/Kolkata
 Keep existing signature: Yes
+
+New tasks:
+- Subject: Follow up on Test SAP ERP email
+  Due date: 2026-07-17
+  Related to: Test SAP ERP
+  Owner:
+
+Tasks to complete:
+- Subject: Prepare Test SAP ERP follow-up
+  Related to: Test SAP ERP
