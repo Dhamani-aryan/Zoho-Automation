@@ -28,6 +28,7 @@ import {
 } from "../lib/agent/ui-tools";
 import {
   defaultTaskOrderBudget,
+  expandedAgentLimits,
   taskOrderBudgetDecision,
   taskOrderProposalDecision
 } from "../lib/agent/task-orders";
@@ -296,6 +297,25 @@ test("task order budgets stop on tool, wall-clock, or record limits", () => {
       recordsTouched: 3
     }).ok,
     false
+  );
+});
+
+test("approved task-order limits expand the agent loop without shrinking prior limits", () => {
+  assert.deepEqual(
+    expandedAgentLimits({
+      currentMaxToolCalls: 60,
+      currentTurnTimeoutMs: 900_000,
+      orderBudget: { max_tool_calls: 200, max_wall_ms: 2_700_000, max_records_touched: 50 }
+    }),
+    { maxToolCalls: 200, turnTimeoutMs: 2_700_000 }
+  );
+  assert.deepEqual(
+    expandedAgentLimits({
+      currentMaxToolCalls: 250,
+      currentTurnTimeoutMs: 3_000_000,
+      orderBudget: { max_tool_calls: 200, max_wall_ms: 2_700_000, max_records_touched: 50 }
+    }),
+    { maxToolCalls: 250, turnTimeoutMs: 3_000_000 }
   );
 });
 

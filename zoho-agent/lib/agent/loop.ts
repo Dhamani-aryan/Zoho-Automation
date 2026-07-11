@@ -34,6 +34,7 @@ import {
   defaultTaskOrderBudget,
   isTaskOrderTool,
   TASK_ORDER_TOOL_DEFINITIONS,
+  expandedAgentLimits,
   taskOrderBudgetDecision,
   taskOrderProposalDecision,
   validateTaskOrderToolCall,
@@ -1967,11 +1968,13 @@ export async function runAgentTurn({
   let pausedMs = 0;
   const turnTimeoutMs = agentTurnTimeoutMs();
   const maxToolCalls = agentMaxToolCalls();
+  let effectiveTurnTimeoutMs = turnTimeoutMs;
+  let effectiveMaxToolCalls = maxToolCalls;
   let activeTaskOrderId: string | null = null;
   let taskOrderToolCalls = 0;
   let taskOrderRecordsTouched = 0;
 
-  while (Date.now() - started - pausedMs < turnTimeoutMs) {
+  while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
     let approvedOrder: ActiveTaskOrder | null = null;
     if (service) {
       if (activeTaskOrderId) {
@@ -1993,6 +1996,13 @@ export async function runAgentTurn({
         activeTaskOrderId = approvedOrder?.id ?? null;
       }
       if (approvedOrder) {
+        const expandedLimits = expandedAgentLimits({
+          currentMaxToolCalls: effectiveMaxToolCalls,
+          currentTurnTimeoutMs: effectiveTurnTimeoutMs,
+          orderBudget: approvedOrder.budget
+        });
+        effectiveTurnTimeoutMs = expandedLimits.turnTimeoutMs;
+        effectiveMaxToolCalls = expandedLimits.maxToolCalls;
         const budget = taskOrderBudgetDecision({
           order: approvedOrder,
           nowMs: Date.now(),
@@ -2042,8 +2052,8 @@ export async function runAgentTurn({
     }
 
     for (const call of model.toolCalls) {
-      if (toolCallCount >= maxToolCalls) {
-        const message = `Stopped after reaching the ${maxToolCalls} tool-call budget.`;
+      if (toolCallCount >= effectiveMaxToolCalls) {
+        const message = `Stopped after reaching the ${effectiveMaxToolCalls} tool-call budget.`;
         await supabase.from("agent_messages").insert({
           session_id: sessionId,
           role: "assistant",
@@ -2225,7 +2235,7 @@ export async function runAgentTurn({
     }
   }
 
-  const message = `Stopped after reaching the ${Math.round(turnTimeoutMs / 1000)} second turn budget.`;
+  const message = `Stopped after reaching the ${Math.round(effectiveTurnTimeoutMs / 1000)} second turn budget.`;
   await supabase.from("agent_messages").insert({
     session_id: sessionId,
     role: "assistant",

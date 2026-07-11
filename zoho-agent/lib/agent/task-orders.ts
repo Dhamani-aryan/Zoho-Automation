@@ -146,6 +146,21 @@ export type BudgetDecisionInput = {
   recordsTouched: number;
 };
 
+export function expandedAgentLimits({
+  currentMaxToolCalls,
+  currentTurnTimeoutMs,
+  orderBudget
+}: {
+  currentMaxToolCalls: number;
+  currentTurnTimeoutMs: number;
+  orderBudget: TaskOrderBudget;
+}) {
+  return {
+    maxToolCalls: Math.max(currentMaxToolCalls, orderBudget.max_tool_calls),
+    turnTimeoutMs: Math.max(currentTurnTimeoutMs, orderBudget.max_wall_ms)
+  };
+}
+
 export function taskOrderBudgetDecision(input: BudgetDecisionInput): { ok: true } | { ok: false; reason: string } {
   const budget = input.order.budget;
   if (input.toolCalls >= budget.max_tool_calls) {

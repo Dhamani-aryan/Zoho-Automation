@@ -1,7 +1,7 @@
 import { requireApiRole } from "@/lib/auth/guards";
 import { runAgentTurn, type AgentStreamEvent } from "@/lib/agent/loop";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
-import { agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
+import { agentTurnLockTimeoutMs } from "@/lib/agent/runtime-config";
 import { turnClaimDecision } from "@/lib/agent/turn-lock";
 
 function encodeEvent(event: AgentStreamEvent) {
@@ -46,7 +46,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const decision = turnClaimDecision({
     currentActiveUntil: (session as { turn_active_until?: string | null }).turn_active_until,
     nowMs,
-    turnTimeoutMs: agentTurnTimeoutMs()
+    turnTimeoutMs: agentTurnLockTimeoutMs()
   });
   if (!decision.claimable) {
     return Response.json(

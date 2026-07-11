@@ -1,5 +1,15 @@
 # V2 Decisions
 
+## Snap-like agent rewrite Step 3: harness budgets that permit real tool loops (2026-07-10, build)
+
+Found a harness contradiction: task orders carried reviewed defaults of 200 calls/45 minutes, but runAgentTurn always stopped at the global 15 calls/3 minutes first. This made the larger task-order budget decorative and prevented the multi-tool feedback loop requested in BUILD_AN_AGENT_LIKE_SNAP.md.
+
+Raised watched/non-order defaults to env-tunable AGENT_MAX_TOOL_CALLS=60 and AGENT_TURN_TIMEOUT_MS=900000 (15 minutes). During an approved task order, the loop now raises its effective limits to at least that order's max_tool_calls/max_wall_ms while continuing to enforce taskOrderBudgetDecision server-side for order calls, records, and wall time. Limits only increase within a turn so a long completed batch still gets a final model/report pass. The session turn lock now covers max(interactive timeout, task-order wall timeout) plus approval wait, preventing overlap during a 45-minute order while remaining self-healing.
+
+This is deliberately bounded rather than literally uncapped: task budgets, Stop behavior, failure-rate stops, record limits, and env overrides remain safety controls.
+
+Verified npm run test:orchestrator (20/20), npm run typecheck, and npm run lint.
+
 ## Snap-like agent rewrite Step 2: safe workspace file reading (2026-07-10, build)
 
 The Phase G prompt required parsing imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md, but the agent had no file-reading tool and therefore could not actually satisfy the acceptance flow from a goal alone. Added read_workspace_file as a Tier-0 general primitive. It reads .md/.txt/.csv/.json only from imports/samples, source_docs, workflows, or reference/heysnap; rejects absolute paths, traversal, disallowed extensions, directories, binary/NUL content, and files over 2 MB; and returns at most 6,000 characters per page with line metadata and next_start_line.
