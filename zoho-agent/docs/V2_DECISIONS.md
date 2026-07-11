@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: server coordinator (2026-07-11, build)
+
+Wired schedule_zoho_email_batch into the agent loop. The server resolves the full batch before writes, uses one task order for file-driven/batch work, queues one scoped schedule_zoho_email extension job per resolved record without returning to the model, and checks order status, Stop, record/tool/wall budgets, duplicate scheduled-email logs, three-consecutive-failure, and over-20-percent failure stops between records. Small direct runs retain the approvals_enabled behavior through one batch confirmation; extension claims and the extension executor both refuse email writes without an approved approval_id or task_order_id. Verified schedules are logged with a body hash for idempotency and return expected-vs-actual per-record reports.
+
+Verified npm run typecheck.
+
 ## Deterministic batch email scheduling: extension runner (2026-07-11, build)
 
 Added the scoped schedule_zoho_email extension job. One claimed job now navigates directly to the resolved Deal, verifies Deal identity, opens the composer, clears and commits exact To/CC chips with trusted CDP input, sets Subject by exact selector, inserts Verdana body nodes above #ecw_signature, performs exact draft read-back, submits the custom schedule once using the proven hidden hour/minute/AM-PM fields, and verifies recipient/subject/date/time/status in Scheduled. The job refuses unlinked writes, wrong Deal identity, any field mismatch, missing signature, or unproven Scheduled state. Blank CC remains empty. Results include compact per-phase timings and screenshot evidence.

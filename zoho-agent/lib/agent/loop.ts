@@ -76,6 +76,13 @@ import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
+import {
+  EMAIL_SCHEDULING_TOOL_DEFINITIONS,
+  isEmailSchedulingTool,
+  resolveEmailScheduleBatch,
+  validateEmailSchedulingToolCall,
+  type ResolvedEmailScheduleItem
+} from "@/lib/agent/email-scheduling-tools";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
 const JOB_POLL_INTERVAL_MS = 500;
@@ -183,6 +190,7 @@ const AGENT_TOOL_DEFINITIONS = [
   ...BROWSER_TOOL_DEFINITIONS,
   ...SKILL_GUIDE_TOOL_DEFINITIONS,
   ...UNDO_TOOL_DEFINITIONS,
+  ...EMAIL_SCHEDULING_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
@@ -963,6 +971,249 @@ async function waitForToolJobById({
     .eq("user_id", userId)
     .in("status", ["queued", "running"]);
   return { ok: false, result: { status: "expired", error: "Task-order job timed out." }, waitedMs: Date.now() - started };
+}
+
+function databaseScheduleTime(value: string) {
+  const raw = value.trim().toUpperCase();
+  const twelveHour = /^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/.exec(raw);
+  if (!twelveHour) return /^([01]?\d|2[0-3]):[0-5]\d$/.test(raw) ? `${raw.padStart(5, "0")}:00` : raw;
+  let hour = Number(twelveHour[1]);
+  if (twelveHour[3] === "AM" && hour === 12) hour = 0;
+  if (twelveHour[3] === "PM" && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, "0")}:${twelveHour[2]}:00`;
+}
+
+async function runEmailSchedulingBatch({
+  service,
+  user,
+  sessionId,
+  call,
+  order,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  order: ActiveTaskOrder | null;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const validated = validateEmailSchedulingToolCall(call);
+  const args = validated.args as { emails: ResolvedEmailScheduleItem[] };
+  if (args.emails.length > 3 && !order) {
+    throw new Error("Scheduling more than 3 emails requires an approved task order before calling schedule_zoho_email_batch.");
+  }
+
+  const resolution = await resolveEmailScheduleBatch(service, validated.args);
+  const resolved = resolution.filter((row): row is { ok: true; item: ResolvedEmailScheduleItem } => row.ok);
+  const unresolved = resolution.filter((row) => !row.ok);
+  if (resolved.length === 0) {
+    return { ok: false, result: { status: "not_started", resolved: 0, failures: unresolved }, pausedMs: 0 };
+  }
+  if (order && resolved.length > order.budget.max_records_touched) {
+    throw new Error(`Resolved batch exceeds task-order record budget (${order.budget.max_records_touched}).`);
+  }
+
+  const summary: ApprovalSummaryRecord[] = resolved.map(({ item }) => ({
+    zoho_id: item.deal_zoho_id,
+    name: `${item.contact_name} - ${item.deal_name}`,
+    before: { scheduled: false },
+    after: {
+      action: "schedule_email",
+      to: item.to,
+      cc: item.cc,
+      subject: item.subject,
+      schedule_date: item.schedule_date,
+      schedule_time: item.schedule_time,
+      timezone: item.timezone,
+      preserve_signature: true
+    }
+  }));
+
+  let approvalId: string | null = null;
+  let pausedMs = 0;
+  if (!order) {
+    const snapshot = { tool_name: "schedule_zoho_email_batch", emails: resolved.map((row) => row.item) };
+    const { data: approval, error } = await service
+      .from("pending_approvals")
+      .insert({
+        session_id: sessionId,
+        user_id: user.id,
+        tool_name: snapshot.tool_name,
+        args: snapshot,
+        summary,
+        status: user.approvals_enabled ? "pending" : "approved",
+        decided_at: user.approvals_enabled ? null : new Date().toISOString()
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    approvalId = (approval as { id: string }).id;
+    if (user.approvals_enabled) {
+      await emit({
+        type: "approval_required",
+        call_id: call.id,
+        approval_id: approvalId,
+        tool_name: "schedule_zoho_email_batch",
+        summary
+      });
+      const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+      pausedMs += decision.waitedMs;
+      if (decision.outcome !== "approved") {
+        return {
+          ok: false,
+          result: { approval_id: approvalId, status: decision.outcome, failures: unresolved },
+          pausedMs
+        };
+      }
+    }
+  }
+
+  const outcomes: Array<Record<string, unknown>> = unresolved.map((failure) => ({
+    reference: failure.reference,
+    status: "not_started",
+    error: failure.error,
+    candidates: failure.candidates ?? []
+  }));
+  let consecutiveFailures = 0;
+  let executed = 0;
+  let failed = unresolved.length;
+  const startedAt = Date.now();
+
+  for (const { item } of resolved) {
+    if (order) {
+      const { data: currentOrder, error: orderError } = await service
+        .from("task_orders")
+        .select("status")
+        .eq("id", order.id)
+        .eq("user_id", user.id)
+        .single();
+      if (orderError) throw orderError;
+      if ((currentOrder as { status: string }).status !== "approved") {
+        outcomes.push({ reference: item.reference, status: "not_started", error: "Task order was stopped." });
+        break;
+      }
+      if (executed >= order.budget.max_tool_calls) {
+        outcomes.push({ reference: item.reference, status: "not_started", error: "Task-order tool-call budget reached." });
+        break;
+      }
+      if (Date.now() - startedAt > order.budget.max_wall_ms) {
+        outcomes.push({ reference: item.reference, status: "not_started", error: "Task-order wall-clock budget reached." });
+        break;
+      }
+    }
+
+    const scheduleTime = databaseScheduleTime(item.schedule_time);
+    const { data: duplicate, error: duplicateError } = await service
+      .from("scheduled_emails")
+      .select("id,zoho_url")
+      .eq("related_deal_id", item.deal_id)
+      .eq("related_contact_id", item.contact_id)
+      .ilike("to_email", item.to)
+      .eq("subject", item.subject)
+      .eq("schedule_date", item.schedule_date)
+      .eq("schedule_time", scheduleTime)
+      .eq("status", "scheduled")
+      .maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) {
+      outcomes.push({
+        reference: item.reference,
+        status: "already_scheduled",
+        deal_url: item.deal_url,
+        scheduled_email_id: (duplicate as { id: string }).id
+      });
+      consecutiveFailures = 0;
+      continue;
+    }
+
+    const { data: inserted, error: insertError } = await service
+      .from("tool_jobs")
+      .insert({
+        user_id: user.id,
+        session_id: sessionId,
+        tool_name: "schedule_zoho_email",
+        args: item,
+        ...(order ? { task_order_id: order.id } : { approval_id: approvalId })
+      })
+      .select("id")
+      .single();
+    if (insertError) throw insertError;
+
+    await service.from("audit_events").insert({
+      user_id: user.id,
+      event_type: "deterministic_email_queued",
+      message: `Queued deterministic email schedule for ${item.reference}.`,
+      metadata: {
+        session_id: sessionId,
+        task_order_id: order?.id ?? null,
+        approval_id: approvalId,
+        deal_id: item.deal_zoho_id,
+        reference: item.reference
+      }
+    });
+    await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+    const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+    pausedMs += job.waitedMs;
+    executed += 1;
+
+    if (job.ok) {
+      consecutiveFailures = 0;
+      const result = job.result as Record<string, unknown> | null;
+      outcomes.push({ reference: item.reference, status: "scheduled", deal_url: item.deal_url, result });
+      const { error: emailLogError } = await service.from("scheduled_emails").insert({
+        related_deal_id: item.deal_id,
+        related_contact_id: item.contact_id,
+        to_email: item.to,
+        cc_emails: item.cc,
+        subject: item.subject,
+        body_hash: createHash("sha256").update(item.body, "utf8").digest("hex"),
+        schedule_date: item.schedule_date,
+        schedule_time: scheduleTime,
+        status: "scheduled",
+        zoho_url: item.deal_url,
+        raw_data: result ?? {}
+      });
+      if (emailLogError) throw emailLogError;
+    } else {
+      consecutiveFailures += 1;
+      failed += 1;
+      outcomes.push({ reference: item.reference, status: "failed", deal_url: item.deal_url, result: job.result });
+    }
+
+    await service.from("audit_events").insert({
+      user_id: user.id,
+      event_type: "deterministic_email_completed",
+      message: `${job.ok ? "Scheduled" : "Failed"} deterministic email for ${item.reference}.`,
+      metadata: {
+        session_id: sessionId,
+        task_order_id: order?.id ?? null,
+        approval_id: approvalId,
+        deal_id: item.deal_zoho_id,
+        reference: item.reference,
+        ok: job.ok
+      }
+    });
+
+    const processed = executed + unresolved.length;
+    if (consecutiveFailures >= 3 || (processed >= 5 && failed / processed > 0.2)) break;
+  }
+
+  const scheduled = outcomes.filter((row) => row.status === "scheduled").length;
+  const alreadyScheduled = outcomes.filter((row) => row.status === "already_scheduled").length;
+  const failures = outcomes.filter((row) => row.status === "failed" || row.status === "not_started").length;
+  return {
+    ok: failures === 0,
+    result: {
+      status: failures === 0 ? "completed" : scheduled + alreadyScheduled > 0 ? "partial" : "failed",
+      task_order_id: order?.id ?? null,
+      approval_id: approvalId,
+      counts: { requested: validated.args.emails.length, scheduled, already_scheduled: alreadyScheduled, failures },
+      records: outcomes,
+      expected_vs_actual: { expected: validated.args.emails.length, accounted_for: outcomes.length }
+    },
+    pausedMs
+  };
 }
 
 async function runTier2UnderTaskOrder({
@@ -2128,6 +2379,19 @@ export async function runAgentTurn({
             result = completed.result;
             activeTaskOrderId = null;
           }
+        } else if (isEmailSchedulingTool(call.name)) {
+          if (!service) throw new Error("Supabase service role is not configured for deterministic email scheduling.");
+          const scheduled = await runEmailSchedulingBatch({
+            service,
+            user,
+            sessionId,
+            call,
+            order: approvedOrder,
+            emit
+          });
+          ok = scheduled.ok;
+          result = scheduled.result;
+          pausedMs += scheduled.pausedMs;
         } else if (isBrowserTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
           if (call.name === "browser_observe") {

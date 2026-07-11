@@ -121,7 +121,10 @@ export function taskOrderProposalDecision(expectedChanges: ExpectedChange[], use
     /\b(unattended|in the background|background task|while i(?:'m| am) away|without me watching|run overnight|continue on your own)\b/i.test(
       userRequest
     );
-  if (explicitlyUnattended) return { allowed: true as const, reason: "unattended", recordCount };
+  const fileDriven = /--- ATTACHED FILE:|\battached (?:file|draft|batch)\b/i.test(userRequest);
+  if (explicitlyUnattended || fileDriven) {
+    return { allowed: true as const, reason: fileDriven ? "file_driven" : "unattended", recordCount };
+  }
 
   return {
     allowed: false as const,

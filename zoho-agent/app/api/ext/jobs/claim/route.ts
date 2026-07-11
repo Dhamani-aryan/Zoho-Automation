@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
-import { isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
+import { approvalGatedClaimDecision, isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
+import { isEmailSchedulingExtensionJob } from "@/lib/agent/email-scheduling-tools";
 import {
   queuedJobExpiryPatch,
   runningJobStalePatch,
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
     // approved task order. Browser/eval/UI jobs are intentionally ungated for
     // watched interactive sessions; API writes keep the exact scoped-linkage
     // rule because they can mutate CRM without visible UI evidence.
-    if (isTier2WriteTool(nextJob.tool_name)) {
+    if (isTier2WriteTool(nextJob.tool_name) || isEmailSchedulingExtensionJob(nextJob.tool_name)) {
       let taskOrderApproved = false;
       if (nextJob.task_order_id) {
         const { data: order, error: orderError } = await auth.service
@@ -94,10 +95,15 @@ export async function POST(request: Request) {
         if (approvalError) {
           return NextResponse.json({ error: approvalError.message }, { status: 500 });
         }
-        decision = tier2ClaimDecision(
-          { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
-          (approval?.status as string) ?? null
-        );
+        decision = isEmailSchedulingExtensionJob(nextJob.tool_name)
+          ? approvalGatedClaimDecision(
+              { approval_id: nextJob.approval_id ?? null },
+              (approval?.status as string) ?? null
+            )
+          : tier2ClaimDecision(
+              { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
+              (approval?.status as string) ?? null
+            );
       }
       if (!decision.claimable) {
         await auth.service

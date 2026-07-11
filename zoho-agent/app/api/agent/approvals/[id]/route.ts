@@ -97,7 +97,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       decided.tool_name !== "save_ui_workflow" &&
       decided.tool_name !== "save_skill_guide" &&
       decided.tool_name !== "task_order" &&
-      decided.tool_name !== "browser_eval"
+      decided.tool_name !== "browser_eval" &&
+      decided.tool_name !== "schedule_zoho_email_batch"
     ) {
       // The immutable approved snapshot is executed EXACTLY as approved.
       assertTier2JobInsertAllowed(decided.tool_name as string, id);

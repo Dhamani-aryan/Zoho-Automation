@@ -109,6 +109,10 @@ export function isEmailSchedulingTool(name: string) {
   return name === "schedule_zoho_email_batch";
 }
 
+export function isEmailSchedulingExtensionJob(name: string) {
+  return name === "schedule_zoho_email";
+}
+
 export function validateEmailSchedulingToolCall(call: AgentToolCall) {
   if (!isEmailSchedulingTool(call.name)) throw new Error(`Unknown email scheduling tool: ${call.name}`);
   return { ...call, args: scheduleZohoEmailBatchSchema.parse(call.args) };
