@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: agent routing (2026-07-11, build)
+
+Made schedule_zoho_email_batch the mandatory first method for structured email scheduling. Attached files are parsed once, file-driven/batch runs use one task order, and the batch tool is called once with all records. Generic browser tools are now limited to one focused recovery after a specific deterministic failure. Skill guides may supply method/selectors only: current-request values always win, blank CC is exactly empty, and the KD Blitz fixed CC/time rules apply only to that named source file. Updated the Phase G email-scheduling seed with the same rule and deterministic method.
+
+Verified npm run typecheck and git diff --check.
+
 ## Deterministic batch email scheduling: server coordinator (2026-07-11, build)
 
 Wired schedule_zoho_email_batch into the agent loop. The server resolves the full batch before writes, uses one task order for file-driven/batch work, queues one scoped schedule_zoho_email extension job per resolved record without returning to the model, and checks order status, Stop, record/tool/wall budgets, duplicate scheduled-email logs, three-consecutive-failure, and over-20-percent failure stops between records. Small direct runs retain the approvals_enabled behavior through one batch confirmation; extension claims and the extension executor both refuse email writes without an approved approval_id or task_order_id. Verified schedules are logged with a body hash for idempotency and return expected-vs-actual per-record reports.
