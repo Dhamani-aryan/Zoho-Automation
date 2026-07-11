@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: implementation checkpoint (2026-07-11, review)
+
+Implementation is complete for chat review. Normal structured scheduling is now parse once -> deterministic Supabase resolution -> one scoped extension job per record -> one final batch report, with no model calls between successful records. The live cloud Supabase email-scheduling guide was updated to version 4 with deterministic-first routing and the rule that blank CC remains empty; the update wrote a skill_guide_updated audit event. A read-only cloud check resolved Test Test to the single related Test|Cloud ERP Deal and canonical URL.
+
+Verification: npm run test:orchestrator (22/22), npm run test:tier2 (15/15), npm run test:records (5/5), npm run typecheck, npm run lint, npm run build, npm run build:extension, and git diff --check all passed. Live acceptance is intentionally not executed automatically because scheduling is externally consequential. Reload extension/dist as the unpacked extension, then run the test draft and compare deterministic_email_* audit timings and tool-call count. Stop for chat review before treating the follow-up as accepted.
+
 ## Deterministic batch email scheduling: focused regression tests (2026-07-11, build)
 
 Added regression coverage for the deterministic email contract, blank-CC normalization, signature-preservation requirement, schedule format rejection, file-driven task-order eligibility, exact extension write-set membership, and extension refusal without approval/order linkage. Existing Tier-2 write names remain unchanged; schedule_zoho_email is asserted as the one additional scoped extension write job.
