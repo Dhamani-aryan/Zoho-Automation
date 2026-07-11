@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic batch email scheduling: task preparation (2026-07-11, build)
+
+Extended each schedule_zoho_email job with explicit new_tasks and tasks_to_complete. Before composing, the deterministic runner opens Open Activities, duplicate-checks each requested new task, creates it through the proven Add New -> Task selectors, verifies subject/due date in Open Activities, locates each completion request by exact subject, scopes markAsCompletedIcon to that task row, and verifies it no longer appears open. Missing or ambiguous tasks fail the record before email composition; guides cannot invent task values. The agent now passes task sections in the same batch call instead of returning to an exploratory task loop.
+
+Verified npm run typecheck and npm run build:extension.
+
 ## Deterministic batch email scheduling: implementation checkpoint (2026-07-11, review)
 
 Implementation is complete for chat review. Normal structured scheduling is now parse once -> deterministic Supabase resolution -> one scoped extension job per record -> one final batch report, with no model calls between successful records. The live cloud Supabase email-scheduling guide was updated to version 4 with deterministic-first routing and the rule that blank CC remains empty; the update wrote a skill_guide_updated audit event. A read-only cloud check resolved Test Test to the single related Test|Cloud ERP Deal and canonical URL.

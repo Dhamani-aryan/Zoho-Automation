@@ -9,6 +9,13 @@ const scheduleTime = z
   .string()
   .trim()
   .regex(/^(?:0?\d|1[0-2]):[0-5]\d\s*(?:AM|PM)$|^(?:[01]?\d|2[0-3]):[0-5]\d$/i, "Use HH:MM AM/PM or 24-hour HH:MM.");
+const newTaskSchema = z.object({
+  subject: nonEmpty.max(500),
+  due_date: isoDate
+});
+const completeTaskSchema = z.object({
+  subject: nonEmpty.max(500)
+});
 
 export const emailScheduleItemSchema = z
   .object({
@@ -25,7 +32,9 @@ export const emailScheduleItemSchema = z
     schedule_date: isoDate,
     schedule_time: scheduleTime,
     timezone: nonEmpty.max(100).default("Asia/Kolkata"),
-    preserve_signature: z.literal(true).default(true)
+    preserve_signature: z.literal(true).default(true),
+    new_tasks: z.array(newTaskSchema).max(20).default([]),
+    tasks_to_complete: z.array(completeTaskSchema).max(20).default([])
   })
   .refine((item) => Boolean(item.to || item.contact_name || item.deal_url || item.deal_name), {
     message: "Provide a recipient email, contact name, deal URL, or deal name."
@@ -60,7 +69,7 @@ export const EMAIL_SCHEDULING_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "schedule_zoho_email_batch",
     tier: 2,
     description:
-      "Deterministically resolve and schedule 1-100 Zoho emails without model calls between records. Use this for structured email drafts instead of browser_eval/ui_step. Blank CC means no CC. Each email is resolved to one Contact and related Deal, composed above the existing signature, scheduled (never sent immediately), and verified independently. More than 3 records requires an active task order.",
+      "Deterministically resolve and schedule 1-100 Zoho emails without model calls between records. Use this for structured email drafts instead of browser_eval/ui_step. Optional new_tasks are duplicate-checked and created; tasks_to_complete target one exact open task and are verified closed before composing. Blank CC means no CC. Each email is resolved to one Contact and related Deal, composed above the existing signature, scheduled (never sent immediately), and verified independently. More than 3 records requires an active task order.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -96,7 +105,27 @@ export const EMAIL_SCHEDULING_TOOL_DEFINITIONS: AgentToolDefinition[] = [
               schedule_date: { type: "string", description: "YYYY-MM-DD" },
               schedule_time: { type: "string", description: "HH:MM AM/PM or 24-hour HH:MM" },
               timezone: { type: "string" },
-              preserve_signature: { const: true }
+              preserve_signature: { const: true },
+              new_tasks: {
+                type: "array",
+                maxItems: 20,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["subject", "due_date"],
+                  properties: { subject: { type: "string" }, due_date: { type: "string", description: "YYYY-MM-DD" } }
+                }
+              },
+              tasks_to_complete: {
+                type: "array",
+                maxItems: 20,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["subject"],
+                  properties: { subject: { type: "string" } }
+                }
+              }
             }
           }
         }
