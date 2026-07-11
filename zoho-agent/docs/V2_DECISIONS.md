@@ -1,5 +1,11 @@
 # V2 Decisions
 
+## Deterministic scheduler live acceptance: implicit Zoho id reads (2026-07-11, fix)
+
+The recovery model requested fields including id and hit "Unknown Deals field(s): id" even though Zoho returns record id implicitly. zoho_get_record now removes case-insensitive id from the requested field list before metadata validation and extension dispatch, dedupes the remaining fields, and rejects an id-only request with a focused message. The tool description now tells the model not to request id.
+
+Verified npm run test:orchestrator (24/24), npm run typecheck, and npm run lint.
+
 ## Deterministic scheduler live acceptance: record budget accounting (2026-07-11, fix)
 
 The first live recovery reads caused "task order record budget exceeded (3)" because the loop recursively counted every nested id in tool results, including Owner, Account, and Contact ids from read-only zoho_get_record output. Task-order record usage is now derived only from mutating tool arguments: schedule_zoho_email_batch counts its email rows, Tier-2 writes count unique targets, undo_record counts one, and reads/browser observations count zero.

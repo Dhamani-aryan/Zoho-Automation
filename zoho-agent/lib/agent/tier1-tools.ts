@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 import { upsertZohoRecords, type MirrorDbClient, type SyncModule } from "@/lib/records/zoho-upsert";
+import { normalizeZohoReadFields } from "@/lib/agent/zoho-read-fields";
 
 const modules = ["Accounts", "Contacts", "Deals"] as const;
 const relatedChildren = ["Contacts", "Deals"] as const;
@@ -114,7 +115,7 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "zoho_get_record",
     tier: 1,
     description:
-      "Read authoritative current fields for one live Zoho Account, Contact, or Deal by Zoho id. Use before/after writes and whenever mirror freshness is insufficient.",
+      "Read authoritative current fields for one live Zoho Account, Contact, or Deal by Zoho id. The record id is always returned implicitly; do not request `id` in fields. Use before/after writes and whenever mirror freshness is insufficient.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -222,8 +223,9 @@ export async function validateTier1ToolCall(call: AgentToolCall, service: Supaba
 
   if (call.name === "zoho_get_record") {
     const args = zohoGetRecordSchema.parse(call.args);
-    await assertFieldsExist(service, args.module, args.fields);
-    return { ...call, args };
+    const fields = normalizeZohoReadFields(args.fields);
+    await assertFieldsExist(service, args.module, fields);
+    return { ...call, args: { ...args, fields } };
   }
 
   if (call.name === "zoho_get_related") {

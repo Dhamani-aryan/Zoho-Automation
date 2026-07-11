@@ -41,6 +41,7 @@ import {
   workspaceRootFromCwd
 } from "../lib/agent/workspace-files";
 import { verifiedWriteFollowup } from "../lib/agent/tier2-tools";
+import { normalizeZohoReadFields } from "../lib/agent/zoho-read-fields";
 import {
   isEmailSchedulingExtensionJob,
   scheduleZohoEmailBatchSchema
@@ -327,6 +328,11 @@ test("task order record usage counts writes only and ignores nested read ids", (
     0
   );
   assert.equal(taskOrderRecordUsage("browser_observe", { id: "nested-read-id" }), 0);
+});
+
+test("live record reads treat id as implicit instead of an unknown CRM field", () => {
+  assert.deepEqual(normalizeZohoReadFields(["id", "Deal_Name", "Stage", "Deal_Name"]), ["Deal_Name", "Stage"]);
+  assert.throws(() => normalizeZohoReadFields(["id", " ID "]), /besides implicit id/);
 });
 
 test("verified Tier-2 writes require live read-back before mirror sync", () => {
