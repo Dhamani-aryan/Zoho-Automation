@@ -182,6 +182,85 @@ export type PreparedTier2 =
       tags: string[];
     };
 
+export type Tier2ExecutionSnapshot =
+  | {
+      tool_name: "zoho_update_fields";
+      module: Tier2Module;
+      updates: Array<{ zoho_id: string; expected_name: string | null; fields: Record<string, unknown> }>;
+    }
+  | {
+      tool_name: "zoho_change_owner";
+      module: Tier2Module;
+      owner: { id: string; name: string };
+      records: Array<{ zoho_id: string; expected_name: string | null }>;
+    }
+  | {
+      tool_name: "zoho_add_tags" | "zoho_remove_tags";
+      module: Tier2Module;
+      tags: string[];
+      records: Array<{ zoho_id: string; expected_name: string | null }>;
+    };
+
+const MIRROR_MODULE_KEY: Record<Tier2Module, "accounts" | "contacts" | "deals"> = {
+  Accounts: "accounts",
+  Contacts: "contacts",
+  Deals: "deals"
+};
+
+function nameField(module: Tier2Module): string {
+  if (module === "Accounts") return "Account_Name";
+  if (module === "Contacts") return "Full_Name";
+  return "Deal_Name";
+}
+
+function fieldsForMirrorReadback(snapshot: Tier2ExecutionSnapshot): string[] {
+  const fields = new Set<string>([nameField(snapshot.module)]);
+  if (snapshot.tool_name === "zoho_update_fields") {
+    for (const update of snapshot.updates) for (const field of Object.keys(update.fields)) fields.add(field);
+  } else if (snapshot.tool_name === "zoho_change_owner") {
+    fields.add("Owner");
+  } else {
+    fields.add("Tag");
+  }
+  return [...fields];
+}
+
+export function verifiedWriteFollowup({
+  ok,
+  snapshot
+}: {
+  ok: boolean;
+  snapshot: Tier2ExecutionSnapshot;
+}) {
+  if (!ok) return null;
+  const recordIds =
+    snapshot.tool_name === "zoho_update_fields"
+      ? snapshot.updates.map((record) => record.zoho_id)
+      : snapshot.records.map((record) => record.zoho_id);
+  const mirrorModule = MIRROR_MODULE_KEY[snapshot.module];
+  const fields = fieldsForMirrorReadback(snapshot);
+
+  return {
+    live_readback_required: true,
+    mirror_sync_required: true,
+    next_required_actions: [
+      {
+        tool: "zoho_get_record",
+        reason: "Fetch the authoritative live Zoho record after the verified write.",
+        module: snapshot.module,
+        zoho_ids: recordIds,
+        fields
+      },
+      {
+        tool: "db_sync_records",
+        reason: "Upsert the exact live record(s) returned by zoho_get_record into the Supabase mirror.",
+        module: mirrorModule,
+        records: "Use the exact authoritative live record object(s) returned by zoho_get_record; do not synthesize records."
+      }
+    ]
+  };
+}
+
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
 }

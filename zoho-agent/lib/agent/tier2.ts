@@ -6,7 +6,7 @@ import {
   tagsOf,
   type MirrorModuleKey
 } from "@/lib/records/mirror";
-import { tier2RecordIds, type PreparedTier2, type Tier2Module } from "@/lib/agent/tier2-tools";
+import { tier2RecordIds, type PreparedTier2, type Tier2ExecutionSnapshot, type Tier2Module } from "@/lib/agent/tier2-tools";
 
 // Orchestrates the approval gate for a validated Tier-2 write: builds the
 // before/after summary shown in the card, freezes the immutable snapshot that
@@ -39,24 +39,7 @@ export type ApprovalSummaryRecord = {
 // The immutable executed snapshot. Shapes are tool-specific; each carries an
 // expected_name per record so the extension can run an identity check before
 // writing.
-export type Tier2Snapshot =
-  | {
-      tool_name: "zoho_update_fields";
-      module: Tier2Module;
-      updates: Array<{ zoho_id: string; expected_name: string | null; fields: Record<string, unknown> }>;
-    }
-  | {
-      tool_name: "zoho_change_owner";
-      module: Tier2Module;
-      owner: { id: string; name: string };
-      records: Array<{ zoho_id: string; expected_name: string | null }>;
-    }
-  | {
-      tool_name: "zoho_add_tags" | "zoho_remove_tags";
-      module: Tier2Module;
-      tags: string[];
-      records: Array<{ zoho_id: string; expected_name: string | null }>;
-    };
+export type Tier2Snapshot = Tier2ExecutionSnapshot;
 
 // Live fetch injected by the loop (backed by the Phase B bridge) so summary
 // building can fall back to live Zoho when the mirror is missing a record.

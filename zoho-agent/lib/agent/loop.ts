@@ -18,6 +18,7 @@ import {
   isTier2Tool,
   TIER2_TOOL_DEFINITIONS,
   validateTier2Call,
+  verifiedWriteFollowup,
   type Tier2Module
 } from "@/lib/agent/tier2-tools";
 import {
@@ -345,13 +346,15 @@ async function handleTier2Call({
     await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
     const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
     const jobResult = job.result as Record<string, unknown> | null;
+    const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
     return {
       ok: job.ok,
       result: {
         approval_id: approvalId,
         status: job.ok ? "executed" : "failed",
         auto_approved: true,
-        ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult })
+        ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult }),
+        ...(followup ?? {})
       },
       pausedMs: job.waitedMs
     };
@@ -384,12 +387,14 @@ async function handleTier2Call({
   const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
   const pausedMs = decision.waitedMs + job.waitedMs;
   const jobResult = job.result as Record<string, unknown> | null;
+  const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
   return {
     ok: job.ok,
     result: {
       approval_id: approvalId,
       status: job.ok ? "executed" : "failed",
-      ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult })
+      ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult }),
+      ...(followup ?? {})
     },
     pausedMs
   };
@@ -1012,13 +1017,15 @@ async function runTier2UnderTaskOrder({
 
   await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
   const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+  const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
   return {
     ok: job.ok,
     result: {
       task_order_id: order.id,
       approval_id: approvalId,
       status: job.ok ? "executed" : "failed",
-      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
+      ...(followup ?? {})
     },
     pausedMs: job.waitedMs
   };

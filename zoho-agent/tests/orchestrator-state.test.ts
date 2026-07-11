@@ -39,6 +39,7 @@ import {
   resolveWorkspaceFilePath,
   workspaceRootFromCwd
 } from "../lib/agent/workspace-files";
+import { verifiedWriteFollowup } from "../lib/agent/tier2-tools";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -297,6 +298,51 @@ test("task order budgets stop on tool, wall-clock, or record limits", () => {
       recordsTouched: 3
     }).ok,
     false
+  );
+});
+
+test("verified Tier-2 writes require live read-back before mirror sync", () => {
+  assert.deepEqual(
+    verifiedWriteFollowup({
+      ok: true,
+      snapshot: {
+        tool_name: "zoho_update_fields",
+        module: "Deals",
+        updates: [
+          {
+            zoho_id: "D1",
+            expected_name: "Test Deal",
+            fields: { Next_Step: "3rd Email", Closing_Date: "2026-08-31" }
+          }
+        ]
+      }
+    }),
+    {
+      live_readback_required: true,
+      mirror_sync_required: true,
+      next_required_actions: [
+        {
+          tool: "zoho_get_record",
+          reason: "Fetch the authoritative live Zoho record after the verified write.",
+          module: "Deals",
+          zoho_ids: ["D1"],
+          fields: ["Deal_Name", "Next_Step", "Closing_Date"]
+        },
+        {
+          tool: "db_sync_records",
+          reason: "Upsert the exact live record(s) returned by zoho_get_record into the Supabase mirror.",
+          module: "deals",
+          records: "Use the exact authoritative live record object(s) returned by zoho_get_record; do not synthesize records."
+        }
+      ]
+    }
+  );
+  assert.equal(
+    verifiedWriteFollowup({
+      ok: false,
+      snapshot: { tool_name: "zoho_change_owner", module: "Contacts", owner: { id: "U1", name: "Aryan" }, records: [] }
+    }),
+    null
   );
 });
 

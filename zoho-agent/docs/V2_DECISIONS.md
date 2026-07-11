@@ -1,5 +1,13 @@
 # V2 Decisions
 
+## Snap-like agent rewrite Step 4: write feedback drives live read-back and mirror sync (2026-07-11, build)
+
+The prompt already told the model to sync Supabase after verified Zoho writes, but that instruction could be skipped during long autonomous loops. Added a server-side tool-result follow-up for successful Tier-2 Account/Contact/Deal writes. The result now explicitly marks live_readback_required and mirror_sync_required, then names the required next actions: zoho_get_record for the authoritative live fields and db_sync_records using exactly the returned live records.
+
+This intentionally does not auto-write invented mirror data. Failed writes receive no sync directive. One-off approval-card writes, auto-approved writes, and task-order writes all use the same follow-up helper.
+
+Verified npm run test:orchestrator (21/21), npm run typecheck, and npm run lint.
+
 ## Snap-like agent rewrite Step 3: harness budgets that permit real tool loops (2026-07-10, build)
 
 Found a harness contradiction: task orders carried reviewed defaults of 200 calls/45 minutes, but runAgentTurn always stopped at the global 15 calls/3 minutes first. This made the larger task-order budget decorative and prevented the multi-tool feedback loop requested in BUILD_AN_AGENT_LIKE_SNAP.md.
