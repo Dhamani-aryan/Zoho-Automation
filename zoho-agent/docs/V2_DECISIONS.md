@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H5 zoho_api verification receipts (2026-07-12, build)
+
+Added server-side read-back receipts for mutating zoho_api calls. After POST/PUT jobs report, the agent loop derives touched records from body.data ids or Zoho response details ids, queues one zoho_api GET read-back per target through the extension bridge, compares requested fields, and attaches receipts with status, Zoho id, verified fields, correlation id, method, elapsed time, and error. Failed writes produce failed receipts when targets are known; read-back failures produce write_ok_unverified. complete_task_order now refuses a write order whose linked mutating zoho_api results have zero receipts.
+
 ## Phase H4 hard never-send guard (2026-07-12, build)
 
 Added an extension-side send-now guard so agent-driven browser work can schedule emails but cannot immediately send them. Trusted CDP clicks are checked at the live elementFromPoint target before dispatch; visible Send controls are blocked unless the target is a Schedule control. browser_eval now rejects obvious send-now endpoints before execution, temporarily wraps window.fetch while model code runs, and installs capture-phase click guards in the top document and selected same-origin frame. Ctrl/Cmd/Meta+Enter key strings are blocked before dispatch. Blocked actions return "send-now is blocked; schedule instead" so the model can recover toward scheduling.

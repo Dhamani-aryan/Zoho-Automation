@@ -50,8 +50,10 @@ import {
   type BrowserEvalArgs
 } from "@/lib/agent/browser-tools";
 import {
+  compareZohoApiReadBack,
   isZohoApiWriteArgs,
   zohoApiReadSchema,
+  zohoApiWriteTargets,
   type ZohoApiArgs
 } from "@/lib/agent/zoho-api";
 import {
@@ -874,6 +876,28 @@ async function proposeTaskOrder({
   };
 }
 
+async function zohoApiReceiptStatsForOrder(service: SupabaseClient, sessionId: string, orderId: string) {
+  const { data, error } = await service
+    .from("agent_messages")
+    .select("tool_args,tool_result")
+    .eq("session_id", sessionId)
+    .eq("role", "tool")
+    .eq("tool_name", "zoho_api")
+    .limit(500);
+  if (error) throw error;
+  let mutatingResults = 0;
+  let receipts = 0;
+  for (const row of (data ?? []) as Array<{ tool_args: Record<string, unknown> | null; tool_result: unknown }>) {
+    if (!isZohoApiWriteArgs(row.tool_args)) continue;
+    const result = row.tool_result && typeof row.tool_result === "object" ? (row.tool_result as Record<string, unknown>) : {};
+    if (result.task_order_id !== orderId) continue;
+    mutatingResults += 1;
+    const resultReceipts = Array.isArray(result.receipts) ? result.receipts : [];
+    receipts += resultReceipts.length;
+  }
+  return { mutatingResults, receipts };
+}
+
 async function completeTaskOrder({
   service,
   user,
@@ -891,6 +915,18 @@ async function completeTaskOrder({
   if (!order) throw new Error("No active approved task order to complete.");
 
   const report = typeof args.report === "string" ? { summary: args.report } : args.report;
+  const receiptStats = await zohoApiReceiptStatsForOrder(service, sessionId, order.id);
+  if (order.scope === "write" && receiptStats.mutatingResults > 0 && receiptStats.receipts === 0) {
+    return {
+      ok: false,
+      result: {
+        task_order_id: order.id,
+        status: "not_completed",
+        error: "Mutating zoho_api task orders require at least one verification receipt before completion.",
+        receipt_stats: receiptStats
+      }
+    };
+  }
   const completedAt = new Date().toISOString();
   const { data, error } = await service
     .from("task_orders")
@@ -1484,6 +1520,82 @@ async function enqueueZohoApi({
   return job;
 }
 
+async function withZohoApiReceipts({
+  service,
+  user,
+  sessionId,
+  call,
+  args,
+  job
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  args: ZohoApiArgs;
+  job: { ok: boolean; result: unknown; waitedMs: number };
+}) {
+  if (!isZohoApiWriteArgs(args)) return job.result;
+  const targets = zohoApiWriteTargets(args, job.result);
+  const receipts: Array<Record<string, unknown>> = [];
+  for (const target of targets) {
+    const started = Date.now();
+    const fields = Object.keys(target.fields);
+    const correlationId = `${call.id}:${target.module}:${target.id}`;
+    if (!job.ok) {
+      receipts.push({
+        status: "failed",
+        zoho_id: target.id,
+        verified_fields: {},
+        correlation_id: correlationId,
+        method: "zoho_api_readback",
+        elapsed_ms: Date.now() - started,
+        error: "write job failed before read-back verification"
+      });
+      continue;
+    }
+    try {
+      const readBack = (await runBridgedTool({
+        service,
+        user,
+        sessionId,
+        call: {
+          id: `${call.id}-verify-${target.id}`,
+          name: "zoho_api",
+          args: {
+            method: "GET",
+            path: `/crm/v3/${target.module}/${target.id}`,
+            params: fields.length ? { fields: fields.join(",") } : {}
+          }
+        }
+      })) as { body?: { data?: Array<Record<string, unknown>> } } | null;
+      const record = Array.isArray(readBack?.body?.data) ? readBack.body.data[0] ?? {} : {};
+      const compared = compareZohoApiReadBack(target.fields, record);
+      receipts.push({
+        status: compared.verified ? "verified" : "failed",
+        zoho_id: target.id,
+        verified_fields: compared.verified_fields,
+        correlation_id: correlationId,
+        method: "zoho_api_readback",
+        elapsed_ms: Date.now() - started,
+        error: compared.verified ? null : `read-back mismatch: ${compared.mismatches.join(", ")}`
+      });
+    } catch (error) {
+      receipts.push({
+        status: "write_ok_unverified",
+        zoho_id: target.id,
+        verified_fields: {},
+        correlation_id: correlationId,
+        method: "zoho_api_readback",
+        elapsed_ms: Date.now() - started,
+        error: error instanceof Error ? error.message : "read-back verification failed"
+      });
+    }
+  }
+  const base = job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result };
+  return { ...base, receipts };
+}
+
 async function runZohoApiTool({
   service,
   user,
@@ -1513,12 +1625,15 @@ async function runZohoApiTool({
 
   if (order) {
     const job = await enqueueZohoApi({ service, user, sessionId, call, args, taskOrderId: order.id, emit });
+    const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
     return {
       ok: job.ok,
       result: {
         task_order_id: order.id,
         status: job.ok ? "executed" : "failed",
-        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+        ...(resultWithReceipts && typeof resultWithReceipts === "object"
+          ? (resultWithReceipts as Record<string, unknown>)
+          : { result: resultWithReceipts })
       },
       pausedMs: job.waitedMs
     };
@@ -1543,13 +1658,16 @@ async function runZohoApiTool({
   const approvalId = (approval as { id: string }).id;
   if (!user.approvals_enabled) {
     const job = await enqueueZohoApi({ service, user, sessionId, call, args, approvalId, emit });
+    const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
     return {
       ok: job.ok,
       result: {
         approval_id: approvalId,
         status: job.ok ? "executed" : "failed",
         auto_approved: true,
-        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+        ...(resultWithReceipts && typeof resultWithReceipts === "object"
+          ? (resultWithReceipts as Record<string, unknown>)
+          : { result: resultWithReceipts })
       },
       pausedMs: job.waitedMs
     };
@@ -1572,12 +1690,15 @@ async function runZohoApiTool({
   }
 
   const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
+  const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
   return {
     ok: job.ok,
     result: {
       approval_id: approvalId,
       status: job.ok ? "executed" : "failed",
-      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      ...(resultWithReceipts && typeof resultWithReceipts === "object"
+        ? (resultWithReceipts as Record<string, unknown>)
+        : { result: resultWithReceipts })
     },
     pausedMs: decision.waitedMs + job.waitedMs
   };

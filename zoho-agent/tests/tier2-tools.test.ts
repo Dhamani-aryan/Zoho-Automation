@@ -14,12 +14,14 @@ import {
   type PreparedTier2
 } from "../lib/agent/tier2-tools";
 import {
+  compareZohoApiReadBack,
   isBlockedZohoApiPath,
   isAllowedZohoApiPath,
   isZohoApiWriteArgs,
   moduleFromZohoApiPath,
   shapeZohoApiResponse,
-  zohoApiReadSchema
+  zohoApiReadSchema,
+  zohoApiWriteTargets
 } from "../lib/agent/zoho-api";
 import type { FieldMetaRow } from "../lib/plan/field-rules";
 
@@ -352,4 +354,34 @@ test("send-now guard blocks trusted clicks, eval fetches, and modifier enter", (
   assert.match(jobsSource, /addEventListener\("click", clickGuard, true\)/);
   assert.match(jobsSource, /isModifierEnterKey\(key\)/);
   assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
+});
+
+test("zoho_api write receipts can derive targets and compare read-back fields", () => {
+  const targets = zohoApiWriteTargets(
+    {
+      method: "POST",
+      path: "/crm/v2.2/Tasks",
+      body: { data: [{ Subject: "Follow up", Status: "Not Started" }] }
+    },
+    { body: { data: [{ code: "SUCCESS", details: { id: "T1" } }] } }
+  );
+  assert.deepEqual(targets, [
+    { module: "Tasks", id: "T1", fields: { Subject: "Follow up", Status: "Not Started" } }
+  ]);
+
+  assert.deepEqual(compareZohoApiReadBack({ Subject: "Follow up" }, { Subject: "Follow up", id: "T1" }), {
+    verified: true,
+    verified_fields: { Subject: "Follow up" },
+    mismatches: []
+  });
+  assert.deepEqual(compareZohoApiReadBack({ Status: "Completed" }, { Status: "Not Started" }), {
+    verified: false,
+    verified_fields: {},
+    mismatches: ["Status"]
+  });
+
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /withZohoApiReceipts/);
+  assert.match(loopSource, /zohoApiReceiptStatsForOrder/);
+  assert.match(loopSource, /require at least one verification receipt/);
 });
