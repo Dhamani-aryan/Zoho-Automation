@@ -88,10 +88,6 @@ import {
   type ResolvedEmailScheduleItem
 } from "@/lib/agent/email-scheduling-tools";
 import {
-  allowsToolAfterTaskPreparationFailure,
-  hasTaskPreparationFailure
-} from "@/lib/agent/email-recovery-policy";
-import {
   extractScheduledEmailVerification,
   hasComposerBrowserMutation,
   scheduledEmailCompletionDecision
@@ -2493,7 +2489,6 @@ export async function runAgentTurn({
   let activeTaskOrderId: string | null = null;
   let taskOrderToolCalls = 0;
   let taskOrderRecordsTouched = 0;
-  let taskPreparationRecoveryBlocked = false;
 
   while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
     let approvedOrder: ActiveTaskOrder | null = null;
@@ -2547,13 +2542,9 @@ export async function runAgentTurn({
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const turnInstructions = instructionsForTurn(teachMode, user.approvals_enabled, automaticGuideContext);
     const model = await provider.runTools({
-      instructions: taskPreparationRecoveryBlocked
-        ? `${turnInstructions}\n\nThe deterministic email worker ended with TASK_PREPARATION_FAILED. This is a hard stop for the current request. Do not retry scheduling or call Zoho read, browser, or UI recovery tools. Complete the active task order from the deterministic result and report the failure concisely.`
-        : turnInstructions,
+      instructions: turnInstructions,
       messages: transcript,
-      tools: AGENT_TOOL_DEFINITIONS.filter((tool) =>
-        allowsToolAfterTaskPreparationFailure(tool.name, taskPreparationRecoveryBlocked)
-      )
+      tools: AGENT_TOOL_DEFINITIONS
     });
 
     if (model.text.trim()) {
@@ -2666,15 +2657,6 @@ export async function runAgentTurn({
           ok = scheduled.ok;
           result = scheduled.result;
           pausedMs += scheduled.pausedMs;
-          if (!scheduled.ok && hasTaskPreparationFailure(scheduled.result)) {
-            taskPreparationRecoveryBlocked = true;
-            await service.from("audit_events").insert({
-              user_id: user.id,
-              event_type: "deterministic_task_recovery_blocked",
-              message: "Blocked model-driven recovery after deterministic task preparation failure.",
-              metadata: { session_id: sessionId, task_order_id: activeTaskOrderId, call_id: call.id }
-            });
-          }
         } else if (isBrowserTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
           if (call.name !== "browser_eval") {
