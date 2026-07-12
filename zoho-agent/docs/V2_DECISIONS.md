@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## V3 J4 authenticated SSE transport with polling fallback (2026-07-12, build)
+
+Added a localhost-only authenticated SSE job stream at /api/ext/jobs/stream. The stream uses the existing extension bearer token, claims the next queued durable tool_jobs row, sends one job event plus org/domain context, heartbeats while idle, and then lets the extension reconnect. The MV3 service worker now starts the SSE loop and keeps the existing alarm/polling path as automatic fallback. Job execution and reporting still use the same durable tool_jobs rows and existing executor, so audit and recovery behavior remain intact while reducing extension-side polling latency.
+
 ## V3 J3 HeySnap-style surface and soul prompt (2026-07-12, build)
 
 Changed the model-facing surface to the general HeySnap-style toolbox: read_workspace_file, db_search_records, db_get_record, db_query, zoho_api, db_sync_records, browser primitives, and skill guide tools. Task-order tools, undo tools, ui_step/ui_workflow tools, deterministic email scheduling, Tier-2 business verbs, and legacy Zoho read wrappers are no longer advertised to the model. The base prompt now names TEACH, REPEAT, and EXPLORE modes, tells the model to use zoho_api/browser primitives directly, removes legacy ui_workflow and task-order instructions, includes Tasks in the allowed module scope, and saves skill guides directly with audit events instead of approval cards.

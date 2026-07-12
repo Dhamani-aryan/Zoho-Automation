@@ -113,6 +113,59 @@ export function claimJob(settings: ExtensionSettings) {
   return appFetch<JobClaimResponse>(settings, "/api/ext/jobs/claim", { method: "POST" }, 15000);
 }
 
+export async function streamJob(settings: ExtensionSettings, signal?: AbortSignal): Promise<JobClaimResponse> {
+  if (!settings.token.trim()) throw new Error("Extension token is missing.");
+  const url = `${settings.backendUrl.replace(/\/$/, "")}/api/ext/jobs/stream`;
+  const response = await fetch(url, {
+    method: "GET",
+    signal,
+    headers: {
+      Authorization: `Bearer ${settings.token}`,
+      Accept: "text/event-stream"
+    }
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(typeof body.error === "string" ? body.error : `Stream failed with ${response.status}.`);
+  }
+  if (!response.body) throw new Error("Job stream returned no response body.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = raw
+          .split("\n")
+          .find((line) => line.startsWith("event: "))
+          ?.slice("event: ".length)
+          .trim();
+        const dataLine = raw
+          .split("\n")
+          .find((line) => line.startsWith("data: "))
+          ?.slice("data: ".length);
+        const data = dataLine ? JSON.parse(dataLine) : {};
+        if (event === "job") return data as JobClaimResponse;
+        if (event === "error") {
+          const message = data && typeof data === "object" ? (data as { error?: unknown }).error : null;
+          throw new Error(typeof message === "string" ? message : "Job stream failed.");
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return { job: null };
+}
+
 export function reportJobDone(settings: ExtensionSettings, jobId: string, result: unknown) {
   return appFetch<{ ok: boolean }>(
     settings,

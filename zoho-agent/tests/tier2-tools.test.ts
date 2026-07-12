@@ -247,6 +247,29 @@ test("extension browser jobs stay in a dedicated background window", () => {
   assert.match(source, /Input\.dispatchKeyEvent/);
 });
 
+test("V3 transport starts SSE stream with polling fallback", () => {
+  const routeSource = readFileSync(resolve(process.cwd(), "app/api/ext/jobs/stream/route.ts"), "utf8");
+  assert.match(routeSource, /text\/event-stream/);
+  assert.match(routeSource, /requireExtensionAuth/);
+  assert.match(routeSource, /ZOHO_CRM_DOMAIN/);
+  assert.match(routeSource, /CLAIM_POLL_MS = 500/);
+  assert.match(routeSource, /localhost_only: true/);
+
+  const apiSource = readFileSync(resolve(process.cwd(), "extension/src/api.ts"), "utf8");
+  assert.match(apiSource, /streamJob/);
+  assert.match(apiSource, /Accept: "text\/event-stream"/);
+  assert.match(apiSource, /Authorization: `Bearer \$\{settings\.token\}`/);
+
+  const backgroundSource = readFileSync(resolve(process.cwd(), "extension/src/background.ts"), "utf8");
+  assert.match(backgroundSource, /startJobStream\(\)/);
+  assert.match(backgroundSource, /startJobPolling\(\)/);
+
+  const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  assert.match(jobsSource, /STREAM_RECONNECT_MS/);
+  assert.match(jobsSource, /streamJob\(settings, controller\.signal\)/);
+  assert.match(jobsSource, /SSE job stream fallback/);
+});
+
 test("Zoho task preparation uses API writes with supported deal-scoped task read-back", () => {
   const source = readFileSync(resolve(process.cwd(), "extension/src/page-runner-write.ts"), "utf8");
   assert.match(source, /job\.tool_name === "zoho_prepare_tasks"/);

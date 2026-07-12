@@ -1,5 +1,5 @@
 import { claim, handshake, reportSkipped } from "./api";
-import { pollAgentJobOnce, startJobPolling } from "./jobs";
+import { pollAgentJobOnce, startJobPolling, startJobStream } from "./jobs";
 import { loadSettings } from "./storage";
 
 const ALARM_NAME = "zoho-agent-poll";
@@ -8,6 +8,7 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
 });
 
+startJobStream();
 startJobPolling();
 
 chrome.alarms.onAlarm.addListener((alarm) => {

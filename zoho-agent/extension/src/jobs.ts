@@ -1,4 +1,4 @@
-import { claimJob, reportJobDone, reportJobFailed, type ToolJob } from "./api";
+import { claimJob, reportJobDone, reportJobFailed, streamJob, type JobClaimResponse, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
@@ -20,6 +20,8 @@ const WRITE_TOOLS = new Set([
 const ACTIVE_POLL_MS = 1500;
 const IDLE_POLL_MS = 15000;
 const IDLE_BACKOFF_AFTER_MS = 5 * 60 * 1000;
+const STREAM_RECONNECT_MS = 1000;
+const STREAM_TIMEOUT_MS = 70000;
 const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org890324941/tab/Potentials/custom-view/6834250000000087545/list";
 const AGENT_WINDOW_KEYS = {
   agentWindowId: null as number | null,
@@ -28,8 +30,14 @@ const AGENT_WINDOW_KEYS = {
 };
 
 let inFlight = false;
+let streamInFlight = false;
 let idleSince = Date.now();
 let timer: number | undefined;
+let streamTimer: number | undefined;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function debuggerApi() {
   return (chrome as unknown as { "debugger": chrome.DebuggerApi })["debugger"];
@@ -1936,44 +1944,48 @@ async function pollOnce() {
   inFlight = true;
   try {
     const claimed = await claimJob(settings);
-    if (!claimed.job) {
-      idleSince = idleSince || Date.now();
-      return;
-    }
-
-    idleSince = 0;
-    await saveLastJobStatus(`Claimed ${claimed.job.tool_name} (${claimed.job.id}).`);
-
-    // Tab check AFTER claim: a missing CRM tab now reports an actionable
-    // failure within seconds instead of leaving the job queued until the
-    // backend's 90s wait expires.
-    const tab = await crmTabForJob(claimed.job);
-    if (!tab?.id) {
-      const message =
-        "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again.";
-      await reportJobFailed(settings, claimed.job.id, message);
-      await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com agent window.`);
-      return;
-    }
-
-    await saveLastJobStatus(`Running ${claimed.job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
-    const response = await executeInTab(tab.id, claimed.job);
-
-    if (response.ok) {
-      await reportJobDone(settings, claimed.job.id, response.result ?? null);
-      await saveLastJobStatus(`Completed ${claimed.job.tool_name} (${claimed.job.id}).`);
-    } else {
-      await reportJobFailed(
-        settings,
-        claimed.job.id,
-        response.error_message ?? "Zoho job failed.",
-        response.error_code,
-        response.result
-      );
-      await saveLastJobStatus(`Failed ${claimed.job.tool_name}: ${response.error_message ?? "unknown error"}`);
-    }
+    await runClaimedJob(settings, claimed);
   } finally {
     inFlight = false;
+  }
+}
+
+async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>, claimed: JobClaimResponse) {
+  if (!claimed.job) {
+    idleSince = idleSince || Date.now();
+    return;
+  }
+
+  idleSince = 0;
+  await saveLastJobStatus(`Claimed ${claimed.job.tool_name} (${claimed.job.id}).`);
+
+  // Tab check AFTER claim: a missing CRM tab now reports an actionable
+  // failure within seconds instead of leaving the job queued until the
+  // backend's 90s wait expires.
+  const tab = await crmTabForJob(claimed.job);
+  if (!tab?.id) {
+    const message =
+      "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again.";
+    await reportJobFailed(settings, claimed.job.id, message);
+    await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com agent window.`);
+    return;
+  }
+
+  await saveLastJobStatus(`Running ${claimed.job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
+  const response = await executeInTab(tab.id, claimed.job);
+
+  if (response.ok) {
+    await reportJobDone(settings, claimed.job.id, response.result ?? null);
+    await saveLastJobStatus(`Completed ${claimed.job.tool_name} (${claimed.job.id}).`);
+  } else {
+    await reportJobFailed(
+      settings,
+      claimed.job.id,
+      response.error_message ?? "Zoho job failed.",
+      response.error_code,
+      response.result
+    );
+    await saveLastJobStatus(`Failed ${claimed.job.tool_name}: ${response.error_message ?? "unknown error"}`);
   }
 }
 
@@ -1991,6 +2003,48 @@ async function loop() {
   } finally {
     scheduleNext();
   }
+}
+
+function scheduleStreamNext(delayMs = STREAM_RECONNECT_MS) {
+  streamTimer = setTimeout(streamLoop, delayMs) as unknown as number;
+}
+
+async function streamLoop() {
+  if (streamInFlight) return;
+  const settings = await loadSettings();
+  if (!settings.enabled) {
+    scheduleStreamNext(IDLE_POLL_MS);
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+  streamInFlight = true;
+  try {
+    const claimed = await streamJob(settings, controller.signal);
+    if (claimed.job) {
+      while (inFlight) {
+        await sleep(250);
+      }
+      inFlight = true;
+      try {
+        await runClaimedJob(settings, claimed);
+      } finally {
+        inFlight = false;
+      }
+    }
+  } catch (error) {
+    await saveLastJobStatus(error instanceof Error ? `SSE job stream fallback: ${error.message}` : "SSE job stream fallback.");
+  } finally {
+    clearTimeout(timeout);
+    streamInFlight = false;
+    scheduleStreamNext();
+  }
+}
+
+export function startJobStream() {
+  if (streamTimer !== undefined) return;
+  scheduleStreamNext(0);
 }
 
 export function startJobPolling() {
