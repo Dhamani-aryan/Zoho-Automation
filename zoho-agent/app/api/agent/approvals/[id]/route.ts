@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { assertTier2JobInsertAllowed } from "@/lib/agent/tier2-tools";
+import { isZohoApiWriteArgs } from "@/lib/agent/zoho-api";
 
 type DecisionBody = { decision?: unknown };
 
@@ -101,6 +102,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       decided.tool_name !== "schedule_zoho_email_batch"
     ) {
       // The immutable approved snapshot is executed EXACTLY as approved.
+      if (decided.tool_name === "zoho_api" && !isZohoApiWriteArgs(decided.args)) {
+        return NextResponse.json({ error: "zoho_api approval did not contain a mutating POST/PUT call." }, { status: 400 });
+      }
       assertTier2JobInsertAllowed(decided.tool_name as string, id);
       const { error: jobError } = await service.from("tool_jobs").insert({
         session_id: decided.session_id,

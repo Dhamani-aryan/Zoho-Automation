@@ -31,19 +31,37 @@ export async function zohoApiPageRunner(job: {
   }
 
   function allowedPath(path: string) {
+    if (blockedPath(path)) return false;
     if (/^\/crm\/v3\/settings\/fields$/.test(path)) return true;
     if (/^\/crm\/v3\/users$/.test(path)) return true;
-    return [
+    const readPatterns = [
       /^\/crm\/v3\/(Accounts|Contacts|Deals|Tasks)$/,
       /^\/crm\/v3\/(Accounts|Contacts|Deals|Tasks)\/[A-Za-z0-9]+$/,
       /^\/crm\/v3\/(Accounts|Contacts|Deals|Tasks)\/search$/,
       /^\/crm\/v3\/Accounts\/[A-Za-z0-9]+\/(Contacts|Deals)$/,
       /^\/crm\/v2\.2\/(Accounts|Contacts|Deals|Tasks)$/,
       /^\/crm\/v2\.2\/(Accounts|Contacts|Deals|Tasks)\/[A-Za-z0-9]+$/
+    ];
+    const writePatterns = [
+      /^\/crm\/v(?:3|2\.2)\/(Accounts|Contacts|Deals|Tasks)$/,
+      /^\/crm\/v(?:3|2\.2)\/(Accounts|Contacts|Deals|Tasks)\/[A-Za-z0-9]+$/,
+      /^\/crm\/v(?:3|2\.2)\/(Accounts|Contacts|Deals|Tasks)\/[A-Za-z0-9]+\/actions\/(?:add_tags|remove_tags)$/
+    ];
+    return (String(job.args.method ?? "").trim().toUpperCase() === "GET" ? readPatterns : writePatterns).some((pattern) =>
+      pattern.test(path)
+    );
+  }
+
+  function blockedPath(path: string) {
+    return [
+      /\/actions\/(?:delete|mass_delete)\b/i,
+      /\/delete\b/i,
+      /\/actions\/[^/?#]*send/i,
+      /\/send(?:mail|_mail|now|_now)?\b/i
     ].some((pattern) => pattern.test(path));
   }
 
-  async function request(method: string, path: string, params: Record<string, string>) {
+  async function request(method: string, path: string, params: Record<string, string>, body?: unknown) {
     const url = new URL(path, ZOHO_BASE);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
@@ -56,8 +74,10 @@ export async function zohoApiPageRunner(job: {
         headers: {
           "X-ZCSRF-TOKEN": `crmcsrfparam=${token()}`,
           "X-CRM-ORG": ORG_ID,
-          "X-Requested-With": "XMLHttpRequest"
+          "X-Requested-With": "XMLHttpRequest",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" })
         },
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal
       });
 
@@ -67,16 +87,16 @@ export async function zohoApiPageRunner(job: {
         throw loggedOut("Zoho returned a login/auth response instead of JSON. Sign back into crm.zoho.com.");
       }
 
-      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      const code = typeof body.code === "string" ? body.code : "";
+      const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const code = typeof parsed.code === "string" ? parsed.code : "";
       if (code === "INVALID_TICKET" || code === "AUTHENTICATION_FAILURE") {
         throw loggedOut(`Zoho authentication failed: ${code}.`);
       }
       if (!response.ok) {
-        const message = [code, typeof body.message === "string" ? body.message : ""].filter(Boolean).join(": ");
+        const message = [code, typeof parsed.message === "string" ? parsed.message : ""].filter(Boolean).join(": ");
         throw new Error(message || `Zoho ${method} failed with ${response.status}.`);
       }
-      return { status: response.status, body };
+      return { status: response.status, body: parsed };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw new Error(`Zoho ${method} timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`);
@@ -97,12 +117,16 @@ export async function zohoApiPageRunner(job: {
       job.args.params && typeof job.args.params === "object" && !Array.isArray(job.args.params)
         ? Object.fromEntries(Object.entries(job.args.params as Record<string, unknown>).map(([key, value]) => [key, String(value)]))
         : {};
+    const body = job.args.body;
 
-    if (method !== "GET") throw new Error("zoho_api H1 supports GET only.");
+    if (method !== "GET" && method !== "POST" && method !== "PUT") throw new Error("zoho_api supports GET, POST, and PUT only.");
     if (!allowedPath(path)) throw new Error("zoho_api path is not in the extension CRM allowlist.");
+    if (blockedPath(path)) throw new Error("zoho_api blocked a delete/send-now-like endpoint.");
     if (Object.keys(params).length > 12) throw new Error("zoho_api params are limited to 12 keys.");
+    if (method === "GET" && body !== undefined) throw new Error("zoho_api GET must not include a body.");
+    if (method !== "GET" && body === undefined) throw new Error("zoho_api POST/PUT requires a JSON body.");
 
-    return { ok: true, result: await request(method, path, params) };
+    return { ok: true, result: await request(method, path, params, method === "GET" ? undefined : body) };
   } catch (error) {
     return {
       ok: false,

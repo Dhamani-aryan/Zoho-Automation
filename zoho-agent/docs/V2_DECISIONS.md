@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H2 zoho_api gated writes (2026-07-12, build)
+
+Extended zoho_api from GET-only reads to the single agent-first CRM write primitive for POST and PUT. Mutating calls require either an approved task order or an approval_id through the same pending_approvals/tool_jobs bridge used by existing write tools; GET remains a read and counts zero against task-order record budgets. The server validator and extension runner both confine methods to GET/POST/PUT, require JSON bodies for POST/PUT, reject bodies on GET, cap params, and block delete/send-now-like paths. Record budget usage counts unique body.data ids, or created rows when ids are not available yet.
+
 ## Phase H1 zoho_api read primitive (2026-07-12, build)
 
 Started the agent-first execution flip by adding zoho_api as the new generic live Zoho REST read primitive while keeping the old Tier-1 read wrappers available until the Phase H removal step. H1 accepts GET only, validates anchored /crm/v3 and /crm/v2.2 CRM paths against the module/path allowlist, caps params, returns raw JSON with HTTP status, and represents 204 as { status: 204, empty: true }. The extension now has a dedicated self-contained page-runner-api executor with one fetch path using the logged-in page token, X-ZCSRF-TOKEN, X-CRM-ORG, and credentials include. Until the deterministic email worker is removed, zoho_api is also blocked by the existing TASK_PREPARATION_FAILED hard stop.

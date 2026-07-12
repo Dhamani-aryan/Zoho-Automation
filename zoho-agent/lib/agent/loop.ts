@@ -50,6 +50,11 @@ import {
   type BrowserEvalArgs
 } from "@/lib/agent/browser-tools";
 import {
+  isZohoApiWriteArgs,
+  zohoApiReadSchema,
+  type ZohoApiArgs
+} from "@/lib/agent/zoho-api";
+import {
   isSkillGuideTool,
   SKILL_GUIDE_TOOL_DEFINITIONS,
   validateSkillGuideToolCall,
@@ -1400,6 +1405,184 @@ async function enqueueBrowserEval({
   return job;
 }
 
+function zohoApiSummary(args: ZohoApiArgs): ApprovalSummaryRecord[] {
+  return [
+    {
+      zoho_id: "zoho_api",
+      name: `${args.method} ${args.path}`,
+      before: { status: "not executed" },
+      after: {
+        method: args.method,
+        path: args.path,
+        params: args.params,
+        ...(args.method === "GET" ? {} : { body: args.body })
+      }
+    }
+  ];
+}
+
+async function enqueueZohoApi({
+  service,
+  user,
+  sessionId,
+  call,
+  args,
+  taskOrderId,
+  approvalId,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  args: ZohoApiArgs;
+  taskOrderId?: string | null;
+  approvalId?: string | null;
+  emit: Emit;
+}) {
+  const { data: inserted, error } = await service
+    .from("tool_jobs")
+    .insert({
+      user_id: user.id,
+      session_id: sessionId,
+      tool_name: "zoho_api",
+      args,
+      ...(taskOrderId ? { task_order_id: taskOrderId } : {}),
+      ...(approvalId ? { approval_id: approvalId } : {})
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "zoho_api_queued",
+    message: `Queued zoho_api ${args.method} ${args.path}.`,
+    metadata: {
+      session_id: sessionId,
+      method: args.method,
+      path: args.path,
+      task_order_id: taskOrderId ?? null,
+      approval_id: approvalId ?? null
+    }
+  });
+  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
+  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "zoho_api_completed",
+    message: `${job.ok ? "Completed" : "Failed"} zoho_api ${args.method} ${args.path}.`,
+    metadata: {
+      session_id: sessionId,
+      method: args.method,
+      path: args.path,
+      task_order_id: taskOrderId ?? null,
+      approval_id: approvalId ?? null,
+      ok: job.ok
+    }
+  });
+  return job;
+}
+
+async function runZohoApiTool({
+  service,
+  user,
+  sessionId,
+  call,
+  order,
+  emit
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  order: ActiveTaskOrder | null;
+  emit: Emit;
+}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
+  const args = zohoApiReadSchema.parse(call.args);
+  if (!isZohoApiWriteArgs(args)) {
+    const result = await runBridgedTool({
+      service,
+      user,
+      sessionId,
+      call: { ...call, args },
+      onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+    });
+    return { ok: true, result, pausedMs: 0 };
+  }
+
+  if (order) {
+    const job = await enqueueZohoApi({ service, user, sessionId, call, args, taskOrderId: order.id, emit });
+    return {
+      ok: job.ok,
+      result: {
+        task_order_id: order.id,
+        status: job.ok ? "executed" : "failed",
+        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      },
+      pausedMs: job.waitedMs
+    };
+  }
+
+  const summary = zohoApiSummary(args);
+  const { data: approval, error: approvalError } = await service
+    .from("pending_approvals")
+    .insert({
+      session_id: sessionId,
+      user_id: user.id,
+      tool_name: "zoho_api",
+      args,
+      summary,
+      status: user.approvals_enabled ? "pending" : "approved",
+      decided_at: user.approvals_enabled ? null : new Date().toISOString()
+    })
+    .select("id")
+    .single();
+  if (approvalError) throw approvalError;
+
+  const approvalId = (approval as { id: string }).id;
+  if (!user.approvals_enabled) {
+    const job = await enqueueZohoApi({ service, user, sessionId, call, args, approvalId, emit });
+    return {
+      ok: job.ok,
+      result: {
+        approval_id: approvalId,
+        status: job.ok ? "executed" : "failed",
+        auto_approved: true,
+        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+      },
+      pausedMs: job.waitedMs
+    };
+  }
+
+  await emit({
+    type: "approval_required",
+    call_id: call.id,
+    approval_id: approvalId,
+    tool_name: "zoho_api",
+    summary
+  });
+  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
+  if (decision.outcome === "rejected" || decision.outcome === "expired") {
+    return {
+      ok: false,
+      result: { approval_id: approvalId, status: decision.outcome, error: `The zoho_api write was ${decision.outcome}.` },
+      pausedMs: decision.waitedMs
+    };
+  }
+
+  const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
+  return {
+    ok: job.ok,
+    result: {
+      approval_id: approvalId,
+      status: job.ok ? "executed" : "failed",
+      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
+    },
+    pausedMs: decision.waitedMs + job.waitedMs
+  };
+}
+
 async function runBrowserEvalTool({
   service,
   user,
@@ -2343,17 +2526,24 @@ export async function runAgentTurn({
           result = await runTier0Tool({ call, supabase, userId: user.id });
         } else if (isTier1Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for extension jobs.");
-          const validatedCall = await validateTier1ToolCall(call, service);
-          if (isInProcessTier1Tool(validatedCall.name)) {
-            result = await runInProcessTier1Tool({ call: validatedCall, service, userId: user.id });
+          if (call.name === "zoho_api") {
+            const apiResult = await runZohoApiTool({ service, user, sessionId, call, order: approvedOrder, emit });
+            ok = apiResult.ok;
+            result = apiResult.result;
+            pausedMs += apiResult.pausedMs;
           } else {
-            result = await runBridgedTool({
-              service,
-              user,
-              sessionId,
-              call: validatedCall,
-              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-            });
+            const validatedCall = await validateTier1ToolCall(call, service);
+            if (isInProcessTier1Tool(validatedCall.name)) {
+              result = await runInProcessTier1Tool({ call: validatedCall, service, userId: user.id });
+            } else {
+              result = await runBridgedTool({
+                service,
+                user,
+                sessionId,
+                call: validatedCall,
+                onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+              });
+            }
           }
         } else if (isTaskOrderTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for task orders.");

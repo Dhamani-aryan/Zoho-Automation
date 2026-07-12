@@ -14,7 +14,9 @@ import {
   type PreparedTier2
 } from "../lib/agent/tier2-tools";
 import {
+  isBlockedZohoApiPath,
   isAllowedZohoApiPath,
+  isZohoApiWriteArgs,
   moduleFromZohoApiPath,
   shapeZohoApiResponse,
   zohoApiReadSchema
@@ -256,15 +258,20 @@ test("Zoho task preparation uses API writes with supported deal-scoped task read
   assert.match(source, /JSON\.parse\(JSON\.stringify\(result\)\)/);
 });
 
-test("zoho_api H1 validates allowlisted GET CRM paths and rejects unsafe paths", () => {
+test("zoho_api validates allowlisted CRM paths and rejects unsafe methods or paths", () => {
   assert.equal(isAllowedZohoApiPath("/crm/v3/Deals/6834250000003329005"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v3/Accounts/6834250000000000001/Contacts"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v3/Tasks/search"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v2.2/Contacts/6834250000000000001"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v2.2/Tasks", "POST"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v2.2/Deals/6834250000000000001/actions/add_tags", "POST"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v3/settings/fields"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v3/users"), true);
   assert.equal(isAllowedZohoApiPath("/crm/v3/Vendors"), false);
   assert.equal(isAllowedZohoApiPath("/crm/v3/Deals/6834250000000000001/actions/delete"), false);
+  assert.equal(isAllowedZohoApiPath("/crm/v2.2/Deals/6834250000000000001/actions/send_mail", "POST"), false);
+  assert.equal(isBlockedZohoApiPath("/crm/v3/Deals/6834250000000000001/actions/delete"), true);
+  assert.equal(isBlockedZohoApiPath("/crm/v2.2/Deals/6834250000000000001/actions/send_mail"), true);
   assert.equal(moduleFromZohoApiPath("/crm/v3/Deals/6834250000003329005"), "Deals");
 
   assert.deepEqual(zohoApiReadSchema.parse({ method: "get", path: "/crm/v3/Deals", params: { page: 1 } }), {
@@ -272,8 +279,21 @@ test("zoho_api H1 validates allowlisted GET CRM paths and rejects unsafe paths",
     path: "/crm/v3/Deals",
     params: { page: "1" }
   });
+  assert.deepEqual(
+    zohoApiReadSchema.parse({ method: "PUT", path: "/crm/v2.2/Deals", body: { data: [{ id: "D1", Stage: "Follow-Up" }] } }),
+    {
+      method: "PUT",
+      path: "/crm/v2.2/Deals",
+      params: {},
+      body: { data: [{ id: "D1", Stage: "Follow-Up" }] }
+    }
+  );
+  assert.equal(isZohoApiWriteArgs({ method: "PUT" }), true);
+  assert.equal(isZohoApiWriteArgs({ method: "GET" }), false);
   assert.throws(() => zohoApiReadSchema.parse({ method: "DELETE", path: "/crm/v3/Deals/1" }));
   assert.throws(() => zohoApiReadSchema.parse({ method: "GET", path: "/crm/v3/Vendors" }));
+  assert.throws(() => zohoApiReadSchema.parse({ method: "GET", path: "/crm/v3/Deals", body: {} }));
+  assert.throws(() => zohoApiReadSchema.parse({ method: "POST", path: "/crm/v2.2/Tasks" }));
   assert.throws(() =>
     zohoApiReadSchema.parse({
       method: "GET",
@@ -290,7 +310,9 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   const source = readFileSync(resolve(process.cwd(), "extension/src/page-runner-api.ts"), "utf8");
   const fetchCalls = source.match(/\bfetch\(/g) ?? [];
   assert.equal(fetchCalls.length, 1);
-  assert.match(source, /method !== "GET"/);
+  assert.match(source, /method !== "GET" && method !== "POST" && method !== "PUT"/);
+  assert.match(source, /blockedPath/);
+  assert.match(source, /body === undefined/);
   assert.match(source, /status: 204, empty: true/);
   assert.match(source, /X-ZCSRF-TOKEN/);
   assert.match(source, /X-CRM-ORG/);
@@ -298,4 +320,13 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(jobsSource, /zohoApiPageRunner/);
   assert.match(jobsSource, /job\.tool_name === "zoho_api"/);
+  assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
+
+  const claimSource = readFileSync(resolve(process.cwd(), "app/api/ext/jobs/claim/route.ts"), "utf8");
+  assert.match(claimSource, /isZohoApiWriteArgs/);
+  assert.match(claimSource, /isZohoApiWriteJob/);
+
+  const approvalSource = readFileSync(resolve(process.cwd(), "app/api/agent/approvals/[id]/route.ts"), "utf8");
+  assert.match(approvalSource, /decided\.tool_name === "zoho_api"/);
+  assert.match(approvalSource, /isZohoApiWriteArgs/);
 });

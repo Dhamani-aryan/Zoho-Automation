@@ -1485,6 +1485,10 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     }
   }
   if (job.tool_name === "zoho_api") {
+    const method = String(job.args.method ?? "").trim().toUpperCase();
+    if (method !== "GET" && !job.approval_id && !job.task_order_id) {
+      return { ok: false, error_message: "write without approval or task order refused by extension" };
+    }
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
     try {

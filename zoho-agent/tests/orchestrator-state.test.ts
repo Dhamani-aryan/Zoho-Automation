@@ -340,6 +340,30 @@ test("task order record usage counts writes only and ignores nested read ids", (
     }),
     0
   );
+  assert.equal(
+    taskOrderRecordUsage("zoho_api", {
+      method: "GET",
+      path: "/crm/v3/Deals/D1",
+      result: { body: { data: [{ id: "D1" }] } }
+    }),
+    0
+  );
+  assert.equal(
+    taskOrderRecordUsage("zoho_api", {
+      method: "PUT",
+      path: "/crm/v2.2/Deals",
+      body: { data: [{ id: "D1" }, { id: "D1" }, { id: "D2" }] }
+    }),
+    2
+  );
+  assert.equal(
+    taskOrderRecordUsage("zoho_api", {
+      method: "POST",
+      path: "/crm/v2.2/Tasks",
+      body: { data: [{ Subject: "one" }, { Subject: "two" }] }
+    }),
+    2
+  );
   assert.equal(taskOrderRecordUsage("browser_observe", { id: "nested-read-id" }), 0);
 });
 

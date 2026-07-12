@@ -147,19 +147,20 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "zoho_api",
     tier: 1,
     description:
-      "Read-only live Zoho REST primitive through the user's Chrome session. H1 supports GET only. Use path values under allowlisted /crm/v3 or /crm/v2.2 CRM endpoints; the result includes the HTTP status and raw JSON body. A 204 response returns { status: 204, empty: true }.",
+      "Live Zoho REST primitive through the user's Chrome session. GET is a read. POST/PUT are approval/task-order gated writes; DELETE and PATCH are unavailable, and delete/send-now paths are blocked. Use allowlisted /crm/v3 or /crm/v2.2 CRM endpoints. Results include HTTP status and raw JSON body; 204 returns { status: 204, empty: true }.",
     parameters: {
       type: "object",
       additionalProperties: false,
       required: ["method", "path"],
       properties: {
-        method: { type: "string", enum: ["GET"] },
+        method: { type: "string", enum: ["GET", "POST", "PUT"] },
         path: { type: "string", description: "Allowlisted CRM API path, e.g. /crm/v3/Deals/6834250000000000001." },
         params: {
           type: "object",
           additionalProperties: { oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] },
           maxProperties: 12
-        }
+        },
+        body: { description: "JSON body for POST/PUT only." }
       }
     }
   },

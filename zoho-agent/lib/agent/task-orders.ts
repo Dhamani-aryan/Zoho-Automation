@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 import { taskOrderMaxToolCalls, taskOrderWallMs } from "./runtime-config";
+import { zohoApiRecordUsage } from "./zoho-api";
 
 export type TaskOrderScope = "read" | "write";
 export type TaskOrderStatus = "proposed" | "approved" | "rejected" | "expired" | "completed" | "failed";
@@ -195,6 +196,7 @@ export function taskOrderRecordUsage(toolName: string, args: unknown) {
   if (toolName === "zoho_change_owner" || toolName === "zoho_add_tags" || toolName === "zoho_remove_tags") {
     return Array.isArray(input.zoho_ids) ? uniqueStringCount(input.zoho_ids) : 0;
   }
+  if (toolName === "zoho_api") return zohoApiRecordUsage(args);
   if (toolName === "undo_record") return 1;
   return 0;
 }
