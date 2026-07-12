@@ -2,8 +2,15 @@
 
 Status: approved direction (Aryan, 2026-07-12). Implementation not started.
 Reference material: reference/heysnap/SYSTEM_PROMPT.md, reference/heysnap/BROWSER_CONTROL.md,
-reference/heysnap/WORKFLOWS_AS_SKILLS.md, uploads/HOW_I_APPROACH_A_TASK.md (HeySnap's own
-description of its loop), and the live-run failure history in docs/V2_DECISIONS.md.
+reference/heysnap/WORKFLOWS_AS_SKILLS.md, reference/heysnap/COMPOSER_METHOD.md (HeySnap's
+live-verified chip-commit/schedule/verify method, 2026-07-12), uploads/HOW_I_APPROACH_A_TASK.md
+(HeySnap's own description of its loop), and the live-run failure history in docs/V2_DECISIONS.md.
+
+Root cause of the latest live failure, confirmed by COMPOSER_METHOD.md: a recipient chip
+commits ONLY on an Enter keydown while the input is focused. Setting value + blur does not
+commit; it orphans text in the field, and the next type appends to it, producing an invalid
+address that Enter silently rejects. The deterministic runner hit exactly this
+(readback To: []). The fix is method knowledge, not more pipeline code.
 
 ## 1. Why
 
@@ -21,7 +28,10 @@ not code the server executes. This is the HeySnap architecture adapted to our ex
 approval/task-order machinery.
 
 Target: the Test SAP ERP draft ("Process this and verify everything") completes in
-roughly 10-20 tool calls, with live self-recovery when a UI step misbehaves.
+roughly 20-25 tool calls, with live self-recovery when a UI step misbehaves. Basis
+(COMPOSER_METHOD.md section 3): HeySnap prices the same request at 30-37 calls fully
+UI-driven, and less than half for the API-eligible parts; our tasks go through the
+internal API (create + read-back is one call each), only the composer is UI.
 
 ## 2. What stays (non-negotiable safety rails)
 
@@ -130,10 +140,19 @@ stays usable throughout.
 
 ### H4. Hard never-send guard (this replaces prompt-level trust)
 
+- HeySnap confirmed (COMPOSER_METHOD.md section 2) that its own never-send is discipline
+  plus verification only, with no hard lock, and recommended exactly this guard. The known
+  accidental-send vectors it lists are the ones to block.
 - Extension content/page guard active on any crm.zoho.com composer surface while an agent
   job drives the tab: block programmatic and CDP clicks on the immediate Send control
-  (identify by stable attributes, not text alone) and block eval/fetch calls to send-now
+  (identify by stable attributes AND resolve visible text at click time - never memorized
+  coordinates, Send sits next to Schedule) and block eval/fetch calls to send-now
   endpoints via the H2 blocklist. Scheduling controls stay allowed.
+- Block modifier+Enter (Ctrl/Cmd+Enter) key dispatch anywhere in the composer - untested
+  send shortcut, treated as live risk. Plain Enter stays allowed (it commits chips and is
+  safe in subject/body).
+- If Send is a split button whose main body sends, only the dropdown Schedule item is
+  clickable through the guard.
 - If the model attempts a blocked action the tool result must say exactly why
   ("send-now is blocked; schedule instead") so the loop self-corrects in one turn.
 - Grep-proof test: guard file exists, is imported by the job runner, and jobs.ts contains
@@ -164,9 +183,18 @@ stays usable throughout.
   endpoints and copy-paste JS, UI fallback by landmarks, gotchas, verification, stop
   conditions. Fold in every gotcha from V2_DECISIONS.md live runs (204 empty search,
   parens break criteria, SPA identity wait, Tasks module pagination + What_Id filter,
-  chip commit needs trusted CDP input + Enter, hidden hour/minute/AM-PM schedule fields,
-  #ecw_signature preservation). If HeySnap supplies its working chip/schedule JS, put it
-  here verbatim as the preferred method.
+  hidden hour/minute/AM-PM schedule fields, #ecw_signature preservation).
+- The email-scheduling guide's composer section MUST embed the verified recipe from
+  reference/heysnap/COMPOSER_METHOD.md verbatim: clear field via native setter + input
+  event -> focus -> CDP insertText (or native-setter value) -> CDP Enter keyDown+keyUp ->
+  verify chips by [id^="ceToAddrDetails"] li.selectedEmail email attributes AND
+  leftover === "" AND no red/invalid chips. Never rely on blur. One recipient at a time,
+  verify between each. Cc input (#ceCCAddr_1) exists only after clicking the Cc reveal
+  control. Clear pre-filled default To chips via li.selectedEmail .closeIconB when the
+  resolved recipient differs. Schedule popup: #schTimeMail time options are zero-padded
+  (match both "8:00 PM" and "08:00 PM"), post-midnight times roll to the next calendar
+  day, confirm the live CRM date, finish with "Schedule & Close", then verify via the
+  Scheduled related list or the internal scheduled-emails API read filtered to the record.
 - Budgets: raise the per-turn cap from 15 tool calls / 3 min to 60 tool calls / 10 min
   wall clock for order-linked work (config constants; keep Stop button and order budgets
   as the real limiter).
@@ -183,9 +211,10 @@ stays usable throughout.
 - Pass criteria: contact/deal resolved without asking; both tasks created (duplicate-skip
   on "Follow up on Test SAP ERP email"), "Prepare Test SAP ERP follow-up" completed;
   email in Scheduled with exact To (resolved address), empty CC, exact subject/body,
-  preserved signature, 2026-07-15 10:00 AM Asia/Kolkata; every write has a verified
-  receipt; total tool calls <= 20 and wall clock materially under the old runs; if a UI
-  step fails, the model recovers in the same run instead of dead-ending.
+  preserved signature, no red/invalid chips, empty leftover in both address inputs,
+  2026-07-15 10:00 AM Asia/Kolkata; every write has a verified receipt; total tool calls
+  <= 25 and wall clock materially under the old runs; if a UI step fails, the model
+  recovers in the same run instead of dead-ending.
 - Inspect agent_sessions, agent_messages, tool_jobs, task_orders, audit_events afterward
   and log the measured numbers in V2_DECISIONS.md.
 
