@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase I2 send guard exact controls and focused Enter (2026-07-12, build)
+
+Hardened the never-send guard without broad substring false positives. Send controls are now classified by exact accessible names such as Send, Send email, Send now, and Send mail, while Schedule and Schedule & Close are allowed and labels such as Resend or Send test are not blocked merely because they contain "send". The extension still rechecks elementFromPoint before trusted clicks, and both the eval-installed guard and the CDP press_key path now refuse plain Enter when the live focused element is on or inside a send control.
+
 ## Phase I1 autonomy prompt and composer economy (2026-07-12, build)
 
 Started Phase I with the live-run-unblocking prompt and guide changes. The base instructions now distinguish guardrails, records, and gates; prefer autonomy over per-item permission; require adopt-dont-recreate and verify-by-identity; treat unverified receipts as flags rather than automatic task failure; add composer autocomplete hijack, red-chip, draft-autosave, Cc/Bcc reveal, signature-font, and blank-line gotchas; and add call-economy guidance to batch observations while serializing commits. The cloud email-scheduling guide was updated to the next version with the same composer and economy rules plus a skill_guide_updated audit event.

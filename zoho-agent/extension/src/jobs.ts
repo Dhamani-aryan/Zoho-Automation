@@ -4,7 +4,7 @@ import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
 import { browserEvalIsProvablyReadOnly, composerBrowserGateDecision } from "../../lib/agent/browser-composer-gate";
-import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
+import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, isPlainEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
 // Tier-2 write tools. Kept in sync with lib/agent/tier2-tools.ts
@@ -148,28 +148,45 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
     function looksLikeSendNowEndpoint(value: string) {
       return [/\/actions\/[^/?#]*send/i, /\/send(?:mail|_mail|now|_now)?\b/i].some((pattern) => pattern.test(value));
     }
-    function labelOf(element: Element) {
-      const el = element as HTMLInputElement;
-      return [
-        element.textContent ?? "",
-        el.value ?? "",
-        element.getAttribute("aria-label") ?? "",
-        element.getAttribute("title") ?? "",
-        element.getAttribute("data-zcqa") ?? "",
-        element.id ?? "",
-        element.className ? String(element.className) : ""
-      ]
-        .join(" ")
+    function normalizedLabel(value: unknown) {
+      return String(value ?? "")
         .replace(/\s+/g, " ")
-        .trim();
+        .trim()
+        .toLowerCase();
+    }
+    function controlInfo(element: Element) {
+      const el = element as HTMLInputElement;
+      return {
+        text: element.textContent ?? "",
+        value: el.value ?? "",
+        ariaLabel: element.getAttribute("aria-label") ?? "",
+        title: element.getAttribute("title") ?? "",
+        role: element.getAttribute("role") ?? ""
+      };
+    }
+    function accessibleNames(element: Element) {
+      const info = controlInfo(element);
+      return [info.ariaLabel, info.value, info.title, info.text].map(normalizedLabel).filter(Boolean);
+    }
+    function isScheduleControl(element: Element) {
+      return accessibleNames(element).some((name) => name === "schedule" || name === "schedule & close");
+    }
+    function isSendNowControl(element: Element) {
+      if (isScheduleControl(element)) return false;
+      const role = normalizedLabel(element.getAttribute("role") ?? "");
+      const buttonish = !role || role === "button" || role === "menuitem" || role === "link";
+      if (!buttonish) return false;
+      return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
     }
     function isSendNowElement(target: EventTarget | null) {
       if (!(target instanceof Element)) return false;
       const candidate = target.closest("button,a,input,[role='button'],span,div");
       if (!candidate) return false;
-      const label = labelOf(candidate);
-      if (/\bschedule\b/i.test(label)) return false;
-      return /\bsend\b/i.test(label);
+      return isSendNowControl(candidate);
+    }
+    function activeElementIsSendNow(doc: Document) {
+      const active = doc.activeElement;
+      return active instanceof Element && isSendNowElement(active);
     }
     // Zoho renders the email composer body (and some dialogs) inside a
     // same-origin iframe. When a frame_selector is given, resolve that frame's
@@ -218,8 +235,17 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
       event.preventDefault();
       event.stopImmediatePropagation();
     };
+    const keyGuard = (event: KeyboardEvent) => {
+      if (event.key !== "Enter") return;
+      if (!activeElementIsSendNow(event.currentTarget instanceof Document ? event.currentTarget : document)) return;
+      sendNowBlocked = true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
     document.addEventListener("click", clickGuard, true);
+    document.addEventListener("keydown", keyGuard, true);
     if (boundDocument !== document) boundDocument.addEventListener("click", clickGuard, true);
+    if (boundDocument !== document) boundDocument.addEventListener("keydown", keyGuard, true);
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     // `document` is shadowed by the bound (possibly frame) document; `window`
     // and `window.document` stay top-level so callers can still read #token.
@@ -230,7 +256,9 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
     } finally {
       window.fetch = originalFetch;
       document.removeEventListener("click", clickGuard, true);
+      document.removeEventListener("keydown", keyGuard, true);
       if (boundDocument !== document) boundDocument.removeEventListener("click", clickGuard, true);
+      if (boundDocument !== document) boundDocument.removeEventListener("keydown", keyGuard, true);
       if (signatureBackup && !signatureDocument.querySelector("#ecw_signature")) {
         signatureRemoved = true;
         const restoreParent = signatureParent?.isConnected
@@ -791,29 +819,88 @@ async function assertSendGuardAllowsClick(tabId: number, x: number, y: number): 
     target: { tabId },
     world: "MAIN",
     func: (clientX: number, clientY: number) => {
-      function labelOf(element: Element) {
-        const el = element as HTMLInputElement;
-        return [
-          element.textContent ?? "",
-          el.value ?? "",
-          element.getAttribute("aria-label") ?? "",
-          element.getAttribute("title") ?? "",
-          element.getAttribute("data-zcqa") ?? "",
-          element.id ?? "",
-          element.className ? String(element.className) : ""
-        ]
-          .join(" ")
+      function normalizedLabel(value: unknown) {
+        return String(value ?? "")
           .replace(/\s+/g, " ")
-          .trim();
+          .trim()
+          .toLowerCase();
+      }
+      function controlInfo(element: Element) {
+        const el = element as HTMLInputElement;
+        return {
+          text: element.textContent ?? "",
+          value: el.value ?? "",
+          ariaLabel: element.getAttribute("aria-label") ?? "",
+          title: element.getAttribute("title") ?? "",
+          role: element.getAttribute("role") ?? ""
+        };
+      }
+      function accessibleNames(element: Element) {
+        const info = controlInfo(element);
+        return [info.ariaLabel, info.value, info.title, info.text].map(normalizedLabel).filter(Boolean);
+      }
+      function isScheduleControl(element: Element) {
+        return accessibleNames(element).some((name) => name === "schedule" || name === "schedule & close");
+      }
+      function isSendNowControl(element: Element) {
+        if (isScheduleControl(element)) return false;
+        const role = normalizedLabel(element.getAttribute("role") ?? "");
+        const buttonish = !role || role === "button" || role === "menuitem" || role === "link";
+        if (!buttonish) return false;
+        return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
       }
       const target = document.elementFromPoint(clientX, clientY);
       const candidate = target?.closest("button,a,input,[role='button'],span,div") ?? null;
       if (!candidate) return { blocked: false };
-      const label = labelOf(candidate);
-      if (/\bschedule\b/i.test(label)) return { blocked: false, label };
-      return { blocked: /\bsend\b/i.test(label), label };
+      return { blocked: isSendNowControl(candidate), label: accessibleNames(candidate).join(" | ") };
     },
     args: [x, y]
+  });
+  const checked = results?.[0]?.result as { blocked?: unknown; label?: unknown } | undefined;
+  if (checked?.blocked === true) {
+    return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true, label: checked.label ?? "" } };
+  }
+  return null;
+}
+
+async function assertSendGuardAllowsFocusedEnter(tabId: number, key: string): Promise<PageResult | null> {
+  if (!isPlainEnterKey(key)) return null;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      function normalizedLabel(value: unknown) {
+        return String(value ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+      }
+      function accessibleNames(element: Element) {
+        const el = element as HTMLInputElement;
+        return [
+          element.getAttribute("aria-label") ?? "",
+          el.value ?? "",
+          element.getAttribute("title") ?? "",
+          element.textContent ?? ""
+        ]
+          .map(normalizedLabel)
+          .filter(Boolean);
+      }
+      function isScheduleControl(element: Element) {
+        return accessibleNames(element).some((name) => name === "schedule" || name === "schedule & close");
+      }
+      function isSendNowControl(element: Element) {
+        if (isScheduleControl(element)) return false;
+        const role = normalizedLabel(element.getAttribute("role") ?? "");
+        const buttonish = !role || role === "button" || role === "menuitem" || role === "link";
+        if (!buttonish) return false;
+        return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
+      }
+      const active = document.activeElement;
+      const candidate = active instanceof Element ? active.closest("button,a,input,[role='button'],span,div") : null;
+      if (!candidate) return { blocked: false };
+      return { blocked: isSendNowControl(candidate), label: accessibleNames(candidate).join(" | ") };
+    }
   });
   const checked = results?.[0]?.result as { blocked?: unknown; label?: unknown } | undefined;
   if (checked?.blocked === true) {
@@ -890,6 +977,8 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     if (isModifierEnterKey(key)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
     }
+    const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
+    if (enterGuard) return enterGuard;
     await withDebugger(tabId, async (target) => {
       await dispatchTrustedKey(target, key);
     });

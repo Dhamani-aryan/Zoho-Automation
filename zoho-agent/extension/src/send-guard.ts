@@ -10,3 +10,38 @@ export function looksLikeSendNowEndpoint(value: string) {
 export function isModifierEnterKey(key: string) {
   return /^(?:ctrl|control|cmd|command|meta)\+enter$/i.test(key.trim());
 }
+
+export function isPlainEnterKey(key: string) {
+  return /^enter$/i.test(key.trim());
+}
+
+function normalizedLabel(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export type SendControlLabelInput = {
+  text?: unknown;
+  value?: unknown;
+  ariaLabel?: unknown;
+  title?: unknown;
+  role?: unknown;
+};
+
+export function sendControlAccessibleNames(input: SendControlLabelInput) {
+  return [input.ariaLabel, input.value, input.title, input.text].map(normalizedLabel).filter(Boolean);
+}
+
+export function isScheduleControl(input: SendControlLabelInput) {
+  return sendControlAccessibleNames(input).some((name) => name === "schedule" || name === "schedule & close");
+}
+
+export function isSendNowControl(input: SendControlLabelInput) {
+  if (isScheduleControl(input)) return false;
+  const role = normalizedLabel(input.role);
+  const buttonish = !role || role === "button" || role === "menuitem" || role === "link";
+  if (!buttonish) return false;
+  return sendControlAccessibleNames(input).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
+}

@@ -23,6 +23,11 @@ import {
   zohoApiReadSchema,
   zohoApiWriteTargets
 } from "../lib/agent/zoho-api";
+import {
+  isPlainEnterKey,
+  isScheduleControl,
+  isSendNowControl
+} from "../extension/src/send-guard";
 import type { FieldMetaRow } from "../lib/plan/field-rules";
 
 const fieldMeta: FieldMetaRow[] = [
@@ -339,20 +344,35 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   assert.match(approvalSource, /isZohoApiWriteArgs/);
 });
 
-test("send-now guard blocks trusted clicks, eval fetches, and modifier enter", () => {
+test("send-now guard blocks trusted clicks, exact send controls, and focused enter", () => {
+  assert.equal(isSendNowControl({ ariaLabel: "Send", role: "button" }), true);
+  assert.equal(isSendNowControl({ ariaLabel: "Send email", role: "button" }), true);
+  assert.equal(isSendNowControl({ text: "Send now", role: "button" }), true);
+  assert.equal(isSendNowControl({ text: "Resend", role: "button" }), false);
+  assert.equal(isSendNowControl({ text: "Send test", role: "button" }), false);
+  assert.equal(isSendNowControl({ text: "Schedule", role: "button" }), false);
+  assert.equal(isScheduleControl({ text: "Schedule & Close", role: "button" }), true);
+  assert.equal(isPlainEnterKey("Enter"), true);
+
   const guardSource = readFileSync(resolve(process.cwd(), "extension/src/send-guard.ts"), "utf8");
   assert.match(guardSource, /send-now is blocked; schedule instead/);
   assert.match(guardSource, /looksLikeSendNowEndpoint/);
   assert.match(guardSource, /isModifierEnterKey/);
+  assert.match(guardSource, /isPlainEnterKey/);
+  assert.match(guardSource, /isSendNowControl/);
+  assert.match(guardSource, /name === "send email"/);
 
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(jobsSource, /from "\.\/send-guard"/);
   assert.match(jobsSource, /assertSendGuardAllowsClick/);
+  assert.match(jobsSource, /assertSendGuardAllowsFocusedEnter/);
   assert.match(jobsSource, /document\.elementFromPoint/);
   assert.match(jobsSource, /SEND_NOW_BLOCKED_MESSAGE/);
   assert.match(jobsSource, /window\.fetch =/);
   assert.match(jobsSource, /addEventListener\("click", clickGuard, true\)/);
+  assert.match(jobsSource, /addEventListener\("keydown", keyGuard, true\)/);
   assert.match(jobsSource, /isModifierEnterKey\(key\)/);
+  assert.match(jobsSource, /isPlainEnterKey\(key\)/);
   assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
 });
 
