@@ -417,7 +417,12 @@ test("Phase I soul prompt encodes autonomy, records, identity, and call economy"
   assert.match(loopSource, /red or invalid chip is failure evidence, never success/);
   assert.match(loopSource, /composer may autosave a Draft once touched; ignore Drafts as evidence/);
   assert.match(loopSource, /Verdana around 13\.3px/);
-  assert.match(loopSource, /One read-only browser_eval should return the full bundle/);
+  assert.match(loopSource, /parse the attachment once/);
+  assert.match(loopSource, /ONE db\/mirror or zoho_api search per identity/);
+  assert.match(loopSource, /API-only receipt verification and no browser verification for API writes/);
+  assert.match(loopSource, /ONE rich read-only browser_eval observation bundle per composer state/);
+  assert.match(loopSource, /one scheduled-artifact read-back/);
+  assert.match(loopSource, /Repeated thin observations are a smell/);
   assert.match(loopSource, /Target the one-email-two-task run at 10-14 tool calls/);
 });
 

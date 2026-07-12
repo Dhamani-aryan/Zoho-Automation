@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase I1 amendment: explicit one-email run shape (2026-07-12, build)
+
+Added the live-run shape target directly to the base agent instructions. A one-email-with-tasks request now says to parse the attachment once, use one db/mirror or zoho_api search per identity, verify Task API writes only through API receipts, use one rich browser_eval observation bundle per composer state instead of repeated thin observations, serialize chip and schedule commits, and finish with one scheduled-artifact read-back. Repeated thin observations are now called out as a smell while retaining the 10-14 tool-call target.
+
 ## Phase I3 non-blocking batched receipts (2026-07-12, build)
 
 Converted verification receipts from completion gates into completion-report flags. complete_task_order now attaches receipt_stats, composer_stats, scheduled_email_verifications, scheduled_email_verification_missing, and has_unverified_receipts to the report instead of refusing zero/unverified receipts or missing scheduled-email verification. zoho_api write read-backs now batch touched records by module with one GET /crm/v3/{Module}?ids=... using the union of requested fields, and per-record receipts use method zoho_api_batch_readback.
