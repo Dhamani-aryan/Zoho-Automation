@@ -93,6 +93,11 @@ import {
   allowsToolAfterTaskPreparationFailure,
   hasTaskPreparationFailure
 } from "@/lib/agent/email-recovery-policy";
+import {
+  extractScheduledEmailVerification,
+  hasComposerBrowserMutation,
+  scheduledEmailCompletionDecision
+} from "@/lib/agent/scheduled-email-verification";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
 const JOB_POLL_INTERVAL_MS = 500;
@@ -895,6 +900,118 @@ async function zohoApiReceiptStatsForOrder(service: SupabaseClient, sessionId: s
   return { mutatingResults, receipts };
 }
 
+async function composerBrowserMutationStatsForOrder(service: SupabaseClient, sessionId: string, orderId: string) {
+  const { data, error } = await service
+    .from("audit_events")
+    .select("metadata")
+    .eq("event_type", "composer_browser_mutation")
+    .contains("metadata", { session_id: sessionId, task_order_id: orderId })
+    .limit(500);
+  if (error) throw error;
+  return { composerMutations: (data ?? []).length };
+}
+
+async function scheduledEmailVerificationCountForOrder(
+  service: SupabaseClient,
+  user: AuthorizedUser,
+  sessionId: string,
+  orderId: string
+) {
+  const { data, error } = await service
+    .from("audit_events")
+    .select("metadata")
+    .eq("user_id", user.id)
+    .eq("event_type", "scheduled_email_verified")
+    .contains("metadata", { session_id: sessionId, task_order_id: orderId })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
+function taskOrderIdFromToolResult(result: unknown) {
+  if (!result || typeof result !== "object") return null;
+  const id = (result as Record<string, unknown>).task_order_id;
+  return typeof id === "string" && id.trim() ? id : null;
+}
+
+function withTaskOrderId(result: unknown, taskOrderId: string) {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return { ...(result as Record<string, unknown>), task_order_id: taskOrderId };
+  }
+  return { task_order_id: taskOrderId, result };
+}
+
+async function recordScheduledEmailVerificationIfPresent({
+  service,
+  user,
+  sessionId,
+  taskOrderId,
+  toolName,
+  callId,
+  result
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  taskOrderId: string | null;
+  toolName: string;
+  callId: string;
+  result: unknown;
+}) {
+  if (!taskOrderId) return;
+  if (toolName !== "browser_eval" && toolName !== "zoho_api") return;
+  const verification = extractScheduledEmailVerification(result);
+  if (!verification) return;
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "scheduled_email_verified",
+    message: `Verified scheduled email: ${verification.subject}.`,
+    metadata: {
+      session_id: sessionId,
+      task_order_id: taskOrderId,
+      tool_name: toolName,
+      call_id: callId,
+      recipient: verification.recipient,
+      subject: verification.subject,
+      date: verification.date,
+      time: verification.time
+    }
+  });
+}
+
+async function recordComposerBrowserMutationIfPresent({
+  service,
+  user,
+  sessionId,
+  taskOrderId,
+  toolName,
+  callId,
+  result
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  taskOrderId: string | null;
+  toolName: string;
+  callId: string;
+  result: unknown;
+}) {
+  if (!taskOrderId) return;
+  if (toolName !== "browser_input" && toolName !== "browser_eval") return;
+  if (!hasComposerBrowserMutation(result)) return;
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "composer_browser_mutation",
+    message: `Recorded composer browser mutation from ${toolName}.`,
+    metadata: {
+      session_id: sessionId,
+      task_order_id: taskOrderId,
+      tool_name: toolName,
+      call_id: callId
+    }
+  });
+}
+
 async function completeTaskOrder({
   service,
   user,
@@ -921,6 +1038,25 @@ async function completeTaskOrder({
         status: "not_completed",
         error: "Mutating zoho_api task orders require at least one verification receipt before completion.",
         receipt_stats: receiptStats
+      }
+    };
+  }
+  const composerStats = await composerBrowserMutationStatsForOrder(service, sessionId, order.id);
+  const scheduledVerifications = await scheduledEmailVerificationCountForOrder(service, user, sessionId, order.id);
+  const scheduledEmailDecision = scheduledEmailCompletionDecision({
+    scope: order.scope,
+    composerMutations: composerStats.composerMutations,
+    scheduledVerifications
+  });
+  if (!scheduledEmailDecision.ok) {
+    return {
+      ok: false,
+      result: {
+        task_order_id: order.id,
+        status: "not_completed",
+        error: scheduledEmailDecision.error,
+        composer_stats: composerStats,
+        scheduled_email_verifications: scheduledVerifications
       }
     };
   }
@@ -1615,9 +1751,10 @@ async function runZohoApiTool({
       user,
       sessionId,
       call: { ...call, args },
+      taskOrderId: order?.id ?? null,
       onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
     });
-    return { ok: true, result, pausedMs: 0 };
+    return { ok: true, result: order ? withTaskOrderId(result, order.id) : result, pausedMs: 0 };
   }
 
   if (order) {
@@ -2708,13 +2845,18 @@ export async function runAgentTurn({
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
           if (call.name !== "browser_eval") {
             const validatedCall = validateBrowserToolCall(call);
-            result = await runBridgedTool({
+            const bridgedResult = await runBridgedTool({
               service,
               user,
               sessionId,
               call: validatedCall,
+              taskOrderId: call.name === "browser_input" ? approvedOrder?.id ?? null : null,
               onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
             });
+            result =
+              call.name === "browser_input" && approvedOrder
+                ? withTaskOrderId(bridgedResult, approvedOrder.id)
+                : bridgedResult;
           } else {
             const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
             ok = evalResult.ok;
@@ -2787,6 +2929,28 @@ export async function runAgentTurn({
       } catch (error) {
         ok = false;
         result = toolError(error);
+      }
+
+      if (ok && service) {
+        const resultTaskOrderId = taskOrderIdFromToolResult(result) ?? activeTaskOrderId;
+        await recordComposerBrowserMutationIfPresent({
+          service,
+          user,
+          sessionId,
+          taskOrderId: resultTaskOrderId,
+          toolName: call.name,
+          callId: call.id,
+          result
+        });
+        await recordScheduledEmailVerificationIfPresent({
+          service,
+          user,
+          sessionId,
+          taskOrderId: resultTaskOrderId,
+          toolName: call.name,
+          callId: call.id,
+          result
+        });
       }
 
       const truncated = truncateToolResult(result);

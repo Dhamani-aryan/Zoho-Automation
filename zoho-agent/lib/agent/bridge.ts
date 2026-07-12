@@ -59,6 +59,7 @@ export async function runBridgedTool({
   user,
   sessionId,
   call,
+  taskOrderId,
   timeoutMs = agentJobTimeoutMs(),
   onStatus
 }: {
@@ -66,6 +67,7 @@ export async function runBridgedTool({
   user: AuthorizedUser;
   sessionId: string;
   call: AgentToolCall;
+  taskOrderId?: string | null;
   timeoutMs?: number;
   onStatus?: (status: Extract<ToolJobStatus, "queued" | "running">) => void | Promise<void>;
 }) {
@@ -82,7 +84,8 @@ export async function runBridgedTool({
       user_id: user.id,
       session_id: sessionId,
       tool_name: call.name,
-      args: call.args
+      args: call.args,
+      ...(taskOrderId ? { task_order_id: taskOrderId } : {})
     })
     .select("id,status,result,error_message,claimed_at")
     .single();

@@ -3,7 +3,7 @@ import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
-import { composerBrowserGateDecision } from "../../lib/agent/browser-composer-gate";
+import { browserEvalIsProvablyReadOnly, composerBrowserGateDecision } from "../../lib/agent/browser-composer-gate";
 import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
@@ -623,16 +623,45 @@ async function composerDetectedInTab(tabId: number) {
   return results?.[0]?.result === true;
 }
 
-async function enforceComposerBrowserGate(tabId: number, job: ToolJob): Promise<PageResult | null> {
-  if (job.tool_name !== "browser_input" && job.tool_name !== "browser_eval") return null;
+type ComposerGateCheck = {
+  refusal: PageResult | null;
+  composerDetected: boolean;
+  stateChanging: boolean;
+};
+
+async function enforceComposerBrowserGate(tabId: number, job: ToolJob): Promise<ComposerGateCheck> {
+  if (job.tool_name !== "browser_input" && job.tool_name !== "browser_eval") {
+    return { refusal: null, composerDetected: false, stateChanging: false };
+  }
+  const composerDetected = await composerDetectedInTab(tabId);
+  const stateChanging =
+    job.tool_name === "browser_input" ||
+    (job.tool_name === "browser_eval" &&
+      !browserEvalIsProvablyReadOnly(typeof job.args.code === "string" ? job.args.code : ""));
   const decision = composerBrowserGateDecision({
     toolName: job.tool_name,
     args: job.args,
-    composerDetected: await composerDetectedInTab(tabId),
+    composerDetected,
     approvalId: job.approval_id ?? null,
     taskOrderId: job.task_order_id ?? null
   });
-  return decision.allowed ? null : { ok: false, error_message: decision.reason };
+  return {
+    refusal: decision.allowed ? null : { ok: false, error_message: decision.reason },
+    composerDetected,
+    stateChanging
+  };
+}
+
+function withComposerGateResult(response: PageResult, gate: ComposerGateCheck): PageResult {
+  if (!gate.composerDetected || !gate.stateChanging || !response.ok) return response;
+  const result = response.result && typeof response.result === "object" ? (response.result as Record<string, unknown>) : {};
+  return {
+    ok: true,
+    result: {
+      ...result,
+      composer_gate: { composer_detected: true, state_changing: true }
+    }
+  };
 }
 
 async function captureEvidence(tabId?: number) {
@@ -1610,7 +1639,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
     const composerGate = await enforceComposerBrowserGate(tabId, job);
-    if (composerGate) return composerGate;
+    if (composerGate.refusal) return composerGate.refusal;
     const code = typeof job.args.code === "string" ? job.args.code : "";
     if (looksLikeSendNowEndpoint(code)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
@@ -1626,7 +1655,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
         return { ok: false, error_message: "browser_eval returned no result." };
       }
-      return result;
+      return withComposerGateResult(result, composerGate);
     } catch (error) {
       return {
         ok: false,
@@ -1646,18 +1675,19 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
     const composerGate = await enforceComposerBrowserGate(tabId, job);
-    if (composerGate) return composerGate;
+    if (composerGate.refusal) return composerGate.refusal;
     const action = String(job.args.action ?? "");
     if (action === "click") {
-      return executeUiStep(tabId, {
+      const result = await executeUiStep(tabId, {
         type: "click",
         selector: job.args.selector,
         text: job.args.text,
         frame_selector: job.args.frame_selector
       });
+      return withComposerGateResult(result, composerGate);
     }
     if (action === "type") {
-      return executeUiStep(tabId, {
+      const result = await executeUiStep(tabId, {
         type: "fill_field",
         selector: job.args.selector,
         text: job.args.text,
@@ -1665,9 +1695,11 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
         value: job.args.value,
         press_enter: job.args.press_enter
       });
+      return withComposerGateResult(result, composerGate);
     }
     if (action === "key") {
-      return executeUiStep(tabId, { type: "press_key", key: job.args.key });
+      const result = await executeUiStep(tabId, { type: "press_key", key: job.args.key });
+      return withComposerGateResult(result, composerGate);
     }
     return { ok: false, error_message: "browser_input action must be click, type, or key." };
   }

@@ -371,6 +371,31 @@ test("composer browser gate is consulted before composer-driving browser tools",
   assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*enforceComposerBrowserGate/);
 });
 
+test("composer scheduling orders require scheduled email verification before completion", () => {
+  const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/scheduled-email-verification.ts"), "utf8");
+  assert.match(helperSource, /scheduledEmailCompletionDecision/);
+  assert.match(helperSource, /SCHEDULED_EMAIL_READBACK_REQUIRED/);
+  assert.match(helperSource, /extractScheduledEmailVerification/);
+  assert.match(helperSource, /hasComposerBrowserMutation/);
+
+  const bridgeSource = readFileSync(resolve(process.cwd(), "lib/agent/bridge.ts"), "utf8");
+  assert.match(bridgeSource, /taskOrderId\?: string \| null/);
+  assert.match(bridgeSource, /task_order_id: taskOrderId/);
+
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /recordScheduledEmailVerificationIfPresent/);
+  assert.match(loopSource, /event_type: "composer_browser_mutation"/);
+  assert.match(loopSource, /event_type: "scheduled_email_verified"/);
+  assert.match(loopSource, /composerBrowserMutationStatsForOrder/);
+  assert.match(loopSource, /scheduledEmailVerificationCountForOrder/);
+  assert.match(helperSource, /Read back the Scheduled tab first/);
+
+  const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  assert.match(jobsSource, /withComposerGateResult/);
+  assert.match(jobsSource, /composer_gate/);
+  assert.match(jobsSource, /state_changing/);
+});
+
 test("zoho_api write receipts can derive targets and compare read-back fields", () => {
   const targets = zohoApiWriteTargets(
     {

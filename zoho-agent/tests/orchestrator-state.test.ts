@@ -57,6 +57,11 @@ import {
   browserEvalIsProvablyReadOnly,
   composerBrowserGateDecision
 } from "../lib/agent/browser-composer-gate";
+import {
+  extractScheduledEmailVerification,
+  hasComposerBrowserMutation,
+  scheduledEmailCompletionDecision
+} from "../lib/agent/scheduled-email-verification";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -649,6 +654,78 @@ test("composer browser gate requires approval for composer-changing tools", () =
       composerDetected: false
     }).allowed,
     true
+  );
+});
+
+test("scheduled email completion requires Scheduled read-back after composer browser writes", () => {
+  assert.deepEqual(
+    extractScheduledEmailVerification({
+      result: {
+        scheduled_email: {
+          status: "Scheduled",
+          recipient: "test@example.com",
+          subject: "Cloud ERP follow-up",
+          date: "2026-07-15",
+          time: "10:00 AM"
+        }
+      }
+    }),
+    {
+      recipient: "test@example.com",
+      subject: "Cloud ERP follow-up",
+      date: "2026-07-15",
+      time: "10:00 AM"
+    }
+  );
+  assert.deepEqual(
+    extractScheduledEmailVerification({
+      body: {
+        data: [
+          {
+            Status: "Scheduled",
+            To_Email: "test@example.com",
+            Subject: "Cloud ERP follow-up",
+            Scheduled_Date: "2026-07-15",
+            Scheduled_Time: "10:00 AM"
+          }
+        ]
+      }
+    }),
+    {
+      recipient: "test@example.com",
+      subject: "Cloud ERP follow-up",
+      date: "2026-07-15",
+      time: "10:00 AM"
+    }
+  );
+  assert.equal(
+    extractScheduledEmailVerification({
+      scheduled_email: { status: "Scheduled", recipient: "test@example.com", subject: "Missing time", date: "2026-07-15" }
+    }),
+    null
+  );
+  assert.equal(
+    hasComposerBrowserMutation({
+      task_order_id: "order-1",
+      composer_gate: { composer_detected: true, state_changing: true }
+    }),
+    true
+  );
+  assert.deepEqual(
+    scheduledEmailCompletionDecision({ scope: "write", composerMutations: 1, scheduledVerifications: 0 }),
+    {
+      ok: false,
+      error:
+        "Composer scheduling orders require scheduled email verification before completion. Read back the Scheduled tab first."
+    }
+  );
+  assert.deepEqual(
+    scheduledEmailCompletionDecision({ scope: "write", composerMutations: 1, scheduledVerifications: 1 }),
+    { ok: true }
+  );
+  assert.deepEqual(
+    scheduledEmailCompletionDecision({ scope: "read", composerMutations: 1, scheduledVerifications: 0 }),
+    { ok: true }
   );
 });
 

@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H review fix: scheduled email completion verification (2026-07-12, build)
+
+Added a completion gate for browser-composer scheduling orders. Browser_input and state-changing browser_eval results from the live composer now carry a composer_gate marker plus the active task_order_id, and the loop records scheduled_email_verified audit events when browser_eval or zoho_api read-back returns a Scheduled email row with recipient, subject, date, and time. complete_task_order now refuses write orders that used composer browser mutations until at least one scheduled-email verification exists, while keeping the existing zoho_api receipt rule unchanged.
+
 ## Phase H review fix: browser recovery blocklist parity (2026-07-12, build)
 
 Added browser_navigate, browser_screenshot, and browser_input to the temporary TASK_PREPARATION_FAILED recovery blocklist. This keeps the deterministic scheduler transition consistent until the legacy deterministic worker and email-recovery-policy are removed in the later cleanup pass.
