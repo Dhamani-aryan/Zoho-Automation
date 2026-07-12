@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase I1 autonomy prompt and composer economy (2026-07-12, build)
+
+Started Phase I with the live-run-unblocking prompt and guide changes. The base instructions now distinguish guardrails, records, and gates; prefer autonomy over per-item permission; require adopt-dont-recreate and verify-by-identity; treat unverified receipts as flags rather than automatic task failure; add composer autocomplete hijack, red-chip, draft-autosave, Cc/Bcc reveal, signature-font, and blank-line gotchas; and add call-economy guidance to batch observations while serializing commits. The cloud email-scheduling guide was updated to the next version with the same composer and economy rules plus a skill_guide_updated audit event.
+
 ## Phase H live fix: read_workspace_file root resolution (2026-07-12, build)
 
 Investigated the 12:01 and 13:49 UTC read_workspace_file failures. Both calls requested imports/samples/Test SAP ERP Email Draft.md, but workspaceRootFromCwd resolved the root to G:\Zoho Automation and the tool looked for G:\Zoho Automation\imports\..., while the file lives under G:\Zoho Automation\zoho-agent\imports\.... The resolver now searches the repo root first and the shared workspace parent second, so repo-local drafts and workspace-level workflows/reference files both work. It also safely accepts local Codex attachment absolute paths under .codex/attachments, with pagination covered by a regression test.

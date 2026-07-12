@@ -383,6 +383,24 @@ test("agent composer instructions reconcile recipient chips by email attribute",
   assert.match(loopSource, /Same rules apply for CC/);
 });
 
+test("Phase I soul prompt encodes autonomy, records, identity, and call economy", () => {
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /AUTONOMY OVER APPROVAL/);
+  assert.match(loopSource, /reversible CRM work is not per-item permission work/);
+  assert.match(loopSource, /GUARDRAILS/);
+  assert.match(loopSource, /RECORDS NOT GATES/);
+  assert.match(loopSource, /write_ok_unverified is not automatically a failed task/);
+  assert.match(loopSource, /ADOPT DONT RECREATE/);
+  assert.match(loopSource, /VERIFY BY IDENTITY/);
+  assert.match(loopSource, /autocomplete can hijack Enter/);
+  assert.match(loopSource, /dismiss the dropdown with Escape/);
+  assert.match(loopSource, /red or invalid chip is failure evidence, never success/);
+  assert.match(loopSource, /composer may autosave a Draft once touched; ignore Drafts as evidence/);
+  assert.match(loopSource, /Verdana around 13\.3px/);
+  assert.match(loopSource, /One read-only browser_eval should return the full bundle/);
+  assert.match(loopSource, /Target the one-email-two-task run at 10-14 tool calls/);
+});
+
 test("agent task instructions require duplicate-check before task creation", () => {
   const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
   assert.match(loopSource, /Before any zoho_api POST \/crm\/v3\/Tasks/);
