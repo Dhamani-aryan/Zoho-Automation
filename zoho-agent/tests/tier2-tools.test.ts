@@ -383,6 +383,16 @@ test("agent composer instructions reconcile recipient chips by email attribute",
   assert.match(loopSource, /Same rules apply for CC/);
 });
 
+test("agent task instructions require duplicate-check before task creation", () => {
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /Before any zoho_api POST \/crm\/v3\/Tasks/);
+  assert.match(loopSource, /GET \/crm\/v3\/Tasks in bounded pages/);
+  assert.match(loopSource, /Tasks\/search scoped to the Deal through What_Id/);
+  assert.match(loopSource, /do not already exist as an open task with the same subject/);
+  assert.match(loopSource, /Requested completions that already show Completed are adopted as verified, not re-created/);
+  assert.match(loopSource, /duplicate-check requested Tasks against the exact Deal before any POST/);
+});
+
 test("composer scheduling orders require scheduled email verification before completion", () => {
   const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/scheduled-email-verification.ts"), "utf8");
   assert.match(helperSource, /scheduledEmailCompletionDecision/);
