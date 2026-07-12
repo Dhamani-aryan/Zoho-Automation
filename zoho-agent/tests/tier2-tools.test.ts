@@ -336,3 +336,20 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   assert.match(approvalSource, /decided\.tool_name === "zoho_api"/);
   assert.match(approvalSource, /isZohoApiWriteArgs/);
 });
+
+test("send-now guard blocks trusted clicks, eval fetches, and modifier enter", () => {
+  const guardSource = readFileSync(resolve(process.cwd(), "extension/src/send-guard.ts"), "utf8");
+  assert.match(guardSource, /send-now is blocked; schedule instead/);
+  assert.match(guardSource, /looksLikeSendNowEndpoint/);
+  assert.match(guardSource, /isModifierEnterKey/);
+
+  const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  assert.match(jobsSource, /from "\.\/send-guard"/);
+  assert.match(jobsSource, /assertSendGuardAllowsClick/);
+  assert.match(jobsSource, /document\.elementFromPoint/);
+  assert.match(jobsSource, /SEND_NOW_BLOCKED_MESSAGE/);
+  assert.match(jobsSource, /window\.fetch =/);
+  assert.match(jobsSource, /addEventListener\("click", clickGuard, true\)/);
+  assert.match(jobsSource, /isModifierEnterKey\(key\)/);
+  assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
+});

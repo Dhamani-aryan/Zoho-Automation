@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H4 hard never-send guard (2026-07-12, build)
+
+Added an extension-side send-now guard so agent-driven browser work can schedule emails but cannot immediately send them. Trusted CDP clicks are checked at the live elementFromPoint target before dispatch; visible Send controls are blocked unless the target is a Schedule control. browser_eval now rejects obvious send-now endpoints before execution, temporarily wraps window.fetch while model code runs, and installs capture-phase click guards in the top document and selected same-origin frame. Ctrl/Cmd/Meta+Enter key strings are blocked before dispatch. Blocked actions return "send-now is blocked; schedule instead" so the model can recover toward scheduling.
+
 ## Phase H3 browser primitives (2026-07-12, build)
 
 Exposed first-class browser_navigate, browser_screenshot, and browser_input tools on top of the existing dedicated background Zoho window. Navigation is limited to crm.zoho.com and updates the dedicated tab without focusing Chrome. Screenshot uses CDP Page.captureScreenshot JPEG with the existing 500 KB cap. Input uses the trusted CDP click/type/key path already proven by ui_step, with coordinates derived from selectors or visible text at action time rather than memorized coordinates. The dedicated-window no-focus/no-active/no-resize grep proof now covers the new tools.

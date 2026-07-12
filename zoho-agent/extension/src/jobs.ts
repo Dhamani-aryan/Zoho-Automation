@@ -3,6 +3,7 @@ import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
+import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
 // Tier-2 write tools. Kept in sync with lib/agent/tier2-tools.ts
@@ -139,8 +140,36 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   const frameSelector = typeof job.args.frame_selector === "string" ? job.args.frame_selector.trim() : "";
   let signatureRemoved = false;
   let signatureRestored = false;
+  let sendNowBlocked = false;
   if (!code.trim()) return { ok: false, error_message: "browser_eval code is empty." };
   try {
+    const SEND_NOW_BLOCKED_MESSAGE = "send-now is blocked; schedule instead";
+    function looksLikeSendNowEndpoint(value: string) {
+      return [/\/actions\/[^/?#]*send/i, /\/send(?:mail|_mail|now|_now)?\b/i].some((pattern) => pattern.test(value));
+    }
+    function labelOf(element: Element) {
+      const el = element as HTMLInputElement;
+      return [
+        element.textContent ?? "",
+        el.value ?? "",
+        element.getAttribute("aria-label") ?? "",
+        element.getAttribute("title") ?? "",
+        element.getAttribute("data-zcqa") ?? "",
+        element.id ?? "",
+        element.className ? String(element.className) : ""
+      ]
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+    function isSendNowElement(target: EventTarget | null) {
+      if (!(target instanceof Element)) return false;
+      const candidate = target.closest("button,a,input,[role='button'],span,div");
+      if (!candidate) return false;
+      const label = labelOf(candidate);
+      if (/\bschedule\b/i.test(label)) return false;
+      return /\bsend\b/i.test(label);
+    }
     // Zoho renders the email composer body (and some dialogs) inside a
     // same-origin iframe. When a frame_selector is given, resolve that frame's
     // document and bind it to `document` inside the evaluated code so the
@@ -173,6 +202,23 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
     const signatureBackup = signature ? (signature.cloneNode(true) as Element) : null;
     const signatureParent = signature?.parentElement ?? null;
     const signatureNextSibling = signature?.nextSibling ?? null;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (looksLikeSendNowEndpoint(url)) {
+        sendNowBlocked = true;
+        return Promise.reject(new Error(SEND_NOW_BLOCKED_MESSAGE));
+      }
+      return originalFetch(input, init);
+    }) as typeof window.fetch;
+    const clickGuard = (event: Event) => {
+      if (!isSendNowElement(event.target)) return;
+      sendNowBlocked = true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("click", clickGuard, true);
+    if (boundDocument !== document) boundDocument.addEventListener("click", clickGuard, true);
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     // `document` is shadowed by the bound (possibly frame) document; `window`
     // and `window.document` stay top-level so callers can still read #token.
@@ -181,6 +227,9 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
     try {
       raw = awaitPromise ? await fn(boundDocument) : fn(boundDocument);
     } finally {
+      window.fetch = originalFetch;
+      document.removeEventListener("click", clickGuard, true);
+      if (boundDocument !== document) boundDocument.removeEventListener("click", clickGuard, true);
       if (signatureBackup && !signatureDocument.querySelector("#ecw_signature")) {
         signatureRemoved = true;
         const restoreParent = signatureParent?.isConnected
@@ -204,6 +253,9 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
           : "browser_eval removed the existing Zoho email signature and the extension could not restore it. Stop and reopen a fresh composer.",
         result: { signature_removed: true, signature_restored: signatureRestored }
       };
+    }
+    if (sendNowBlocked) {
+      return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
     }
     if (raw === undefined) {
       return {
@@ -231,6 +283,9 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
     }
     return { ok: true, result: JSON.parse(json) };
   } catch (error) {
+    if (sendNowBlocked) {
+      return { ok: false, error_message: "send-now is blocked; schedule instead", result: { send_now_blocked: true } };
+    }
     return {
       ok: false,
       error_message: error instanceof Error ? error.message : "browser_eval failed."
@@ -663,6 +718,42 @@ async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => 
   }
 }
 
+async function assertSendGuardAllowsClick(tabId: number, x: number, y: number): Promise<PageResult | null> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (clientX: number, clientY: number) => {
+      function labelOf(element: Element) {
+        const el = element as HTMLInputElement;
+        return [
+          element.textContent ?? "",
+          el.value ?? "",
+          element.getAttribute("aria-label") ?? "",
+          element.getAttribute("title") ?? "",
+          element.getAttribute("data-zcqa") ?? "",
+          element.id ?? "",
+          element.className ? String(element.className) : ""
+        ]
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+      const target = document.elementFromPoint(clientX, clientY);
+      const candidate = target?.closest("button,a,input,[role='button'],span,div") ?? null;
+      if (!candidate) return { blocked: false };
+      const label = labelOf(candidate);
+      if (/\bschedule\b/i.test(label)) return { blocked: false, label };
+      return { blocked: /\bsend\b/i.test(label), label };
+    },
+    args: [x, y]
+  });
+  const checked = results?.[0]?.result as { blocked?: unknown; label?: unknown } | undefined;
+  if (checked?.blocked === true) {
+    return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true, label: checked.label ?? "" } };
+  }
+  return null;
+}
+
 async function dispatchTrustedClick(target: chrome.Debuggee, x: number, y: number) {
   await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", {
@@ -693,6 +784,7 @@ function keyParams(key: string) {
 }
 
 async function dispatchTrustedKey(target: chrome.Debuggee, key: string) {
+  if (isModifierEnterKey(key)) throw new Error(SEND_NOW_BLOCKED_MESSAGE);
   const params = keyParams(key);
   await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...params });
   await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
@@ -727,6 +819,9 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
   const type = String(step.type ?? "");
   if (type === "press_key") {
     const key = String(step.key ?? "");
+    if (isModifierEnterKey(key)) {
+      return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
+    }
     await withDebugger(tabId, async (target) => {
       await dispatchTrustedKey(target, key);
     });
@@ -735,6 +830,10 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
 
   const located = await locateUiTarget(tabId, step);
   if (!located.ok) return { ok: false, error_message: located.error_message };
+  if (type === "click") {
+    const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
+    if (sendGuard) return sendGuard;
+  }
 
   return withDebugger(tabId, async (target) => {
     await dispatchTrustedClick(target, located.x, located.y);
@@ -1471,6 +1570,10 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (job.tool_name === "browser_eval") {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
+    const code = typeof job.args.code === "string" ? job.args.code : "";
+    if (looksLikeSendNowEndpoint(code)) {
+      return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
+    }
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
