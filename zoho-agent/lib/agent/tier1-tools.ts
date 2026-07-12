@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 import { upsertZohoRecords, type MirrorDbClient, type SyncModule } from "@/lib/records/zoho-upsert";
 import { normalizeZohoReadFields } from "@/lib/agent/zoho-read-fields";
+import { zohoApiReadSchema } from "@/lib/agent/zoho-api";
 
 const modules = ["Accounts", "Contacts", "Deals"] as const;
 const relatedChildren = ["Contacts", "Deals"] as const;
@@ -143,6 +144,26 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     }
   },
   {
+    name: "zoho_api",
+    tier: 1,
+    description:
+      "Read-only live Zoho REST primitive through the user's Chrome session. H1 supports GET only. Use path values under allowlisted /crm/v3 or /crm/v2.2 CRM endpoints; the result includes the HTTP status and raw JSON body. A 204 response returns { status: 204, empty: true }.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["method", "path"],
+      properties: {
+        method: { type: "string", enum: ["GET"] },
+        path: { type: "string", description: "Allowlisted CRM API path, e.g. /crm/v3/Deals/6834250000000000001." },
+        params: {
+          type: "object",
+          additionalProperties: { oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] },
+          maxProperties: 12
+        }
+      }
+    }
+  },
+  {
     name: "zoho_read_api",
     tier: 1,
     description: "GET-only escape hatch for allowlisted Zoho CRM v3 read paths. Never use for writes.",
@@ -235,6 +256,11 @@ export async function validateTier1ToolCall(call: AgentToolCall, service: Supaba
 
   if (call.name === "zoho_read_api") {
     const args = zohoReadApiSchema.parse(call.args);
+    return { ...call, args };
+  }
+
+  if (call.name === "zoho_api") {
+    const args = zohoApiReadSchema.parse(call.args);
     return { ...call, args };
   }
 

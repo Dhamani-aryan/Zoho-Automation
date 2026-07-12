@@ -535,6 +535,7 @@ test("task preparation failures block model-driven scheduling recovery", () => {
   assert.equal(allowsToolAfterTaskPreparationFailure("browser_eval", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("browser_observe", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("zoho_read_api", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("zoho_api", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("schedule_zoho_email_batch", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("complete_task_order", true), true);
 });

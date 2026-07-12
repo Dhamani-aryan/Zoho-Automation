@@ -1,5 +1,6 @@
 import { claimJob, reportJobDone, reportJobFailed, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
+import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
 import { loadSettings, saveLastJobStatus } from "./storage";
@@ -1480,6 +1481,28 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       return {
         ok: false,
         error_message: `Could not run browser_eval in the Zoho tab${error instanceof Error ? `: ${error.message}` : ""}.`
+      };
+    }
+  }
+  if (job.tool_name === "zoho_api") {
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: zohoApiPageRunner,
+        args: [{ tool_name: job.tool_name, args: job.args }]
+      });
+      const result = results?.[0]?.result as PageResult | undefined;
+      if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
+        return { ok: false, error_message: "zoho_api returned no result." };
+      }
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        error_message: `Could not run zoho_api in the Zoho tab${error instanceof Error ? `: ${error.message}` : ""}.`
       };
     }
   }

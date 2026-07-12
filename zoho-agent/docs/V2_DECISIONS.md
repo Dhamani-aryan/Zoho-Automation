@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H1 zoho_api read primitive (2026-07-12, build)
+
+Started the agent-first execution flip by adding zoho_api as the new generic live Zoho REST read primitive while keeping the old Tier-1 read wrappers available until the Phase H removal step. H1 accepts GET only, validates anchored /crm/v3 and /crm/v2.2 CRM paths against the module/path allowlist, caps params, returns raw JSON with HTTP status, and represents 204 as { status: 204, empty: true }. The extension now has a dedicated self-contained page-runner-api executor with one fetch path using the logged-in page token, X-ZCSRF-TOKEN, X-CRM-ORG, and credentials include. Until the deterministic email worker is removed, zoho_api is also blocked by the existing TASK_PREPARATION_FAILED hard stop.
+
 ## Deterministic task-failure hard stop (2026-07-12, fix)
 
 Live order 909ff1b0-a6cd-4697-9346-a81b4305b202 spent more than a minute on model-driven Zoho reads and browser evaluation after the deterministic worker had already returned TASK_PREPARATION_FAILED. Prompt instructions were insufficient. The server now detects that nested error code, removes scheduling, Zoho read, browser, and UI recovery tools from subsequent model turns, tells the model to complete the active order from the deterministic result, and audits deterministic_task_recovery_blocked. Composer-specific failures remain eligible for the existing single focused recovery because they do not activate this task-failure policy.

@@ -13,6 +13,12 @@ import {
   isTier2WriteTool,
   type PreparedTier2
 } from "../lib/agent/tier2-tools";
+import {
+  isAllowedZohoApiPath,
+  moduleFromZohoApiPath,
+  shapeZohoApiResponse,
+  zohoApiReadSchema
+} from "../lib/agent/zoho-api";
 import type { FieldMetaRow } from "../lib/plan/field-rules";
 
 const fieldMeta: FieldMetaRow[] = [
@@ -248,4 +254,48 @@ test("Zoho task preparation uses API writes with supported deal-scoped task read
   assert.match(source, /"adopt-history"/);
   assert.match(source, /receipts/);
   assert.match(source, /JSON\.parse\(JSON\.stringify\(result\)\)/);
+});
+
+test("zoho_api H1 validates allowlisted GET CRM paths and rejects unsafe paths", () => {
+  assert.equal(isAllowedZohoApiPath("/crm/v3/Deals/6834250000003329005"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/Accounts/6834250000000000001/Contacts"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/Tasks/search"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v2.2/Contacts/6834250000000000001"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/settings/fields"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/users"), true);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/Vendors"), false);
+  assert.equal(isAllowedZohoApiPath("/crm/v3/Deals/6834250000000000001/actions/delete"), false);
+  assert.equal(moduleFromZohoApiPath("/crm/v3/Deals/6834250000003329005"), "Deals");
+
+  assert.deepEqual(zohoApiReadSchema.parse({ method: "get", path: "/crm/v3/Deals", params: { page: 1 } }), {
+    method: "GET",
+    path: "/crm/v3/Deals",
+    params: { page: "1" }
+  });
+  assert.throws(() => zohoApiReadSchema.parse({ method: "DELETE", path: "/crm/v3/Deals/1" }));
+  assert.throws(() => zohoApiReadSchema.parse({ method: "GET", path: "/crm/v3/Vendors" }));
+  assert.throws(() =>
+    zohoApiReadSchema.parse({
+      method: "GET",
+      path: "/crm/v3/Deals",
+      params: Object.fromEntries(Array.from({ length: 13 }, (_, index) => [`p${index}`, "x"]))
+    })
+  );
+});
+
+test("zoho_api H1 response shaping and extension runner fetch proof", () => {
+  assert.deepEqual(shapeZohoApiResponse(204, null), { status: 204, empty: true });
+  assert.deepEqual(shapeZohoApiResponse(200, { data: [] }), { status: 200, body: { data: [] } });
+
+  const source = readFileSync(resolve(process.cwd(), "extension/src/page-runner-api.ts"), "utf8");
+  const fetchCalls = source.match(/\bfetch\(/g) ?? [];
+  assert.equal(fetchCalls.length, 1);
+  assert.match(source, /method !== "GET"/);
+  assert.match(source, /status: 204, empty: true/);
+  assert.match(source, /X-ZCSRF-TOKEN/);
+  assert.match(source, /X-CRM-ORG/);
+
+  const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  assert.match(jobsSource, /zohoApiPageRunner/);
+  assert.match(jobsSource, /job\.tool_name === "zoho_api"/);
 });

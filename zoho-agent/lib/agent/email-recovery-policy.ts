@@ -4,6 +4,7 @@ const BLOCKED_AFTER_TASK_PREPARATION_FAILURE = new Set([
   "zoho_get_record",
   "zoho_get_related",
   "zoho_read_api",
+  "zoho_api",
   "browser_observe",
   "browser_eval",
   "ui_step",
