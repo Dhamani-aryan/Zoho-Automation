@@ -1,4 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const ALLOWED_ROOTS = ["imports/samples", "source_docs", "workflows", "reference/heysnap"] as const;
@@ -13,12 +15,39 @@ export type WorkspaceFileReadArgs = {
 };
 
 export function workspaceRootFromCwd(cwd: string) {
-  return basename(cwd).toLowerCase() === "zoho-agent" ? dirname(cwd) : cwd;
+  return cwd;
+}
+
+function uniqueRoots(roots: string[]) {
+  return [...new Set(roots.map((root) => resolve(root)))];
+}
+
+function searchRoots(workspaceRoot: string) {
+  const root = resolve(workspaceRoot);
+  if (basename(root).toLowerCase() === "zoho-agent") return uniqueRoots([root, dirname(root)]);
+  const childRepo = resolve(root, "zoho-agent");
+  return existsSync(childRepo) ? uniqueRoots([childRepo, root]) : [root];
+}
+
+function isInsideRoot(root: string, candidate: string) {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  const rel = relative(resolvedRoot, resolvedCandidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolveAttachmentPath(requestedPath: string) {
+  const candidate = resolve(requestedPath);
+  const attachmentRoot = resolve(homedir(), ".codex", "attachments");
+  if (!isInsideRoot(attachmentRoot, candidate)) {
+    throw new Error("Absolute workspace file paths are only allowed under the local Codex attachments folder.");
+  }
+  return candidate;
 }
 
 export function resolveWorkspaceFilePath(workspaceRoot: string, requestedPath: string) {
   const normalized = requestedPath.trim().replace(/\\/g, "/");
-  if (!normalized || normalized.includes("\0") || isAbsolute(normalized) || /^[a-z]:/i.test(normalized)) {
+  if (!normalized || normalized.includes("\0")) {
     throw new Error("Workspace file path must be a non-empty relative path.");
   }
 
@@ -27,16 +56,26 @@ export function resolveWorkspaceFilePath(workspaceRoot: string, requestedPath: s
     throw new Error(`Workspace file type is not allowed: ${extension || "(none)"}.`);
   }
 
-  const root = resolve(workspaceRoot);
-  const candidate = resolve(root, normalized);
-  const allowed = ALLOWED_ROOTS.some((allowedRoot) => {
-    const absoluteAllowedRoot = resolve(root, allowedRoot);
-    return candidate === absoluteAllowedRoot || candidate.startsWith(`${absoluteAllowedRoot}${sep}`);
-  });
-  if (!allowed || relative(root, candidate).startsWith("..")) {
+  if (isAbsolute(requestedPath) || /^[a-z]:/i.test(requestedPath)) {
+    return resolveAttachmentPath(requestedPath);
+  }
+
+  let firstAllowedCandidate: string | null = null;
+  for (const root of searchRoots(workspaceRoot)) {
+    const candidate = resolve(root, normalized);
+    const allowed = ALLOWED_ROOTS.some((allowedRoot) => {
+      const absoluteAllowedRoot = resolve(root, allowedRoot);
+      return candidate === absoluteAllowedRoot || candidate.startsWith(`${absoluteAllowedRoot}${sep}`);
+    });
+    if (!allowed || !isInsideRoot(root, candidate)) continue;
+    firstAllowedCandidate ??= candidate;
+    if (existsSync(candidate)) return candidate;
+  }
+
+  if (!firstAllowedCandidate) {
     throw new Error(`Workspace file path is outside allowed roots: ${ALLOWED_ROOTS.join(", ")}.`);
   }
-  return candidate;
+  return firstAllowedCandidate;
 }
 
 export async function readWorkspaceTextFile(workspaceRoot: string, args: WorkspaceFileReadArgs) {

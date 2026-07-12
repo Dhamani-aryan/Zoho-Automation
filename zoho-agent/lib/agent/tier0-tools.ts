@@ -76,13 +76,13 @@ export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "read_workspace_file",
     tier: 0,
     description:
-      "Read a paginated text file from the allowed local workspace roots: imports/samples, source_docs, workflows, or reference/heysnap. Use for drafts, batch inputs, and reference playbooks. Follow next_start_line until the required content is complete.",
+      "Read a paginated text file from the allowed local workspace roots: imports/samples, source_docs, workflows, reference/heysnap, or a local Codex attachment path under .codex/attachments. Use for drafts, batch inputs, and reference playbooks. Follow next_start_line until the required content is complete.",
     parameters: {
       type: "object",
       additionalProperties: false,
       required: ["path"],
       properties: {
-        path: { type: "string", description: "Workspace-relative .md, .txt, .csv, or .json path." },
+        path: { type: "string", description: "Workspace-relative or local Codex attachment .md, .txt, .csv, or .json path." },
         start_line: { type: "integer", minimum: 1, default: 1 },
         max_lines: { type: "integer", minimum: 1, maximum: 200, default: 100 }
       }

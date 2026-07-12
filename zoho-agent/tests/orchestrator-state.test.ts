@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   CLAIM_STALE_MS,
   canApproveRun,
@@ -69,6 +70,14 @@ test("workspace file reader is confined, paginated, and can read the real drafts
     resolveWorkspaceFilePath(workspaceRoot, "imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md"),
     /KD Blitz Batch 3 All Contacts Email Drafts\.md$/
   );
+  assert.match(
+    resolveWorkspaceFilePath(workspaceRoot, "imports/samples/Test SAP ERP Email Draft.md"),
+    /zoho-agent[\\/]imports[\\/]samples[\\/]Test SAP ERP Email Draft\.md$/
+  );
+  assert.match(
+    resolveWorkspaceFilePath(workspaceRoot, "reference/heysnap/COMPOSER_METHOD.md"),
+    /reference[\\/]heysnap[\\/]COMPOSER_METHOD\.md$/
+  );
   assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "../secrets.txt"), /outside allowed roots/);
   assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "imports/samples/secret.exe"), /type is not allowed/);
 
@@ -88,6 +97,23 @@ test("workspace file reader is confined, paginated, and can read the real drafts
   assert.match(selfResolving, /Tasks to complete:/);
   assert.doesNotMatch(selfResolving, /Zoho record link:/);
   assert.doesNotMatch(selfResolving, /^To:/m);
+
+  const attachmentDir = join(homedir(), ".codex", "attachments", `read-workspace-file-test-${process.pid}`);
+  const attachmentPath = join(attachmentDir, "attached-draft.txt");
+  try {
+    mkdirSync(attachmentDir, { recursive: true });
+    writeFileSync(attachmentPath, "Attached draft line 1\nAttached draft line 2\n", "utf8");
+    const attachmentPage = await readWorkspaceTextFile(workspaceRoot, {
+      path: attachmentPath,
+      start_line: 1,
+      max_lines: 1
+    });
+    assert.equal(attachmentPage.path, attachmentPath.replace(/\\/g, "/"));
+    assert.equal(attachmentPage.content, "Attached draft line 1");
+    assert.equal(attachmentPage.next_start_line, 2);
+  } finally {
+    rmSync(attachmentDir, { recursive: true, force: true });
+  }
 });
 
 test("core playbooks route deterministically and carry recent intent", () => {

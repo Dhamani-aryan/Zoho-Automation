@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H live fix: read_workspace_file root resolution (2026-07-12, build)
+
+Investigated the 12:01 and 13:49 UTC read_workspace_file failures. Both calls requested imports/samples/Test SAP ERP Email Draft.md, but workspaceRootFromCwd resolved the root to G:\Zoho Automation and the tool looked for G:\Zoho Automation\imports\..., while the file lives under G:\Zoho Automation\zoho-agent\imports\.... The resolver now searches the repo root first and the shared workspace parent second, so repo-local drafts and workspace-level workflows/reference files both work. It also safely accepts local Codex attachment absolute paths under .codex/attachments, with pagination covered by a regression test.
+
 ## Phase H live fix: schedule popup method (2026-07-12, build)
 
 Documented the live schedule flow as method knowledge. The agent and email-scheduling guide now require observing the composer bottom controls and schedule popup before action, treating selectors as DOM-confirmed hints, matching #schTimeMail options with both non-padded and zero-padded labels, selecting dates through visible calendar cells, rolling post-midnight times to the next calendar day, confirming with Schedule & Close, and verifying by Emails -> Scheduled or internal scheduled-mail read-back. The cloud email-scheduling guide was updated to the next version with a skill_guide_updated audit event.
