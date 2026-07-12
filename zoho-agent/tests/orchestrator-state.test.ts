@@ -52,6 +52,7 @@ import {
   allowsToolAfterTaskPreparationFailure,
   hasTaskPreparationFailure
 } from "../lib/agent/email-recovery-policy";
+import { validateBrowserToolCall } from "../lib/agent/browser-tools";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -562,6 +563,38 @@ test("task preparation failures block model-driven scheduling recovery", () => {
   assert.equal(allowsToolAfterTaskPreparationFailure("zoho_api", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("schedule_zoho_email_batch", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("complete_task_order", true), true);
+});
+
+test("browser primitives validate navigation and input shapes", () => {
+  assert.equal(
+    validateBrowserToolCall({
+      id: "nav",
+      name: "browser_navigate",
+      args: { url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123" }
+    }).name,
+    "browser_navigate"
+  );
+  assert.throws(
+    () =>
+      validateBrowserToolCall({
+        id: "nav",
+        name: "browser_navigate",
+        args: { url: "https://example.com/" }
+      }),
+    /crm\.zoho\.com/
+  );
+  assert.equal(
+    validateBrowserToolCall({
+      id: "input",
+      name: "browser_input",
+      args: { action: "type", selector: "#ceToAddr_1", value: "test@example.com", press_enter: true }
+    }).name,
+    "browser_input"
+  );
+  assert.throws(
+    () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click" } }),
+    /requires selector or text/
+  );
 });
 
 test("ui_step validation and teach-mode gate are strict", () => {

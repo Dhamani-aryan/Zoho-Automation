@@ -17,7 +17,46 @@ const browserObserveSchema = z.object({
   scope_selector: optionalSelectorSchema
 });
 
+const browserNavigateSchema = z.object({
+  url: z.string().trim().url().refine((value) => {
+    try {
+      return new URL(value).hostname === "crm.zoho.com";
+    } catch {
+      return false;
+    }
+  }, "browser_navigate is limited to crm.zoho.com URLs.")
+});
+
+const browserScreenshotSchema = z.object({});
+
+const browserInputSchema = z.union([
+  z.object({
+    action: z.literal("click"),
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema
+  }),
+  z.object({
+    action: z.literal("type"),
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema,
+    value: z.string(),
+    press_enter: z.boolean().optional()
+  }),
+  z.object({
+    action: z.literal("key"),
+    key: z.string().trim().min(1).max(40)
+  })
+]).superRefine((args, ctx) => {
+  if ((args.action === "click" || args.action === "type") && !args.selector && !args.text) {
+    ctx.addIssue({ code: "custom", message: `browser_input ${args.action} requires selector or text.` });
+  }
+});
+
 export type BrowserEvalArgs = z.infer<typeof browserEvalSchema>;
+export type BrowserNavigateArgs = z.infer<typeof browserNavigateSchema>;
+export type BrowserInputArgs = z.infer<typeof browserInputSchema>;
 
 export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
@@ -34,6 +73,74 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
           description: "Optional CSS selector for a dialog, overlay, iframe, or region to observe instead of the full page."
         }
       }
+    }
+  },
+  {
+    name: "browser_navigate",
+    tier: 1,
+    description:
+      "Navigate the dedicated background Zoho tab to a crm.zoho.com URL without focusing or activating Chrome. Use known canonical CRM record URLs.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["url"],
+      properties: {
+        url: { type: "string" }
+      }
+    }
+  },
+  {
+    name: "browser_screenshot",
+    tier: 1,
+    description:
+      "Capture a JPEG screenshot of the dedicated Zoho tab through CDP, capped at 500 KB. Use only when visual evidence materially helps verification.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
+    name: "browser_input",
+    tier: 2,
+    description:
+      "Dispatch trusted CDP input to the dedicated Zoho tab. For click/type, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For key, dispatch one key such as Enter, Tab, or Escape.",
+    parameters: {
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: { const: "click" },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" }
+          }
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["action", "value"],
+          properties: {
+            action: { const: "type" },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" },
+            value: { type: "string" },
+            press_enter: { type: "boolean" }
+          }
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["action", "key"],
+          properties: {
+            action: { const: "key" },
+            key: { type: "string" }
+          }
+        }
+      ]
     }
   },
   {
@@ -59,11 +166,20 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
 ];
 
 export function isBrowserTool(name: string) {
-  return name === "browser_eval" || name === "browser_observe";
+  return (
+    name === "browser_eval" ||
+    name === "browser_observe" ||
+    name === "browser_navigate" ||
+    name === "browser_screenshot" ||
+    name === "browser_input"
+  );
 }
 
 export function validateBrowserToolCall(call: AgentToolCall) {
   if (call.name === "browser_observe") return { ...call, args: browserObserveSchema.parse(call.args ?? {}) };
+  if (call.name === "browser_navigate") return { ...call, args: browserNavigateSchema.parse(call.args) };
+  if (call.name === "browser_screenshot") return { ...call, args: browserScreenshotSchema.parse(call.args ?? {}) };
+  if (call.name === "browser_input") return { ...call, args: browserInputSchema.parse(call.args) };
   if (call.name === "browser_eval") return { ...call, args: browserEvalSchema.parse(call.args) };
   throw new Error(`Unknown browser tool: ${call.name}`);
 }

@@ -17,6 +17,7 @@
     "lib/agent/workspace-files.ts",
     "lib/agent/task-orders.ts",
     "lib/agent/zoho-api.ts",
+    "lib/agent/browser-tools.ts",
     "lib/agent/email-scheduling-tools.ts",
     "lib/agent/zoho-read-fields.ts",
     "lib/agent/turn-lock.ts",

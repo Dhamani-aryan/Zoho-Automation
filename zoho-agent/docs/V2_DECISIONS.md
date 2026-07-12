@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H3 browser primitives (2026-07-12, build)
+
+Exposed first-class browser_navigate, browser_screenshot, and browser_input tools on top of the existing dedicated background Zoho window. Navigation is limited to crm.zoho.com and updates the dedicated tab without focusing Chrome. Screenshot uses CDP Page.captureScreenshot JPEG with the existing 500 KB cap. Input uses the trusted CDP click/type/key path already proven by ui_step, with coordinates derived from selectors or visible text at action time rather than memorized coordinates. The dedicated-window no-focus/no-active/no-resize grep proof now covers the new tools.
+
 ## Phase H2 zoho_api gated writes (2026-07-12, build)
 
 Extended zoho_api from GET-only reads to the single agent-first CRM write primitive for POST and PUT. Mutating calls require either an approved task order or an approval_id through the same pending_approvals/tool_jobs bridge used by existing write tools; GET remains a read and counts zero against task-order record budgets. The server validator and extension runner both confine methods to GET/POST/PUT, require JSON bodies for POST/PUT, reject bodies on GET, cap params, and block delete/send-now-like paths. Record budget usage counts unique body.data ids, or created rows when ids are not available yet.

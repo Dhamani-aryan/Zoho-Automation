@@ -88,6 +88,9 @@ function initialUrlForJob(job: ToolJob) {
     const firstOpen = steps.find((step) => step?.type === "open_url" && isCrmUrl(step.url));
     if (firstOpen) return String(firstOpen.url);
   }
+  if (job.tool_name === "browser_navigate" && isCrmUrl(job.args.url)) {
+    return String(job.args.url);
+  }
   return AGENT_WINDOW_HOME;
 }
 
@@ -122,6 +125,9 @@ function requiresDedicatedAgentWindow(job: ToolJob) {
     job.tool_name === "ui_step" ||
     job.tool_name === "ui_workflow" ||
     job.tool_name === "browser_observe" ||
+    job.tool_name === "browser_navigate" ||
+    job.tool_name === "browser_screenshot" ||
+    job.tool_name === "browser_input" ||
     job.tool_name === "browser_eval" ||
     job.tool_name === "schedule_zoho_email"
   );
@@ -1483,6 +1489,39 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
         error_message: `Could not run browser_eval in the Zoho tab${error instanceof Error ? `: ${error.message}` : ""}.`
       };
     }
+  }
+  if (job.tool_name === "browser_navigate") {
+    return executeUiStep(tabId, { type: "open_url", url: job.args.url });
+  }
+  if (job.tool_name === "browser_screenshot") {
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+    return { ok: true, result: await captureEvidence(tabId) };
+  }
+  if (job.tool_name === "browser_input") {
+    const action = String(job.args.action ?? "");
+    if (action === "click") {
+      return executeUiStep(tabId, {
+        type: "click",
+        selector: job.args.selector,
+        text: job.args.text,
+        frame_selector: job.args.frame_selector
+      });
+    }
+    if (action === "type") {
+      return executeUiStep(tabId, {
+        type: "fill_field",
+        selector: job.args.selector,
+        text: job.args.text,
+        frame_selector: job.args.frame_selector,
+        value: job.args.value,
+        press_enter: job.args.press_enter
+      });
+    }
+    if (action === "key") {
+      return executeUiStep(tabId, { type: "press_key", key: job.args.key });
+    }
+    return { ok: false, error_message: "browser_input action must be click, type, or key." };
   }
   if (job.tool_name === "zoho_api") {
     const method = String(job.args.method ?? "").trim().toUpperCase();

@@ -2588,7 +2588,7 @@ export async function runAgentTurn({
           }
         } else if (isBrowserTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
-          if (call.name === "browser_observe") {
+          if (call.name !== "browser_eval") {
             const validatedCall = validateBrowserToolCall(call);
             result = await runBridgedTool({
               service,

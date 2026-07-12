@@ -234,11 +234,17 @@ test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
 test("extension browser jobs stay in a dedicated background window", () => {
   const source = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(source, /requiresDedicatedAgentWindow/);
+  assert.match(source, /job\.tool_name === "browser_navigate"/);
+  assert.match(source, /job\.tool_name === "browser_screenshot"/);
+  assert.match(source, /job\.tool_name === "browser_input"/);
   assert.match(source, /chrome\.windows\.create\(\{ url, focused: false/);
   assert.doesNotMatch(source, /focused: true/);
   assert.doesNotMatch(source, /state: "normal"/);
   assert.doesNotMatch(source, /active: true/);
   assert.doesNotMatch(source, /chrome\.windows\.update/);
+  assert.match(source, /Page\.captureScreenshot/);
+  assert.match(source, /Input\.dispatchMouseEvent/);
+  assert.match(source, /Input\.dispatchKeyEvent/);
 });
 
 test("Zoho task preparation uses API writes with supported deal-scoped task read-back", () => {
