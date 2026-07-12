@@ -52,8 +52,15 @@ const dbQuerySchema = z.object({
   filters: z.array(
     z.object({
       field: z.string().min(1),
-      op: z.enum(["equals", "contains", "starts_with"]),
-      value: z.union([z.string(), z.number(), z.boolean()]).transform(String)
+      op: z.enum(["equals", "contains", "starts_with", "in"]),
+      value: z
+        .union([
+          z.string(),
+          z.number(),
+          z.boolean(),
+          z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).max(200)
+        ])
+        .transform((value) => (Array.isArray(value) ? value.map(String) : String(value)))
     })
   ).min(1).max(5),
   limit: limitedNumber(25, 100).default(25)
@@ -151,7 +158,7 @@ export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "db_query",
     tier: 0,
     description:
-      "Run a safe structured bulk filter over the Supabase mirror. Use it to resolve task scope quickly; no raw SQL is accepted and live Zoho remains authoritative.",
+      "Run a safe structured bulk filter over the Supabase mirror. Resolve a whole set of records in ONE call: use op 'in' with an array value (e.g. field 'Email', op 'in', value ['a@x.com','b@y.com']) instead of one query per record. No raw SQL is accepted and live Zoho remains authoritative.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -168,8 +175,13 @@ export const TIER0_TOOL_DEFINITIONS: AgentToolDefinition[] = [
             required: ["field", "op", "value"],
             properties: {
               field: { type: "string" },
-              op: { type: "string", enum: ["equals", "contains", "starts_with"] },
-              value: { type: ["string", "number", "boolean"] }
+              op: { type: "string", enum: ["equals", "contains", "starts_with", "in"] },
+              value: {
+                type: ["string", "number", "boolean", "array"],
+                items: { type: ["string", "number", "boolean"] },
+                description:
+                  "Scalar for equals/contains/starts_with; array of values for op 'in' to resolve many records in one call."
+              }
             }
           }
         },
@@ -209,7 +221,12 @@ function filterRecord(record: MirrorRecord, filters: z.infer<typeof dbQuerySchem
   return filters.every((filter) => {
     const column = crmFieldToColumn(filter.field);
     const recordValue = normalize(record.data[column] ?? record.raw[filter.field] ?? record.raw[column]);
-    const filterValue = normalize(filter.value);
+    if (filter.op === "in") {
+      const candidates = Array.isArray(filter.value) ? filter.value : [filter.value];
+      return candidates.some((candidate) => normalize(candidate) === recordValue);
+    }
+    const primaryValue = Array.isArray(filter.value) ? (filter.value[0] ?? "") : filter.value;
+    const filterValue = normalize(primaryValue);
     if (filter.op === "equals") return recordValue === filterValue;
     if (filter.op === "starts_with") return recordValue.startsWith(filterValue);
     return recordValue.includes(filterValue);
