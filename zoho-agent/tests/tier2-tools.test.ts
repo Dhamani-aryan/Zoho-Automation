@@ -393,6 +393,18 @@ test("agent task instructions require duplicate-check before task creation", () 
   assert.match(loopSource, /duplicate-check requested Tasks against the exact Deal before any POST/);
 });
 
+test("agent schedule popup instructions require live observation and Scheduled verification", () => {
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /Schedule popup method/);
+  assert.match(loopSource, /observe the live composer bottom controls before clicking/);
+  assert.match(loopSource, /Schedule control is near Send/);
+  assert.match(loopSource, /#schTimeMail/);
+  assert.match(loopSource, /"8:00 PM" and "08:00 PM"/);
+  assert.match(loopSource, /post-midnight times as rolling to the next calendar day/);
+  assert.match(loopSource, /"Schedule & Close"/);
+  assert.match(loopSource, /Emails -> Scheduled list or the internal scheduled-mail read-back/);
+});
+
 test("composer scheduling orders require scheduled email verification before completion", () => {
   const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/scheduled-email-verification.ts"), "utf8");
   assert.match(helperSource, /scheduledEmailCompletionDecision/);

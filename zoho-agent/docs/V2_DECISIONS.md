@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H live fix: schedule popup method (2026-07-12, build)
+
+Documented the live schedule flow as method knowledge. The agent and email-scheduling guide now require observing the composer bottom controls and schedule popup before action, treating selectors as DOM-confirmed hints, matching #schTimeMail options with both non-padded and zero-padded labels, selecting dates through visible calendar cells, rolling post-midnight times to the next calendar day, confirming with Schedule & Close, and verifying by Emails -> Scheduled or internal scheduled-mail read-back. The cloud email-scheduling guide was updated to the next version with a skill_guide_updated audit event.
+
 ## Phase H live fix: task duplicate-check method (2026-07-12, build)
 
 Made the successful 13:49 UTC task behavior durable. The agent instructions and cloud task-create-complete guide now require reading the exact Deal's Tasks before any Tasks POST, creating only requested subjects that do not already exist open with the same subject, and adopting already-completed requested completions as verified instead of re-creating them. The cloud task guide was updated to the next version with a skill_guide_updated audit event.
