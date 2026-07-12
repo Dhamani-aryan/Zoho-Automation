@@ -3,6 +3,7 @@ import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
+import { composerBrowserGateDecision } from "../../lib/agent/browser-composer-gate";
 import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
@@ -594,6 +595,44 @@ async function assertCrmTab(tabId: number): Promise<PageResult | null> {
     // Fall through to the standard failure.
   }
   return { ok: false, error_message: "UI steps can run only in crm.zoho.com tabs." };
+}
+
+async function composerDetectedInTab(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      function hasComposer(doc: Document) {
+        return Boolean(
+          doc.querySelector(
+            "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+          )
+        );
+      }
+      if (hasComposer(document)) return true;
+      for (const iframe of document.querySelectorAll("iframe")) {
+        try {
+          if (iframe.contentDocument && hasComposer(iframe.contentDocument)) return true;
+        } catch {
+          // Cross-origin frames are not the Zoho composer surface.
+        }
+      }
+      return false;
+    }
+  });
+  return results?.[0]?.result === true;
+}
+
+async function enforceComposerBrowserGate(tabId: number, job: ToolJob): Promise<PageResult | null> {
+  if (job.tool_name !== "browser_input" && job.tool_name !== "browser_eval") return null;
+  const decision = composerBrowserGateDecision({
+    toolName: job.tool_name,
+    args: job.args,
+    composerDetected: await composerDetectedInTab(tabId),
+    approvalId: job.approval_id ?? null,
+    taskOrderId: job.task_order_id ?? null
+  });
+  return decision.allowed ? null : { ok: false, error_message: decision.reason };
 }
 
 async function captureEvidence(tabId?: number) {
@@ -1570,6 +1609,8 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (job.tool_name === "browser_eval") {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
+    const composerGate = await enforceComposerBrowserGate(tabId, job);
+    if (composerGate) return composerGate;
     const code = typeof job.args.code === "string" ? job.args.code : "";
     if (looksLikeSendNowEndpoint(code)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
@@ -1602,6 +1643,10 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     return { ok: true, result: await captureEvidence(tabId) };
   }
   if (job.tool_name === "browser_input") {
+    const crmError = await assertCrmTab(tabId);
+    if (crmError) return crmError;
+    const composerGate = await enforceComposerBrowserGate(tabId, job);
+    if (composerGate) return composerGate;
     const action = String(job.args.action ?? "");
     if (action === "click") {
       return executeUiStep(tabId, {

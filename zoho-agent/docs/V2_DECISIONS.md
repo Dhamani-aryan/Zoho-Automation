@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H review fix: composer browser gate (2026-07-12, build)
+
+Added the missing structural gate for composer-driving browser jobs. browser_input and non-provably-read-only browser_eval now check the live Zoho tab for composer surfaces at execution time and refuse on composer pages unless the job carries an approved task_order_id or approval_id. The refusal tells the model: "composer input requires an approved task order or approval; propose a task order first". browser_observe, browser_screenshot, browser_navigate, and teach-mode ui_step remain unchanged.
+
 ## Phase H6 agent-first tool surface flip (2026-07-12, build)
 
 Flipped the model-facing tool surface toward the agent-first architecture. The agent now sees zoho_api plus browser primitives as the live Zoho action layer; old Tier-1 read wrappers are filtered out of TIER1_TOOL_DEFINITIONS, and the aggregate tool list no longer advertises the deterministic schedule_zoho_email_batch tool or the old Tier-2 business-verb write tools. The legacy validators/runners remain in code for internal compatibility, undo history, and a later deletion pass. Agent instructions now prefer db_* for discovery, zoho_api GET for authoritative reads, zoho_api POST/PUT for gated CRM writes with receipts, and browser tools for composer/scheduler UI. The post-write mirror-sync hint now names zoho_api for live read-back.

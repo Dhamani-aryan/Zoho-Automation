@@ -53,6 +53,10 @@ import {
   hasTaskPreparationFailure
 } from "../lib/agent/email-recovery-policy";
 import { validateBrowserToolCall } from "../lib/agent/browser-tools";
+import {
+  browserEvalIsProvablyReadOnly,
+  composerBrowserGateDecision
+} from "../lib/agent/browser-composer-gate";
 
 test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
@@ -594,6 +598,54 @@ test("browser primitives validate navigation and input shapes", () => {
   assert.throws(
     () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click" } }),
     /requires selector or text/
+  );
+});
+
+test("composer browser gate requires approval for composer-changing tools", () => {
+  assert.equal(browserEvalIsProvablyReadOnly("return document.querySelector('#ceSubject_1')?.value ?? ''"), true);
+  assert.equal(browserEvalIsProvablyReadOnly("document.querySelector('#ceSubject_1').value = 'x'; return {}"), false);
+  assert.deepEqual(
+    composerBrowserGateDecision({
+      toolName: "browser_input",
+      composerDetected: true,
+      approvalId: null,
+      taskOrderId: null
+    }),
+    {
+      allowed: false,
+      reason: "composer input requires an approved task order or approval; propose a task order first"
+    }
+  );
+  assert.equal(
+    composerBrowserGateDecision({
+      toolName: "browser_input",
+      composerDetected: true,
+      taskOrderId: "order-1"
+    }).allowed,
+    true
+  );
+  assert.equal(
+    composerBrowserGateDecision({
+      toolName: "browser_eval",
+      args: { code: "return document.body.innerText" },
+      composerDetected: true
+    }).allowed,
+    true
+  );
+  assert.equal(
+    composerBrowserGateDecision({
+      toolName: "browser_eval",
+      args: { code: "document.querySelector('#ceToAddr_1').dispatchEvent(new Event('input'))" },
+      composerDetected: true
+    }).allowed,
+    false
+  );
+  assert.equal(
+    composerBrowserGateDecision({
+      toolName: "browser_input",
+      composerDetected: false
+    }).allowed,
+    true
   );
 });
 

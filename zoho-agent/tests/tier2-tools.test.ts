@@ -356,6 +356,21 @@ test("send-now guard blocks trusted clicks, eval fetches, and modifier enter", (
   assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
 });
 
+test("composer browser gate is consulted before composer-driving browser tools", () => {
+  const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/browser-composer-gate.ts"), "utf8");
+  assert.match(helperSource, /COMPOSER_INPUT_REQUIRES_APPROVAL/);
+  assert.match(helperSource, /browserEvalIsProvablyReadOnly/);
+  assert.match(helperSource, /composerBrowserGateDecision/);
+
+  const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
+  assert.match(jobsSource, /from "\.\.\/\.\.\/lib\/agent\/browser-composer-gate"/);
+  assert.match(jobsSource, /composerDetectedInTab/);
+  assert.match(jobsSource, /enforceComposerBrowserGate/);
+  assert.match(jobsSource, /#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor/);
+  assert.match(jobsSource, /job\.tool_name === "browser_eval"[\s\S]*enforceComposerBrowserGate/);
+  assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*enforceComposerBrowserGate/);
+});
+
 test("zoho_api write receipts can derive targets and compare read-back fields", () => {
   const targets = zohoApiWriteTargets(
     {
