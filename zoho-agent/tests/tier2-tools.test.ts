@@ -24,6 +24,7 @@ import {
   zohoApiWriteTargets
 } from "../lib/agent/zoho-api";
 import {
+  isComposerScopedSendNowControl,
   isPlainEnterKey,
   isScheduleControl,
   isSendNowControl
@@ -344,7 +345,7 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   assert.match(approvalSource, /isZohoApiWriteArgs/);
 });
 
-test("send-now guard blocks trusted clicks, exact send controls, and focused enter", () => {
+test("send-now guard is composer-scoped and still blocks exact send controls and focused enter", () => {
   assert.equal(isSendNowControl({ ariaLabel: "Send", role: "button" }), true);
   assert.equal(isSendNowControl({ ariaLabel: "Send email", role: "button" }), true);
   assert.equal(isSendNowControl({ text: "Send now", role: "button" }), true);
@@ -352,6 +353,9 @@ test("send-now guard blocks trusted clicks, exact send controls, and focused ent
   assert.equal(isSendNowControl({ text: "Send test", role: "button" }), false);
   assert.equal(isSendNowControl({ text: "Schedule", role: "button" }), false);
   assert.equal(isScheduleControl({ text: "Schedule & Close", role: "button" }), true);
+  assert.equal(isComposerScopedSendNowControl({ ariaLabel: "Send Email", role: "button", insideComposerSurface: false }), false);
+  assert.equal(isComposerScopedSendNowControl({ ariaLabel: "Send", role: "button", insideComposerSurface: true }), true);
+  assert.equal(isComposerScopedSendNowControl({ ariaLabel: "Schedule", role: "button", insideComposerSurface: true }), false);
   assert.equal(isPlainEnterKey("Enter"), true);
 
   const guardSource = readFileSync(resolve(process.cwd(), "extension/src/send-guard.ts"), "utf8");
@@ -360,12 +364,17 @@ test("send-now guard blocks trusted clicks, exact send controls, and focused ent
   assert.match(guardSource, /isModifierEnterKey/);
   assert.match(guardSource, /isPlainEnterKey/);
   assert.match(guardSource, /isSendNowControl/);
+  assert.match(guardSource, /isComposerScopedSendNowControl/);
   assert.match(guardSource, /name === "send email"/);
 
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(jobsSource, /from "\.\/send-guard"/);
   assert.match(jobsSource, /assertSendGuardAllowsClick/);
   assert.match(jobsSource, /assertSendGuardAllowsFocusedEnter/);
+  assert.match(jobsSource, /isInsideComposerSurface/);
+  assert.match(jobsSource, /rootHasComposerRecipients/);
+  assert.match(jobsSource, /rootHasComposerSignature/);
+  assert.match(jobsSource, /inside_composer_surface/);
   assert.match(jobsSource, /document\.elementFromPoint/);
   assert.match(jobsSource, /SEND_NOW_BLOCKED_MESSAGE/);
   assert.match(jobsSource, /window\.fetch =/);
@@ -373,6 +382,7 @@ test("send-now guard blocks trusted clicks, exact send controls, and focused ent
   assert.match(jobsSource, /addEventListener\("keydown", keyGuard, true\)/);
   assert.match(jobsSource, /isModifierEnterKey\(key\)/);
   assert.match(jobsSource, /isPlainEnterKey\(key\)/);
+  assert.match(jobsSource, /step\.press_enter === true[\s\S]*assertSendGuardAllowsFocusedEnter\(tabId, "Enter"\)/);
   assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
 });
 
@@ -387,6 +397,8 @@ test("composer browser gate is consulted before composer-driving browser tools",
   assert.match(jobsSource, /composerDetectedInTab/);
   assert.match(jobsSource, /enforceComposerBrowserGate/);
   assert.match(jobsSource, /#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor/);
+  assert.match(jobsSource, /same-origin Zoho composer surface/);
+  assert.match(jobsSource, /overlayRoots/);
   assert.match(jobsSource, /job\.tool_name === "browser_eval"[\s\S]*enforceComposerBrowserGate/);
   assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*enforceComposerBrowserGate/);
 });
@@ -401,6 +413,9 @@ test("agent composer instructions reconcile recipient chips by email attribute",
   assert.match(loopSource, /label "Loading", missing\/empty email attribute, or a pending\/loading class/);
   assert.match(loopSource, /deduplication, not ambiguity/);
   assert.match(loopSource, /Same rules apply for CC/);
+  assert.match(loopSource, /page-level "Send Email" or "Compose Email" controls open the composer/);
+  assert.match(loopSource, /re-observe with a short bounded wait for the composer to mount/);
+  assert.match(loopSource, /same-origin iframes and overlay\/dialog containers/);
 });
 
 test("Phase I soul prompt encodes autonomy, records, identity, and call economy", () => {

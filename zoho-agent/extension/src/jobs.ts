@@ -178,11 +178,37 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
       if (!buttonish) return false;
       return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
     }
+    function rootHasComposerSignature(root: Element) {
+      if (root.querySelector("#ecw_signature")) return true;
+      for (const iframe of root.querySelectorAll("iframe")) {
+        try {
+          if (iframe instanceof HTMLIFrameElement && iframe.contentDocument?.querySelector("#ecw_signature")) return true;
+        } catch {
+          // Cross-origin frames are not part of the same-origin Zoho composer surface.
+        }
+      }
+      return false;
+    }
+    function rootHasComposerRecipients(root: Element) {
+      return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+    }
+    function isInsideComposerSurface(element: Element) {
+      const directComposerElement = element.closest(
+        "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+      );
+      if (directComposerElement) return true;
+      const composerRootSelector =
+        "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose']";
+      for (let root = element.closest(composerRootSelector); root; root = root.parentElement?.closest(composerRootSelector) ?? null) {
+        if (rootHasComposerRecipients(root) && rootHasComposerSignature(root)) return true;
+      }
+      return false;
+    }
     function isSendNowElement(target: EventTarget | null) {
       if (!(target instanceof Element)) return false;
       const candidate = target.closest("button,a,input,[role='button'],span,div");
       if (!candidate) return false;
-      return isSendNowControl(candidate);
+      return isInsideComposerSurface(candidate) && isSendNowControl(candidate);
     }
     function activeElementIsSendNow(doc: Document) {
       const active = doc.activeElement;
@@ -630,12 +656,29 @@ async function composerDetectedInTab(tabId: number) {
     target: { tabId },
     world: "MAIN",
     func: () => {
+      function rootHasComposerSignature(root: ParentNode) {
+        if (root.querySelector("#ecw_signature,#editorDiv")) return true;
+        for (const iframe of root.querySelectorAll("iframe")) {
+          try {
+            if (iframe instanceof HTMLIFrameElement && iframe.contentDocument?.querySelector("#ecw_signature,#editorDiv")) return true;
+          } catch {
+            // Cross-origin frames are not the Zoho composer surface.
+          }
+        }
+        return false;
+      }
+      function rootHasComposerRecipients(root: ParentNode) {
+        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+      }
       function hasComposer(doc: Document) {
-        return Boolean(
-          doc.querySelector(
-            "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+        if (doc.querySelector("#ecw_signature,#editorDiv")) return true;
+        const overlayRoots = [
+          doc.documentElement,
+          ...doc.querySelectorAll(
+            "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose']"
           )
-        );
+        ];
+        return overlayRoots.some((root) => rootHasComposerRecipients(root) && rootHasComposerSignature(root));
       }
       if (hasComposer(document)) return true;
       for (const iframe of document.querySelectorAll("iframe")) {
@@ -849,10 +892,40 @@ async function assertSendGuardAllowsClick(tabId: number, x: number, y: number): 
         if (!buttonish) return false;
         return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
       }
+      function rootHasComposerSignature(root: Element) {
+        if (root.querySelector("#ecw_signature")) return true;
+        for (const iframe of root.querySelectorAll("iframe")) {
+          try {
+            if (iframe instanceof HTMLIFrameElement && iframe.contentDocument?.querySelector("#ecw_signature")) return true;
+          } catch {
+            // Cross-origin frames are not part of the same-origin Zoho composer surface.
+          }
+        }
+        return false;
+      }
+      function rootHasComposerRecipients(root: Element) {
+        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+      }
+      function isInsideComposerSurface(element: Element) {
+        const directComposerElement = element.closest(
+          "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+        );
+        if (directComposerElement) return true;
+        const composerRootSelector =
+          "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose']";
+        for (let root = element.closest(composerRootSelector); root; root = root.parentElement?.closest(composerRootSelector) ?? null) {
+          if (rootHasComposerRecipients(root) && rootHasComposerSignature(root)) return true;
+        }
+        return false;
+      }
       const target = document.elementFromPoint(clientX, clientY);
       const candidate = target?.closest("button,a,input,[role='button'],span,div") ?? null;
       if (!candidate) return { blocked: false };
-      return { blocked: isSendNowControl(candidate), label: accessibleNames(candidate).join(" | ") };
+      return {
+        blocked: isInsideComposerSurface(candidate) && isSendNowControl(candidate),
+        inside_composer_surface: isInsideComposerSurface(candidate),
+        label: accessibleNames(candidate).join(" | ")
+      };
     },
     args: [x, y]
   });
@@ -896,10 +969,40 @@ async function assertSendGuardAllowsFocusedEnter(tabId: number, key: string): Pr
         if (!buttonish) return false;
         return accessibleNames(element).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
       }
+      function rootHasComposerSignature(root: Element) {
+        if (root.querySelector("#ecw_signature")) return true;
+        for (const iframe of root.querySelectorAll("iframe")) {
+          try {
+            if (iframe instanceof HTMLIFrameElement && iframe.contentDocument?.querySelector("#ecw_signature")) return true;
+          } catch {
+            // Cross-origin frames are not part of the same-origin Zoho composer surface.
+          }
+        }
+        return false;
+      }
+      function rootHasComposerRecipients(root: Element) {
+        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+      }
+      function isInsideComposerSurface(element: Element) {
+        const directComposerElement = element.closest(
+          "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+        );
+        if (directComposerElement) return true;
+        const composerRootSelector =
+          "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose']";
+        for (let root = element.closest(composerRootSelector); root; root = root.parentElement?.closest(composerRootSelector) ?? null) {
+          if (rootHasComposerRecipients(root) && rootHasComposerSignature(root)) return true;
+        }
+        return false;
+      }
       const active = document.activeElement;
       const candidate = active instanceof Element ? active.closest("button,a,input,[role='button'],span,div") : null;
       if (!candidate) return { blocked: false };
-      return { blocked: isSendNowControl(candidate), label: accessibleNames(candidate).join(" | ") };
+      return {
+        blocked: isInsideComposerSurface(candidate) && isSendNowControl(candidate),
+        inside_composer_surface: isInsideComposerSurface(candidate),
+        label: accessibleNames(candidate).join(" | ")
+      };
     }
   });
   const checked = results?.[0]?.result as { blocked?: unknown; label?: unknown } | undefined;
@@ -991,12 +1094,15 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
     if (sendGuard) return sendGuard;
   }
-
   return withDebugger(tabId, async (target) => {
     await dispatchTrustedClick(target, located.x, located.y);
     if (type === "fill_field") {
       await replaceFocusedText(target, String(step.value ?? ""));
-      if (step.press_enter === true) await dispatchTrustedKey(target, "Enter");
+      if (step.press_enter === true) {
+        const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, "Enter");
+        if (enterGuard) return enterGuard;
+        await dispatchTrustedKey(target, "Enter");
+      }
       return {
         ok: true,
         result: {

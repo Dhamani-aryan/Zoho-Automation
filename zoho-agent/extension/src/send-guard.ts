@@ -45,3 +45,11 @@ export function isSendNowControl(input: SendControlLabelInput) {
   if (!buttonish) return false;
   return sendControlAccessibleNames(input).some((name) => name === "send" || name === "send email" || name === "send now" || name === "send mail");
 }
+
+export type ComposerScopedSendControlInput = SendControlLabelInput & {
+  insideComposerSurface?: unknown;
+};
+
+export function isComposerScopedSendNowControl(input: ComposerScopedSendControlInput) {
+  return input.insideComposerSurface === true && isSendNowControl(input);
+}

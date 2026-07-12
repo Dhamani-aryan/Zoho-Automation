@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase I2 amendment: composer-scoped send guard (2026-07-12, build)
+
+Fixed the live false positive where the record page's Send Email compose trigger was treated as send-now. The send guard now blocks exact send controls only when the checked element is inside an already-open composer surface, detected live from recipient chip/input chrome plus #ecw_signature across same-origin iframes and overlay/dialog containers. Page-level Send Email or Compose Email controls that open the composer are allowed. The focused-Enter guard now also covers fill_field press_enter, and the agent instructions tell the model to re-observe with a short bounded wait after compose-trigger clicks.
+
 ## Phase I1 amendment: explicit one-email run shape (2026-07-12, build)
 
 Added the live-run shape target directly to the base agent instructions. A one-email-with-tasks request now says to parse the attachment once, use one db/mirror or zoho_api search per identity, verify Task API writes only through API receipts, use one rich browser_eval observation bundle per composer state instead of repeated thin observations, serialize chip and schedule commits, and finish with one scheduled-artifact read-back. Repeated thin observations are now called out as a smell while retaining the 10-14 tool-call target.
