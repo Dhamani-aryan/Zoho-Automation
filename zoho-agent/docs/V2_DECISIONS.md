@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H review fix: browser recovery blocklist parity (2026-07-12, build)
+
+Added browser_navigate, browser_screenshot, and browser_input to the temporary TASK_PREPARATION_FAILED recovery blocklist. This keeps the deterministic scheduler transition consistent until the legacy deterministic worker and email-recovery-policy are removed in the later cleanup pass.
+
 ## Phase H review fix: composer browser gate (2026-07-12, build)
 
 Added the missing structural gate for composer-driving browser jobs. browser_input and non-provably-read-only browser_eval now check the live Zoho tab for composer surfaces at execution time and refuse on composer pages unless the job carries an approved task_order_id or approval_id. The refusal tells the model: "composer input requires an approved task order or approval; propose a task order first". browser_observe, browser_screenshot, browser_navigate, and teach-mode ui_step remain unchanged.

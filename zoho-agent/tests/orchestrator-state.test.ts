@@ -563,6 +563,9 @@ test("task preparation failures block model-driven scheduling recovery", () => {
   assert.equal(hasTaskPreparationFailure({ error_code: "COMPOSER_OPEN_FAILED" }), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("browser_eval", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("browser_observe", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("browser_navigate", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("browser_screenshot", true), false);
+  assert.equal(allowsToolAfterTaskPreparationFailure("browser_input", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("zoho_read_api", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("zoho_api", true), false);
   assert.equal(allowsToolAfterTaskPreparationFailure("schedule_zoho_email_batch", true), false);
