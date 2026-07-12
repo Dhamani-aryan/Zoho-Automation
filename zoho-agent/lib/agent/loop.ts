@@ -60,6 +60,7 @@ import {
   type SaveSkillGuideArgs
 } from "@/lib/agent/skill-guides";
 import {
+  UNDO_TOOL_DEFINITIONS,
   isUndoTool,
   validateUndoToolCall,
   type UndoRecordArgs,
@@ -210,7 +211,8 @@ const AGENT_TOOL_DEFINITIONS = [
   ...TIER0_TOOL_DEFINITIONS.filter((tool) => V3_TIER0_TOOL_NAMES.has(tool.name)),
   ...TIER1_TOOL_DEFINITIONS.filter((tool) => V3_TIER1_TOOL_NAMES.has(tool.name)),
   ...BROWSER_TOOL_DEFINITIONS,
-  ...SKILL_GUIDE_TOOL_DEFINITIONS
+  ...SKILL_GUIDE_TOOL_DEFINITIONS,
+  ...UNDO_TOOL_DEFINITIONS.filter((tool) => tool.name === "undo_record")
 ];
 
 function titleFromMessage(content: string) {

@@ -554,7 +554,7 @@ test("V3 model-facing tool surface is the HeySnap-style general toolbox", () => 
   assert.doesNotMatch(loopSource, /\.\.\.TIER2_TOOL_DEFINITIONS/);
   assert.doesNotMatch(loopSource, /\.\.\.EMAIL_SCHEDULING_TOOL_DEFINITIONS/);
   assert.doesNotMatch(loopSource, /\.\.\.TASK_ORDER_TOOL_DEFINITIONS/);
-  assert.doesNotMatch(loopSource, /\.\.\.UNDO_TOOL_DEFINITIONS/);
+  assert.match(loopSource, /\.\.\.UNDO_TOOL_DEFINITIONS\.filter\(\(tool\) => tool\.name === "undo_record"\)/);
   assert.doesNotMatch(loopSource, /\.\.\.UI_TOOL_DEFINITIONS/);
   assert.match(loopSource, /Modes: TEACH/);
   assert.match(loopSource, /REPEAT means a matching skill exists/);
