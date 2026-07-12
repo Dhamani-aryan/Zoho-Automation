@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H live fix: composer recipient reconciliation (2026-07-12, build)
+
+Encoded the live 13:49 UTC failure as required method. Recipient chips are now judged only by their email attributes, not visible labels; matching pre-filled To chips are adopted without typing; differing chips are removed before adding the target address; Enter commits are followed by a bounded unresolved-chip poll; same-email duplicates are deduplicated; and leftover address input after a clear attempt is a stop condition. The cloud email-scheduling guide was updated to the next version with the same rule and an audit event.
+
 ## Phase H review fix: scheduled email completion verification (2026-07-12, build)
 
 Added a completion gate for browser-composer scheduling orders. Browser_input and state-changing browser_eval results from the live composer now carry a composer_gate marker plus the active task_order_id, and the loop records scheduled_email_verified audit events when browser_eval or zoho_api read-back returns a Scheduled email row with recipient, subject, date, and time. complete_task_order now refuses write orders that used composer browser mutations until at least one scheduled-email verification exists, while keeping the existing zoho_api receipt rule unchanged.

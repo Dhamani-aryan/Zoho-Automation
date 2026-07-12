@@ -371,6 +371,18 @@ test("composer browser gate is consulted before composer-driving browser tools",
   assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*enforceComposerBrowserGate/);
 });
 
+test("agent composer instructions reconcile recipient chips by email attribute", () => {
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /identify To\/Cc chips only by the email attribute/);
+  assert.match(loopSource, /\[id\^="ceToAddrDetails"\] li\.selectedEmail/);
+  assert.match(loopSource, /never compare visible label text/);
+  assert.match(loopSource, /If a pre-filled chip email already equals the resolved recipient, keep it and type nothing/);
+  assert.match(loopSource, /poll the chip list for up to about 5 seconds/);
+  assert.match(loopSource, /label "Loading", missing\/empty email attribute, or a pending\/loading class/);
+  assert.match(loopSource, /deduplication, not ambiguity/);
+  assert.match(loopSource, /Same rules apply for CC/);
+});
+
 test("composer scheduling orders require scheduled email verification before completion", () => {
   const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/scheduled-email-verification.ts"), "utf8");
   assert.match(helperSource, /scheduledEmailCompletionDecision/);
@@ -434,5 +446,5 @@ test("Phase H6 model-facing tool surface is agent-first", () => {
   assert.doesNotMatch(loopSource, /\.\.\.TIER2_TOOL_DEFINITIONS/);
   assert.doesNotMatch(loopSource, /\.\.\.EMAIL_SCHEDULING_TOOL_DEFINITIONS/);
   assert.match(loopSource, /Use zoho_api POST\/PUT for CRM writes/);
-  assert.match(loopSource, /Email composer method: commit one recipient chip at a time/);
+  assert.match(loopSource, /Email composer recipient reconciliation method/);
 });
