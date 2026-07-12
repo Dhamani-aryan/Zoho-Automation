@@ -517,13 +517,28 @@ test("zoho_api write receipts can derive targets and compare read-back fields", 
   assert.doesNotMatch(loopSource, /require at least one verification receipt/);
 });
 
-test("Phase H6 model-facing tool surface is agent-first", () => {
+test("V3 model-facing tool surface is the HeySnap-style general toolbox", () => {
   const tier1Source = readFileSync(resolve(process.cwd(), "lib/agent/tier1-tools.ts"), "utf8");
-  assert.match(tier1Source, /tool\.name === "zoho_api" \|\| tool\.name === "db_sync_records"/);
+  assert.match(tier1Source, /POST\/PUT are direct CRM writes with no approval\/task-order gate/);
 
   const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.match(loopSource, /V3_TIER0_TOOL_NAMES/);
+  assert.match(loopSource, /"read_workspace_file", "db_search_records", "db_get_record", "db_query"/);
+  assert.match(loopSource, /V3_TIER1_TOOL_NAMES/);
+  assert.match(loopSource, /"zoho_api", "db_sync_records"/);
+  assert.match(loopSource, /\.\.\.BROWSER_TOOL_DEFINITIONS/);
+  assert.match(loopSource, /\.\.\.SKILL_GUIDE_TOOL_DEFINITIONS/);
   assert.doesNotMatch(loopSource, /\.\.\.TIER2_TOOL_DEFINITIONS/);
   assert.doesNotMatch(loopSource, /\.\.\.EMAIL_SCHEDULING_TOOL_DEFINITIONS/);
+  assert.doesNotMatch(loopSource, /\.\.\.TASK_ORDER_TOOL_DEFINITIONS/);
+  assert.doesNotMatch(loopSource, /\.\.\.UNDO_TOOL_DEFINITIONS/);
+  assert.doesNotMatch(loopSource, /\.\.\.UI_TOOL_DEFINITIONS/);
+  assert.match(loopSource, /Modes: TEACH/);
+  assert.match(loopSource, /REPEAT means a matching skill exists/);
+  assert.match(loopSource, /EXPLORE means no skill exists/);
   assert.match(loopSource, /Use zoho_api POST\/PUT for CRM writes/);
   assert.match(loopSource, /Email composer recipient reconciliation method/);
+
+  const skillSource = readFileSync(resolve(process.cwd(), "lib/agent/skill-guides.ts"), "utf8");
+  assert.match(skillSource, /Saves directly and audits the version/);
 });

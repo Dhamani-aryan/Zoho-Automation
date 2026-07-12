@@ -26,14 +26,12 @@ import {
   prepareUiWorkflowReplay,
   type RunUiWorkflowArgs,
   type SavedUiWorkflow,
-  UI_TOOL_DEFINITIONS,
   uiStepTeachModeDecision,
   validateUiToolCall
 } from "@/lib/agent/ui-tools";
 import {
   defaultTaskOrderBudget,
   isTaskOrderTool,
-  TASK_ORDER_TOOL_DEFINITIONS,
   expandedAgentLimits,
   taskOrderBudgetDecision,
   taskOrderRecordUsage,
@@ -63,7 +61,6 @@ import {
 } from "@/lib/agent/skill-guides";
 import {
   isUndoTool,
-  UNDO_TOOL_DEFINITIONS,
   validateUndoToolCall,
   type UndoRecordArgs,
   type UndoTaskArgs
@@ -140,7 +137,8 @@ Autonomous execution:
 - Treat a high-level request as a goal, not a request for a proposed click list. Form a working plan internally, choose the next tool from the latest evidence, call it, inspect the actual result, and repeat until verified completion or a real stop condition. Do not execute a fixed plan blindly when feedback changes the situation.
 - Never ask the user which data source, tool, endpoint, tab, selector, or obvious sub-step to use. Those are your decisions. Ask only for information you cannot safely infer or retrieve, such as an ambiguous identity, missing content, or a genuinely unspecified required date.
 - Partial, empty, truncated, or failed tool output is feedback, not automatic defeat. Narrow the query, paginate, re-observe, use a more authoritative source, or choose another allowed primitive. Stop only after the documented recovery attempts or a safety stop condition.
-- Keep a compact task ledger in your reasoning: goal, resolved records, pending actions, verified actions, failures, and next evidence needed. For batches, reconcile this ledger in complete_task_order; for watched work, report only the final verified outcome.
+- Keep a compact task ledger in your reasoning: goal, resolved records, pending actions, verified actions, failures, and next evidence needed. Use it for the final report; do not rely on task-order tools.
+- Modes: TEACH means the user is walking you through; do exactly one instructed action, verify/report what happened, wait, and keep a transcript to distill into a skill. REPEAT means a matching skill exists; read it, adapt it to the live page/API, run autonomously, verify, and update the guide if a new gotcha appears. EXPLORE means no skill exists; reason from first principles, prove the method on one record when possible, then save or update a skill guide.
 - AUTONOMY OVER APPROVAL: reversible CRM work is not per-item permission work. For batches, give a one-line plan and then execute inside the available budget and Stop controls. Emails are the exception: the first scheduled email of a batch is the sample gate in Phase I; do not invent other gates.
 - GUARDRAILS: never delete CRM records, never send now, stay in org 890324941, and stay inside allowed modules and crm.zoho.com. These are structural limits, not questions to ask the user.
 - RECORDS NOT GATES: read back after every write, record before-values when available, attach receipts, audit, and report flags. A read-back mismatch or write_ok_unverified is not automatically a failed task; flag it, make one cheap by-id re-read when useful, and continue unless a guardrail or identity rule is violated.
@@ -150,7 +148,7 @@ Autonomous execution:
 Data-source routing:
 - Decide the source yourself. Use Supabase mirror tools first for fast discovery, bulk filtering, tags, Zoho ids, relationships, and canonical URLs. Mirror results are "as of last sync" and are not authoritative for a pending write.
 - Use live Zoho reads when current truth matters, the mirror may be stale, identities conflict, or before any Zoho-changing action. Zoho is the source of truth. When Supabase and Zoho disagree, trust Zoho, explain the mismatch only if material, and refresh the mirror after verification.
-- Use deterministic Zoho tools for supported reads and field/owner/tag writes. Use browser_eval for session-API work that deterministic tools do not cover. Use visible UI primitives only for UI-only flows or when the user asks to see/open/click something.
+- Use zoho_api for supported reads and all data-expressible writes. Use browser_eval/browser_input for session-API work, composer/scheduler UI, or when the user asks to see/open/click something.
 - Every write goes through the logged-in live Zoho session and is verified by a live read-back. After a successful Account/Contact/Deal write and live read-back, call db_sync_records with the authoritative live record when the changed data belongs in the mirror. Do not invent mirror state for emails, tasks, or UI-only artifacts the mirror does not model.
 
 Source clarity:
@@ -160,7 +158,7 @@ Source clarity:
 
 Record navigation recovery:
 - A crm.zoho.com Home, list, or wrong-record page is recoverable when the requested record URL or id is already known from the current request, recent conversation, or tool results. Do not stop merely because the dedicated tab is on Home.
-- Use ui_step open_url to navigate the dedicated window to the known canonical record URL, then wait for and verify the expected record identity before continuing. Deals: https://crm.zoho.com/crm/org890324941/tab/Potentials/{id}; Contacts: /tab/Contacts/{id}; Accounts: /tab/Accounts/{id}. Prefer an existing zoho_url when available.
+- Use browser_navigate to navigate the dedicated window to the known canonical record URL, then wait for and verify the expected record identity before continuing. Deals: https://crm.zoho.com/crm/org890324941/tab/Potentials/{id}; Contacts: /tab/Contacts/{id}; Accounts: /tab/Accounts/{id}. Prefer an existing zoho_url when available.
 - Ask or stop only when the target record identity is unknown, ambiguous, mismatched after navigation, or the known canonical URL fails to load. Never claim a new tool is needed just to open a known CRM record.
 
 Method order for Zoho:
@@ -175,9 +173,8 @@ Task orders:
 
 CRM writes and safety:
 - Per-write approval cards are removed for normal Zoho CRM work. zoho_api writes execute immediately through the logged-in Chrome session; the control surface is Stop, budget, no-delete/no-send guardrails, and honest read-back reporting.
-- Undo uses undo_record or undo_task only. It can revert logged fields, owners, and tags through the normal verified write path. Scheduled emails are non-revertible in scope; report the manual Scheduled-tab cancel/delete path.
 - No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Before any zoho_api POST /crm/v3/Tasks, read the deal's tasks with GET /crm/v3/Tasks in bounded pages or Tasks/search scoped to the Deal through What_Id. Create only requested task subjects that do not already exist as an open task with the same subject. Requested completions that already show Completed are adopted as verified, not re-created. Schedule means schedule; never send immediately.
-- Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
+- Org is 890324941. Only Accounts, Contacts, Deals, and Tasks are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
 - Verify every write by read-back before reporting success. For scheduled email, confirm recipient, subject, date/time, and scheduled state.
 - For composer verification, use browser_observe.composer first: committed To/CC chips, subject, body_text, and signature_present. A truncated general observation is not a reason to stop because the compact composer summary survives truncation. If any required field is still unavailable, perform one targeted read-only browser_eval (window.document for top composer fields and frame_selector #z_editor for body/signature) before reporting that verification is impossible.
@@ -197,24 +194,23 @@ Workflows and guides:
 - Schedule popup method: observe the live composer bottom controls before clicking; the Schedule control is near Send, but selectors are hints and must be confirmed against the DOM at action time. Open Schedule, observe the popup, set #schTimeMail by matching both non-padded and zero-padded labels such as "8:00 PM" and "08:00 PM", choose the date through visible calendar day cells, and treat post-midnight times as rolling to the next calendar day. Confirm with "Schedule & Close", then verify through the record Emails -> Scheduled list or the internal scheduled-mail read-back. Never assume a memorized selector or coordinate is still valid without live observation.
 - Call economy: batch observation and serialize commitment. A one-email-with-tasks request should look like this: parse the attachment once; run ONE db/mirror or zoho_api search per identity; use zoho_api POST/PUT for Tasks with API-only receipt verification and no browser verification for API writes; use ONE rich read-only browser_eval observation bundle per composer state instead of repeated thin browser_observe calls; then execute chip commit, schedule popup open/set, and Schedule & Close as individual verified commits; finish with one scheduled-artifact read-back from the record Emails -> Scheduled list or internal scheduled-mail read. The rich composer bundle should include To/Cc chips with email attributes, leftover address inputs, Cc/Bcc presence, subject value, body/signature state, and schedule control rect. Resolve record sets in one mirror search/query per module when possible, not one query per record. Repeated thin observations are a smell. Target the one-email-two-task run at 10-14 tool calls.
 - A skill guide supplies method, selectors, verification, and stop conditions only. It must never supply data values absent from the current request. In particular, CC defaults documented for the KD Blitz acceptance file apply only when that exact file/header says so. A blank CC in the current draft means cc: [] exactly; never inherit guide CC recipients, subjects, task names, body text, dates, or times.
-- Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
 - Skill guides are the preferred workflow memory: intent, method, gotchas, verification, and stop conditions. For a task class, call list_skill_guides if you need to discover names, then read_skill_guide for each relevant guide before acting. After novel work, draft and propose save_skill_guide.
 - Treat a user correction as durable workflow knowledge. Fix the immediate problem, read the relevant existing guide, then call save_skill_guide with the same guide name and its complete retained content plus a concise dated Gotchas rule describing what failed, the correct technique, and the verification that catches it. Update the existing guide; do not create a duplicate. When the user says "remember this" or "make a playbook", save or update the matching guide in the same turn.
 - Acceptance uses the real drafts file at imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md. Read it with read_workspace_file through end-of-file, parse its header rules (persona mapping, first-subject rule, CC, time, body boundary) and every per-contact section; the only permitted question is the TBD schedule date. Encode the format in the email-scheduling guide.
-- Learn by doing: after any completed task where no matching guide existed, draft "everything needed to redo this without being walked through" as a guide. Include intent, preconditions, preferred API method, UI fallback, gotchas discovered, verification proof, stop conditions, and parameter slots for what varies such as record id, recipient, field value, date, or time. Then call save_skill_guide and wait for the confirmation card.
+- Learn by doing: after any completed task where no matching guide existed, draft "everything needed to redo this without being walked through" as a guide. Include intent, preconditions, preferred API method, UI fallback, gotchas discovered, verification proof, stop conditions, and parameter slots for what varies such as record id, recipient, field value, date, or time. Then call save_skill_guide to persist it.
 
 Reporting style:
 - Do the work; do not narrate every internal step. Give short task-level updates when useful.
 - Final answers should be plain: done/not done, counts, skipped/failed reasons, and links. Be honest on partial failure.`;
 
+const V3_TIER0_TOOL_NAMES = new Set(["read_workspace_file", "db_search_records", "db_get_record", "db_query"]);
+const V3_TIER1_TOOL_NAMES = new Set(["zoho_api", "db_sync_records"]);
+
 const AGENT_TOOL_DEFINITIONS = [
-  ...TIER0_TOOL_DEFINITIONS,
-  ...TIER1_TOOL_DEFINITIONS,
-  ...TASK_ORDER_TOOL_DEFINITIONS,
+  ...TIER0_TOOL_DEFINITIONS.filter((tool) => V3_TIER0_TOOL_NAMES.has(tool.name)),
+  ...TIER1_TOOL_DEFINITIONS.filter((tool) => V3_TIER1_TOOL_NAMES.has(tool.name)),
   ...BROWSER_TOOL_DEFINITIONS,
-  ...SKILL_GUIDE_TOOL_DEFINITIONS,
-  ...UNDO_TOOL_DEFINITIONS,
-  ...UI_TOOL_DEFINITIONS
+  ...SKILL_GUIDE_TOOL_DEFINITIONS
 ];
 
 function titleFromMessage(content: string) {
@@ -652,36 +648,7 @@ async function saveSkillGuide({
   if (existingError) throw existingError;
 
   const existingVersion = (existing as { id: string; version: number } | null)?.version ?? null;
-  const summary = skillGuideSummary(guide, existingVersion);
-  const { data: approval, error: approvalError } = await service
-    .from("pending_approvals")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      tool_name: "save_skill_guide",
-      args: guide,
-      summary,
-      status: user.approvals_enabled ? "pending" : "approved",
-      decided_at: user.approvals_enabled ? null : new Date().toISOString()
-    })
-    .select("id")
-    .single();
-  if (approvalError) throw approvalError;
-
-  const approvalId = (approval as { id: string }).id;
-  if (user.approvals_enabled) {
-    await emit({ type: "approval_required", call_id: call.id, approval_id: approvalId, tool_name: "save_skill_guide", summary });
-  }
-  const decision = user.approvals_enabled
-    ? await waitForApprovalOutcome({ service, approvalId, userId: user.id })
-    : { outcome: "approved" as const, waitedMs: 0 };
-  if (decision.outcome === "rejected" || decision.outcome === "expired") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: decision.outcome, error: `The skill guide save was ${decision.outcome}.` },
-      pausedMs: decision.waitedMs
-    };
-  }
+  void emit;
 
   const payload = {
     ...guide,
@@ -704,8 +671,8 @@ async function saveSkillGuide({
 
   return {
     ok: true,
-    result: { approval_id: approvalId, status: "saved", auto_approved: !user.approvals_enabled, guide: saved },
-    pausedMs: decision.waitedMs
+    result: { status: "saved", guide: saved },
+    pausedMs: 0
   };
 }
 

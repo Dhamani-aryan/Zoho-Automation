@@ -45,9 +45,9 @@ export const SKILL_GUIDE_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   },
   {
     name: "save_skill_guide",
-    tier: 2,
+    tier: 1,
     description:
-      "Save a new reusable skill guide or update the existing guide with the same exact name. Supply the complete retained guide when updating; add corrections to Gotchas instead of creating duplicates. Uses a confirmation card when approvals are enabled.",
+      "Save a new reusable skill guide or update the existing guide with the same exact name. Supply the complete retained guide when updating; add corrections to Gotchas instead of creating duplicates. Saves directly and audits the version.",
     parameters: {
       type: "object",
       additionalProperties: false,

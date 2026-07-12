@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## V3 J3 HeySnap-style surface and soul prompt (2026-07-12, build)
+
+Changed the model-facing surface to the general HeySnap-style toolbox: read_workspace_file, db_search_records, db_get_record, db_query, zoho_api, db_sync_records, browser primitives, and skill guide tools. Task-order tools, undo tools, ui_step/ui_workflow tools, deterministic email scheduling, Tier-2 business verbs, and legacy Zoho read wrappers are no longer advertised to the model. The base prompt now names TEACH, REPEAT, and EXPLORE modes, tells the model to use zoho_api/browser primitives directly, removes legacy ui_workflow and task-order instructions, includes Tasks in the allowed module scope, and saves skill guides directly with audit events instead of approval cards.
+
 ## V3 J2 ungated general Zoho execution (2026-07-12, build)
 
 Started the HeySnap parity ungating pass. zoho_api GET/POST/PUT and browser_eval now enqueue directly through the extension without pending_approvals or task_order linkage, and browser_input no longer carries task_order_id just to mutate composer state. The extension claim route no longer rejects queued jobs for missing approval/order rows, and the extension executor no longer refuses zoho_api, schedule_zoho_email, or legacy write-tool jobs for missing approval/order links. Composer browser work is marked for audit instead of gated; the composer-scoped send guard, no-delete/send-now path blocklists, org/module allowlist, Stop, and the 100-call/15-minute default turn budget are the active guardrails.
