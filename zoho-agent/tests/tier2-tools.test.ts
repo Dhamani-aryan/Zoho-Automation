@@ -186,35 +186,27 @@ test("rejects empty updates and too-many records", () => {
   assert.throws(() => validateTier2Call(call("zoho_update_fields", { module: "Deals", updates: many }), { fieldMeta, role: "admin" }));
 });
 
-// --- Belt-and-braces guards (negative proofs) ---
+// --- V3 ungated legacy helpers (kept only until deletion pass) ---
 
-test("assertTier2JobInsertAllowed blocks a Tier-2 write without approval_id", () => {
-  assert.throws(() => assertTier2JobInsertAllowed("zoho_update_fields", null), /without an approved/);
-  assert.throws(() => assertTier2JobInsertAllowed("zoho_change_owner", undefined), /without an approved/);
-  // Tier-1 read is fine without approval.
+test("legacy write-linkage helpers no longer block execution", () => {
+  assert.doesNotThrow(() => assertTier2JobInsertAllowed("zoho_update_fields", null));
+  assert.doesNotThrow(() => assertTier2JobInsertAllowed("zoho_change_owner", undefined));
   assert.doesNotThrow(() => assertTier2JobInsertAllowed("zoho_get_record", null));
-  // Tier-2 write WITH an approval id is fine.
   assert.doesNotThrow(() => assertTier2JobInsertAllowed("zoho_update_fields", "approval-1"));
-});
 
-test("tier2ClaimDecision only clears Tier-2 jobs whose approval is approved", () => {
   assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_get_record", approval_id: null }, null).claimable, true);
-  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: null }, null).claimable, false);
-  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "pending").claimable, false);
-  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "rejected").claimable, false);
+  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: null }, null).claimable, true);
+  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "pending").claimable, true);
+  assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "rejected").claimable, true);
   assert.deepEqual(tier2ClaimDecision({ tool_name: "zoho_update_fields", approval_id: "a1" }, "approved").claimable, true);
-});
 
-test("approvalGatedClaimDecision gates write-effect ui_workflow jobs like Tier-2 writes", () => {
-  assert.equal(approvalGatedClaimDecision({ approval_id: null }, null).claimable, false);
-  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "pending").claimable, false);
-  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "rejected").claimable, false);
-  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, null).claimable, false);
+  assert.equal(approvalGatedClaimDecision({ approval_id: null }, null).claimable, true);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "pending").claimable, true);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "rejected").claimable, true);
+  assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, null).claimable, true);
   assert.equal(approvalGatedClaimDecision({ approval_id: "a1" }, "approved").claimable, true);
-});
 
-test("extensionAcceptsWriteJob refuses a write job lacking approval_id or task_order_id", () => {
-  assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", approval_id: null }), false);
+  assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", approval_id: null }), true);
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", approval_id: "a1" }), true);
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_add_tags", task_order_id: "o1" }), true);
   assert.equal(extensionAcceptsWriteJob({ tool_name: "zoho_search" }), true);
@@ -229,7 +221,7 @@ test("extension WRITE_TOOLS stays in sync with Tier-2 write tool names", () => {
   const extensionNames = [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
   assert.deepEqual(extensionNames, [...TIER2_WRITE_TOOL_NAMES, "schedule_zoho_email"].sort());
   assert.match(source, /job\.tool_name === "schedule_zoho_email"/);
-  assert.match(source, /write without approval or task order refused by extension/);
+  assert.doesNotMatch(source, /write without approval or task order refused by extension/);
   assert.match(source, /prepareDealTasksWithApi/);
   assert.match(source, /tool_name: "zoho_prepare_tasks"/);
   assert.match(source, /task_receipt_missing/);
@@ -334,15 +326,12 @@ test("zoho_api H1 response shaping and extension runner fetch proof", () => {
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(jobsSource, /zohoApiPageRunner/);
   assert.match(jobsSource, /job\.tool_name === "zoho_api"/);
-  assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
+  assert.doesNotMatch(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
 
   const claimSource = readFileSync(resolve(process.cwd(), "app/api/ext/jobs/claim/route.ts"), "utf8");
-  assert.match(claimSource, /isZohoApiWriteArgs/);
-  assert.match(claimSource, /isZohoApiWriteJob/);
-
-  const approvalSource = readFileSync(resolve(process.cwd(), "app/api/agent/approvals/[id]/route.ts"), "utf8");
-  assert.match(approvalSource, /decided\.tool_name === "zoho_api"/);
-  assert.match(approvalSource, /isZohoApiWriteArgs/);
+  assert.doesNotMatch(claimSource, /isZohoApiWriteArgs/);
+  assert.doesNotMatch(claimSource, /isZohoApiWriteJob/);
+  assert.doesNotMatch(claimSource, /pending_approvals/);
 });
 
 test("send-now guard is composer-scoped and still blocks exact send controls and focused enter", () => {
@@ -383,24 +372,26 @@ test("send-now guard is composer-scoped and still blocks exact send controls and
   assert.match(jobsSource, /isModifierEnterKey\(key\)/);
   assert.match(jobsSource, /isPlainEnterKey\(key\)/);
   assert.match(jobsSource, /step\.press_enter === true[\s\S]*assertSendGuardAllowsFocusedEnter\(tabId, "Enter"\)/);
-  assert.match(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
+  assert.doesNotMatch(jobsSource, /method !== "GET" && !job\.approval_id && !job\.task_order_id/);
 });
 
-test("composer browser gate is consulted before composer-driving browser tools", () => {
+test("composer browser mutation marker is non-blocking", () => {
   const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/browser-composer-gate.ts"), "utf8");
   assert.match(helperSource, /COMPOSER_INPUT_REQUIRES_APPROVAL/);
   assert.match(helperSource, /browserEvalIsProvablyReadOnly/);
   assert.match(helperSource, /composerBrowserGateDecision/);
+  assert.match(helperSource, /composer_tools_ungated/);
 
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
-  assert.match(jobsSource, /from "\.\.\/\.\.\/lib\/agent\/browser-composer-gate"/);
   assert.match(jobsSource, /composerDetectedInTab/);
-  assert.match(jobsSource, /enforceComposerBrowserGate/);
+  assert.match(jobsSource, /composerMutationMark/);
+  assert.doesNotMatch(jobsSource, /enforceComposerBrowserGate/);
+  assert.doesNotMatch(jobsSource, /composer input requires an approved task order or approval/);
   assert.match(jobsSource, /#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor/);
   assert.match(jobsSource, /same-origin Zoho composer surface/);
   assert.match(jobsSource, /overlayRoots/);
-  assert.match(jobsSource, /job\.tool_name === "browser_eval"[\s\S]*enforceComposerBrowserGate/);
-  assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*enforceComposerBrowserGate/);
+  assert.match(jobsSource, /job\.tool_name === "browser_eval"[\s\S]*composerMutationMark/);
+  assert.match(jobsSource, /job\.tool_name === "browser_input"[\s\S]*composerMutationMark/);
 });
 
 test("agent composer instructions reconcile recipient chips by email attribute", () => {

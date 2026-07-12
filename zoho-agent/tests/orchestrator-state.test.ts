@@ -635,7 +635,7 @@ test("browser primitives validate navigation and input shapes", () => {
   );
 });
 
-test("composer browser gate requires approval for composer-changing tools", () => {
+test("composer browser gate helper is non-blocking in V3", () => {
   assert.equal(browserEvalIsProvablyReadOnly("return document.querySelector('#ceSubject_1')?.value ?? ''"), true);
   assert.equal(browserEvalIsProvablyReadOnly("document.querySelector('#ceSubject_1').value = 'x'; return {}"), false);
   assert.deepEqual(
@@ -646,8 +646,8 @@ test("composer browser gate requires approval for composer-changing tools", () =
       taskOrderId: null
     }),
     {
-      allowed: false,
-      reason: "composer input requires an approved task order or approval; propose a task order first"
+      allowed: true,
+      reason: "composer_tools_ungated"
     }
   );
   assert.equal(
@@ -672,7 +672,7 @@ test("composer browser gate requires approval for composer-changing tools", () =
       args: { code: "document.querySelector('#ceToAddr_1').dispatchEvent(new Event('input'))" },
       composerDetected: true
     }).allowed,
-    false
+    true
   );
   assert.equal(
     composerBrowserGateDecision({

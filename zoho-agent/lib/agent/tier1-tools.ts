@@ -147,7 +147,7 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = ([
     name: "zoho_api",
     tier: 1,
     description:
-      "Live Zoho REST primitive through the user's Chrome session. GET is a read. POST/PUT are approval/task-order gated writes; DELETE and PATCH are unavailable, and delete/send-now paths are blocked. Use allowlisted /crm/v3 or /crm/v2.2 CRM endpoints. Results include HTTP status and raw JSON body; 204 returns { status: 204, empty: true }.",
+      "Live Zoho REST primitive through the user's Chrome session. GET is a read. POST/PUT are direct CRM writes with no approval/task-order gate; DELETE and PATCH are unavailable, and delete/send-now paths are blocked. Use allowlisted /crm/v3 or /crm/v2.2 CRM endpoints. Results include HTTP status and raw JSON body; 204 returns { status: 204, empty: true }.",
     parameters: {
       type: "object",
       additionalProperties: false,

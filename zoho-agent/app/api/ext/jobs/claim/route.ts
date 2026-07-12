@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZOHO_CRM_DOMAIN, ZOHO_ORG_ID } from "@/lib/constants";
 import { requireExtensionAuth } from "@/lib/extension/auth";
-import { approvalGatedClaimDecision, isTier2WriteTool, tier2ClaimDecision } from "@/lib/agent/tier2-tools";
-import { isEmailSchedulingExtensionJob } from "@/lib/agent/email-scheduling-tools";
-import { isZohoApiWriteArgs } from "@/lib/agent/zoho-api";
 import {
   queuedJobExpiryPatch,
   runningJobStalePatch,
@@ -65,61 +62,6 @@ export async function POST(request: Request) {
     }
     if (!nextJob) {
       return NextResponse.json({ job: null });
-    }
-
-    // Belt-and-braces (2 of 3): a Tier-2 API write job is only handed out when
-    // its linked approval row exists and is 'approved' or it belongs to an
-    // approved task order. Browser/eval/UI jobs are intentionally ungated for
-    // watched interactive sessions; API writes keep the exact scoped-linkage
-    // rule because they can mutate CRM without visible UI evidence.
-    const isZohoApiWriteJob = nextJob.tool_name === "zoho_api" && isZohoApiWriteArgs(nextJob.args);
-    if (isTier2WriteTool(nextJob.tool_name) || isEmailSchedulingExtensionJob(nextJob.tool_name) || isZohoApiWriteJob) {
-      let taskOrderApproved = false;
-      if (nextJob.task_order_id) {
-        const { data: order, error: orderError } = await auth.service
-          .from("task_orders")
-          .select("status")
-          .eq("id", nextJob.task_order_id)
-          .eq("user_id", auth.user.id)
-          .maybeSingle();
-        if (orderError) {
-          return NextResponse.json({ error: orderError.message }, { status: 500 });
-        }
-        taskOrderApproved = (order?.status as string | undefined) === "approved";
-      }
-      let decision = { claimable: taskOrderApproved, reason: taskOrderApproved ? "approved_task_order" : "no_task_order" };
-      if (!taskOrderApproved) {
-        const { data: approval, error: approvalError } = await auth.service
-          .from("pending_approvals")
-          .select("status")
-          .eq("id", nextJob.approval_id ?? "")
-          .maybeSingle();
-        if (approvalError) {
-          return NextResponse.json({ error: approvalError.message }, { status: 500 });
-        }
-        decision = isEmailSchedulingExtensionJob(nextJob.tool_name) || isZohoApiWriteJob
-          ? approvalGatedClaimDecision(
-              { approval_id: nextJob.approval_id ?? null },
-              (approval?.status as string) ?? null
-            )
-          : tier2ClaimDecision(
-              { tool_name: nextJob.tool_name, approval_id: nextJob.approval_id ?? null },
-              (approval?.status as string) ?? null
-            );
-      }
-      if (!decision.claimable) {
-        await auth.service
-          .from("tool_jobs")
-          .update({
-            status: "failed",
-            completed_at: new Date().toISOString(),
-            error_message: `Refused to run scoped extension job without an approved approval or task order (${decision.reason}).`
-          })
-          .eq("id", nextJob.id)
-          .eq("user_id", auth.user.id)
-          .eq("status", "queued");
-        return NextResponse.json({ job: null });
-      }
     }
 
     const claimedAt = new Date().toISOString();

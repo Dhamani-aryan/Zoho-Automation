@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AuthorizedUser } from "@/lib/auth/guards";
 import type { AgentToolCall } from "@/lib/llm/provider";
-import { assertTier2JobInsertAllowed } from "@/lib/agent/tier2-tools";
 import { agentJobTimeoutMs, extensionLiveMs } from "@/lib/agent/runtime-config";
 
 const POLL_INTERVAL_MS = 500;
@@ -72,11 +71,6 @@ export async function runBridgedTool({
   onStatus?: (status: Extract<ToolJobStatus, "queued" | "running">) => void | Promise<void>;
 }) {
   await assertExtensionLive(service, user.id);
-
-  // Belt-and-braces (1 of 3): the bridge only queues Tier-1 reads. A Tier-2
-  // write can never be queued here (it would lack an approval_id); Tier-2 jobs
-  // are created solely by the approvals route.
-  assertTier2JobInsertAllowed(call.name, null);
 
   const { data: inserted, error: insertError } = await service
     .from("tool_jobs")

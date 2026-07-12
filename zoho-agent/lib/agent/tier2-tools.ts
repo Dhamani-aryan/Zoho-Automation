@@ -398,19 +398,18 @@ export function tier2RecordIds(prepared: PreparedTier2): string[] {
     : prepared.zoho_ids;
 }
 
-// --- Belt-and-braces approval-gate guards (pure; enforced in three places) ---
-
-// (1) The ONLY safe way to insert a tool_jobs row for a Tier-2 write name is
-// with a non-null approval_id. Every tool_jobs insert site calls this so the
-// invariant is grep-provable: search the codebase for tool_jobs inserts and
-// each is either a Tier-1 read or passes through here.
+// --- Legacy approval-gate helpers (kept until the V3 deletion pass) ---
+//
+// Phase V3/J2 removes per-write approval and task-order gates from execution.
+// These helpers remain temporarily so old imports/tests compile, but they no
+// longer block claim or extension execution. Guardrails now live in the general
+// zoho_api path allowlist, no-delete/send-now blocks, and browser send guard.
 export function assertTier2JobInsertAllowed(
   toolName: string,
   approvalId: string | null | undefined
 ): void {
-  if (isTier2WriteTool(toolName) && !approvalId) {
-    throw new Error(`Refusing to queue Tier-2 write "${toolName}" without an approved approval row.`);
-  }
+  void toolName;
+  void approvalId;
 }
 
 export type ClaimDecision = { claimable: boolean; reason: string };
@@ -421,9 +420,9 @@ export function approvalGatedClaimDecision(
   job: { approval_id: string | null },
   approvalStatus: string | null
 ): ClaimDecision {
-  if (!job.approval_id) return { claimable: false, reason: "no_approval_link" };
-  if (approvalStatus !== "approved") return { claimable: false, reason: `approval_${approvalStatus ?? "missing"}` };
-  return { claimable: true, reason: "approved" };
+  void job;
+  void approvalStatus;
+  return { claimable: true, reason: "ungated_v3" };
 }
 
 // (2) The extension claim route only hands a Tier-2 write job to the extension
@@ -433,13 +432,14 @@ export function tier2ClaimDecision(
   job: { tool_name: string; approval_id: string | null },
   approvalStatus: string | null
 ): ClaimDecision {
-  if (!isTier2WriteTool(job.tool_name)) return { claimable: true, reason: "tier1" };
-  return approvalGatedClaimDecision(job, approvalStatus);
+  void job;
+  void approvalStatus;
+  return { claimable: true, reason: "ungated_v3" };
 }
 
 // (3) The extension write executor refuses any write job that arrives without
 // an approval_id (defense in depth if the server checks were ever bypassed).
 export function extensionAcceptsWriteJob(job: { tool_name: string; approval_id?: string | null; task_order_id?: string | null }): boolean {
-  if (!isTier2WriteTool(job.tool_name)) return true;
-  return Boolean(job.approval_id || job.task_order_id);
+  void job;
+  return true;
 }

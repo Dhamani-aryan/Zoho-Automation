@@ -3,7 +3,6 @@ import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
-import { browserEvalIsProvablyReadOnly, composerBrowserGateDecision } from "../../lib/agent/browser-composer-gate";
 import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, isPlainEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 
@@ -694,37 +693,23 @@ async function composerDetectedInTab(tabId: number) {
   return results?.[0]?.result === true;
 }
 
-type ComposerGateCheck = {
-  refusal: PageResult | null;
+type ComposerMutationMark = {
   composerDetected: boolean;
   stateChanging: boolean;
 };
 
-async function enforceComposerBrowserGate(tabId: number, job: ToolJob): Promise<ComposerGateCheck> {
+async function composerMutationMark(tabId: number, job: ToolJob): Promise<ComposerMutationMark> {
   if (job.tool_name !== "browser_input" && job.tool_name !== "browser_eval") {
-    return { refusal: null, composerDetected: false, stateChanging: false };
+    return { composerDetected: false, stateChanging: false };
   }
-  const composerDetected = await composerDetectedInTab(tabId);
-  const stateChanging =
-    job.tool_name === "browser_input" ||
-    (job.tool_name === "browser_eval" &&
-      !browserEvalIsProvablyReadOnly(typeof job.args.code === "string" ? job.args.code : ""));
-  const decision = composerBrowserGateDecision({
-    toolName: job.tool_name,
-    args: job.args,
-    composerDetected,
-    approvalId: job.approval_id ?? null,
-    taskOrderId: job.task_order_id ?? null
-  });
   return {
-    refusal: decision.allowed ? null : { ok: false, error_message: decision.reason },
-    composerDetected,
-    stateChanging
+    composerDetected: await composerDetectedInTab(tabId),
+    stateChanging: job.tool_name === "browser_input" || job.tool_name === "browser_eval"
   };
 }
 
-function withComposerGateResult(response: PageResult, gate: ComposerGateCheck): PageResult {
-  if (!gate.composerDetected || !gate.stateChanging || !response.ok) return response;
+function withComposerGateResult(response: PageResult, mark: ComposerMutationMark): PageResult {
+  if (!mark.composerDetected || !mark.stateChanging || !response.ok) return response;
   const result = response.result && typeof response.result === "object" ? (response.result as Record<string, unknown>) : {};
   return {
     ok: true,
@@ -1799,9 +1784,6 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
 async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   const isWrite = WRITE_TOOLS.has(job.tool_name);
   if (job.tool_name === "schedule_zoho_email") {
-    if (!job.approval_id && !job.task_order_id) {
-      return { ok: false, error_message: "write without approval or task order refused by extension" };
-    }
     return runScheduleZohoEmail(tabId, job);
   }
   if (job.tool_name === "ui_step") {
@@ -1833,8 +1815,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (job.tool_name === "browser_eval") {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
-    const composerGate = await enforceComposerBrowserGate(tabId, job);
-    if (composerGate.refusal) return composerGate.refusal;
+    const composerMark = await composerMutationMark(tabId, job);
     const code = typeof job.args.code === "string" ? job.args.code : "";
     if (looksLikeSendNowEndpoint(code)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
@@ -1850,7 +1831,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
         return { ok: false, error_message: "browser_eval returned no result." };
       }
-      return withComposerGateResult(result, composerGate);
+      return withComposerGateResult(result, composerMark);
     } catch (error) {
       return {
         ok: false,
@@ -1869,8 +1850,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
   if (job.tool_name === "browser_input") {
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
-    const composerGate = await enforceComposerBrowserGate(tabId, job);
-    if (composerGate.refusal) return composerGate.refusal;
+    const composerMark = await composerMutationMark(tabId, job);
     const action = String(job.args.action ?? "");
     if (action === "click") {
       const result = await executeUiStep(tabId, {
@@ -1879,7 +1859,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
         text: job.args.text,
         frame_selector: job.args.frame_selector
       });
-      return withComposerGateResult(result, composerGate);
+      return withComposerGateResult(result, composerMark);
     }
     if (action === "type") {
       const result = await executeUiStep(tabId, {
@@ -1890,19 +1870,15 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
         value: job.args.value,
         press_enter: job.args.press_enter
       });
-      return withComposerGateResult(result, composerGate);
+      return withComposerGateResult(result, composerMark);
     }
     if (action === "key") {
       const result = await executeUiStep(tabId, { type: "press_key", key: job.args.key });
-      return withComposerGateResult(result, composerGate);
+      return withComposerGateResult(result, composerMark);
     }
     return { ok: false, error_message: "browser_input action must be click, type, or key." };
   }
   if (job.tool_name === "zoho_api") {
-    const method = String(job.args.method ?? "").trim().toUpperCase();
-    if (method !== "GET" && !job.approval_id && !job.task_order_id) {
-      return { ok: false, error_message: "write without approval or task order refused by extension" };
-    }
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
     try {
@@ -1925,12 +1901,6 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     }
   }
 
-  // Belt-and-braces (3 of 3): a write job must carry an approval_id OR an
-  // approved task_order_id from the server claim route. Even if the server
-  // checks were somehow bypassed, the extension refuses unscoped writes.
-  if (isWrite && !job.approval_id && !job.task_order_id) {
-    return { ok: false, error_message: "write without approval or task order refused by extension" };
-  }
   const crmError = await assertCrmTab(tabId);
   if (crmError) return crmError;
   try {

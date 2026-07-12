@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## V3 J2 ungated general Zoho execution (2026-07-12, build)
+
+Started the HeySnap parity ungating pass. zoho_api GET/POST/PUT and browser_eval now enqueue directly through the extension without pending_approvals or task_order linkage, and browser_input no longer carries task_order_id just to mutate composer state. The extension claim route no longer rejects queued jobs for missing approval/order rows, and the extension executor no longer refuses zoho_api, schedule_zoho_email, or legacy write-tool jobs for missing approval/order links. Composer browser work is marked for audit instead of gated; the composer-scoped send guard, no-delete/send-now path blocklists, org/module allowlist, Stop, and the 100-call/15-minute default turn budget are the active guardrails.
+
 ## Phase I2 amendment: composer-scoped send guard (2026-07-12, build)
 
 Fixed the live false positive where the record page's Send Email compose trigger was treated as send-now. The send guard now blocks exact send controls only when the checked element is inside an already-open composer surface, detected live from recipient chip/input chrome plus #ecw_signature across same-origin iframes and overlay/dialog containers. Page-level Send Email or Compose Email controls that open the composer are allowed. The focused-Enter guard now also covers fill_field press_enter, and the agent instructions tell the model to re-observe with a short bounded wait after compose-trigger clicks.

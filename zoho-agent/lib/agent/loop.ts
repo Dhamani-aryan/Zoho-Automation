@@ -165,19 +165,16 @@ Record navigation recovery:
 
 Method order for Zoho:
 1. Use db_* mirror tools for fast discovery, bulk filtering, tags, stored Zoho ids, and canonical URLs. Use zoho_api GET for authoritative live CRM reads before writes, after uncertain mirror data, and for read-back verification. A 204 means an empty live result, not a tool failure.
-2. Use zoho_api POST/PUT for CRM writes that fit the API. It is the single CRM write primitive: writes are approval/task-order gated, delete/send-now endpoints are structurally blocked, and every mutating result includes server read-back receipts when targets are known. Include those receipts in final reports.
+2. Use zoho_api POST/PUT for CRM writes that fit the API. It is the single CRM write primitive: writes run directly without approval/task-order gates; delete/send-now endpoints are structurally blocked. Verify by reading Zoho back as agent behavior and flag any miss honestly.
 3. Use browser_navigate, browser_observe, browser_input, browser_screenshot, and browser_eval for UI-only work such as the email composer and scheduler. browser_eval may inspect or surgically edit the page, but every state-changing eval must return exact read-back JSON. If browser_eval reports returned=false, assume state may already have changed and observe/read back before retrying. In the email editor, never replace #editorDiv innerHTML/textContent or use replaceChildren; insert body nodes before #ecw_signature and verify the signature remains.
 4. UI automation is evidence-driven. Observe before acting, target visible selectors/text from current evidence, act once, then verify. Do not run a stale fixed click plan.
 
 Task orders:
-- Call propose_task_order only for unattended or batch work (>3 records, file-driven runs, or work the user is not actively directing). Do not create task orders for simple watched browser steps such as opening a deal, clicking Compose, typing in a visible composer, or reading the page.
-- A task order is a budgeted work log when approval cards are off and an approval gate when cards are on. After it is approved or auto-approved, execute the task end to end without asking for per-step permission. The Stop button is the user's abort lever.
-- Stay within the task order plan and budgets. If the scope changes, expected records change materially, or the work becomes unsafe, stop and explain.
-- Finish active orders with complete_task_order. The report must include counts, per-record status, Zoho links when known, failures with reasons, and expected-vs-actual reconciliation.
-- For a changing batch, the task-order plan/expected changes are the preview. When approvals are enabled, wait for its card; when approvals are disabled, it auto-approves as the configured work log and you proceed without asking again.
+- Task orders are legacy bookkeeping and no longer gate normal Zoho CRM execution. Do not call propose_task_order for ordinary CRM work. Use your internal task ledger, the tool-call budget, the Stop button, audit logs, and the final report instead.
+- If an old active order is already present in the session, finish it honestly when appropriate, but never wait for approval or create a new order as a prerequisite for zoho_api writes or browser work.
 
 CRM writes and safety:
-- When approval cards are enabled, per-call approval cards apply for small one-off writes outside a task order. When cards are disabled, these writes execute immediately with before/after evidence and read-back verification.
+- Per-write approval cards are removed for normal Zoho CRM work. zoho_api writes execute immediately through the logged-in Chrome session; the control surface is Stop, budget, no-delete/no-send guardrails, and honest read-back reporting.
 - Undo uses undo_record or undo_task only. It can revert logged fields, owners, and tags through the normal verified write path. Scheduled emails are non-revertible in scope; report the manual Scheduled-tab cancel/delete path.
 - No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Before any zoho_api POST /crm/v3/Tasks, read the deal's tasks with GET /crm/v3/Tasks in bounded pages or Tasks/search scoped to the Deal through What_Id. Create only requested task subjects that do not already exist as an open task with the same subject. Requested completions that already show Completed are adopted as verified, not re-created. Schedule means schedule; never send immediately.
 - Org is 890324941. Only Accounts, Contacts, and Deals are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
@@ -193,7 +190,7 @@ Search and matching:
 Workflows and guides:
 - Use read_workspace_file for local drafts, batch inputs, source playbooks, and reference docs. Read every required page by following next_start_line; never claim a file was parsed from its name or from a truncated first page.
 - When the user attaches or references a CRM work Markdown file, infer the requested operations from its sections: email fields mean schedule the email, New tasks means create those tasks, and Tasks to complete or Closed tasks means complete those exact tasks. An attachment-only message, "Process this", or "Do this" is a complete instruction; do not ask the user to restate the actions. Parse all rules, body, CC, subject, task sections, and contact sections. Resolve missing contact email and all Zoho Contact/Account/Deal/task ids and links yourself using Supabase mirror search first and live Zoho when current identity matters. Use contact email as the strongest supplied key, then contact name + account/company + deal name. Do not ask the user for links, email addresses that CRM can resolve, tool choices, selectors, or a walkthrough. Stop only for true identity ambiguity, missing required body/subject, or a missing schedule date/time the file/request does not specify.
-- For every structured email scheduling request, parse the complete input first. For attached files or unattended work, propose one write task order before mutating. Resolve Contact -> Account -> Deal with db_* and zoho_api, duplicate-check requested Tasks against the exact Deal before any POST, create/complete only missing/open Tasks with zoho_api POST/PUT plus receipts, adopt already-open/already-completed requested Tasks as verified when they match exactly, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
+- For every structured email scheduling request, parse the complete input first. Resolve Contact -> Account -> Deal with db_* and zoho_api, duplicate-check requested Tasks against the exact Deal before any POST, create/complete only missing/open Tasks with zoho_api POST/PUT plus API read-back behavior, adopt already-open/already-completed requested Tasks as verified when they match exactly, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
 - Email composer recipient reconciliation method: identify To/Cc chips only by the email attribute of [id^="ceToAddrDetails"] li.selectedEmail or [id^="ceCCAddrDetails"] li.selectedEmail, with case-insensitive email comparison; never compare visible label text. Before typing anything, read existing chips. If a pre-filled chip email already equals the resolved recipient, keep it and type nothing. If it differs, remove it through its .closeIconB, then add the correct address. After any Enter commit, poll the chip list for up to about 5 seconds until no chip is unresolved: unresolved means label "Loading", missing/empty email attribute, or a pending/loading class. Never judge chips while one is unresolved. If the same email appears in more than one chip, remove extras through .closeIconB and re-verify; this is deduplication, not ambiguity. Stop only when, after resolution, a chip email attribute differs from the target set, or leftover input text is non-empty after a clear attempt. Same rules apply for CC. A blank CC in the current draft means no CC.
 - Compose trigger method: page-level "Send Email" or "Compose Email" controls open the composer; they are not send-now actions. After clicking a compose trigger, re-observe with a short bounded wait for the composer to mount before declaring that it failed. Detect the mounted composer through recipient chip/input chrome plus #ecw_signature, including same-origin iframes and overlay/dialog containers.
 - Composer gotchas: autocomplete can hijack Enter. After every chip Enter, assert that the committed chip email attribute equals the intended address exactly; if the wrong suggestion committed, remove that chip, dismiss the dropdown with Escape, and retry. A red or invalid chip is failure evidence, never success. Wait out Loading chips before judging. Cc and Bcc inputs exist only after their reveal controls are clicked. The composer may autosave a Draft once touched; ignore Drafts as evidence and verify Scheduled instead. Body inserted above #ecw_signature should match the signature font, Verdana around 13.3px, and preserve the blank-line gap before the signature.
@@ -1767,7 +1764,6 @@ async function runZohoApiTool({
   user,
   sessionId,
   call,
-  order,
   emit
 }: {
   service: SupabaseClient;
@@ -1778,97 +1774,14 @@ async function runZohoApiTool({
   emit: Emit;
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const args = zohoApiReadSchema.parse(call.args);
-  if (!isZohoApiWriteArgs(args)) {
-    const result = await runBridgedTool({
-      service,
-      user,
-      sessionId,
-      call: { ...call, args },
-      taskOrderId: order?.id ?? null,
-      onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-    });
-    return { ok: true, result: order ? withTaskOrderId(result, order.id) : result, pausedMs: 0 };
-  }
-
-  if (order) {
-    const job = await enqueueZohoApi({ service, user, sessionId, call, args, taskOrderId: order.id, emit });
-    const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
-    return {
-      ok: job.ok,
-      result: {
-        task_order_id: order.id,
-        status: job.ok ? "executed" : "failed",
-        ...(resultWithReceipts && typeof resultWithReceipts === "object"
-          ? (resultWithReceipts as Record<string, unknown>)
-          : { result: resultWithReceipts })
-      },
-      pausedMs: job.waitedMs
-    };
-  }
-
-  const summary = zohoApiSummary(args);
-  const { data: approval, error: approvalError } = await service
-    .from("pending_approvals")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      tool_name: "zoho_api",
-      args,
-      summary,
-      status: user.approvals_enabled ? "pending" : "approved",
-      decided_at: user.approvals_enabled ? null : new Date().toISOString()
-    })
-    .select("id")
-    .single();
-  if (approvalError) throw approvalError;
-
-  const approvalId = (approval as { id: string }).id;
-  if (!user.approvals_enabled) {
-    const job = await enqueueZohoApi({ service, user, sessionId, call, args, approvalId, emit });
-    const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
-    return {
-      ok: job.ok,
-      result: {
-        approval_id: approvalId,
-        status: job.ok ? "executed" : "failed",
-        auto_approved: true,
-        ...(resultWithReceipts && typeof resultWithReceipts === "object"
-          ? (resultWithReceipts as Record<string, unknown>)
-          : { result: resultWithReceipts })
-      },
-      pausedMs: job.waitedMs
-    };
-  }
-
-  await emit({
-    type: "approval_required",
-    call_id: call.id,
-    approval_id: approvalId,
-    tool_name: "zoho_api",
-    summary
+  const result = await runBridgedTool({
+    service,
+    user,
+    sessionId,
+    call: { ...call, args },
+    onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
   });
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-  if (decision.outcome === "rejected" || decision.outcome === "expired") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: decision.outcome, error: `The zoho_api write was ${decision.outcome}.` },
-      pausedMs: decision.waitedMs
-    };
-  }
-
-  const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
-  const resultWithReceipts = await withZohoApiReceipts({ service, user, sessionId, call, args, job });
-  return {
-    ok: job.ok,
-    result: {
-      approval_id: approvalId,
-      status: job.ok ? "executed" : "failed",
-      ...(resultWithReceipts && typeof resultWithReceipts === "object"
-        ? (resultWithReceipts as Record<string, unknown>)
-        : { result: resultWithReceipts })
-    },
-    pausedMs: decision.waitedMs + job.waitedMs
-  };
+  return { ok: true, result, pausedMs: 0 };
 }
 
 async function runBrowserEvalTool({
@@ -1876,7 +1789,6 @@ async function runBrowserEvalTool({
   user,
   sessionId,
   call,
-  order,
   emit
 }: {
   service: SupabaseClient;
@@ -1889,109 +1801,29 @@ async function runBrowserEvalTool({
   const validated = validateBrowserToolCall(call);
   const args = validated.args as BrowserEvalArgs;
 
-  if (order) {
-    const job = await enqueueBrowserEval({
-      service,
-      user,
-      sessionId,
-      call,
-      args,
-      taskOrderId: order.id,
-      emit
-    });
-    return {
-      ok: job.ok,
-      result: {
-        task_order_id: order.id,
-        code_sha256: codeHash(args.code),
-        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
-      },
-      pausedMs: job.waitedMs
-    };
-  }
-
-  if (!user.approvals_enabled) {
-    const job = await enqueueBrowserEval({
-      service,
-      user,
-      sessionId,
-      call,
-      args,
-      emit
-    });
-    return {
-      ok: job.ok,
-      result: {
-        status: job.ok ? "executed" : "failed",
-        code_sha256: codeHash(args.code),
-        auto_approved: true,
-        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
-      },
-      pausedMs: job.waitedMs
-    };
-  }
-
-  const summary = browserEvalSummary(args);
-  const { data: approval, error: approvalError } = await service
-    .from("pending_approvals")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      tool_name: "browser_eval",
-      args,
-      summary
-    })
-    .select("id")
-    .single();
-  if (approvalError) throw approvalError;
-
-  const approvalId = (approval as { id: string }).id;
-  await emit({
-    type: "approval_required",
-    call_id: call.id,
-    approval_id: approvalId,
-    tool_name: "browser_eval",
-    summary
-  });
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-  if (decision.outcome === "rejected" || decision.outcome === "expired") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: decision.outcome, code_sha256: codeHash(args.code) },
-      pausedMs: decision.waitedMs
-    };
-  }
-
   const job = await enqueueBrowserEval({
     service,
     user,
     sessionId,
     call,
     args,
-    approvalId,
     emit
   });
   return {
     ok: job.ok,
     result: {
-      approval_id: approvalId,
+      status: job.ok ? "executed" : "failed",
       code_sha256: codeHash(args.code),
       ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
     },
-    pausedMs: decision.waitedMs + job.waitedMs
+    pausedMs: job.waitedMs
   };
 }
 
 function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean, guideContext: string) {
   return `${AGENT_INSTRUCTIONS}
 
-Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}; approval cards are ${
-    approvalsEnabled ? "ON" : "OFF"
-  }. Watched browser work can use browser_observe, ui_step, and browser_eval immediately, then verify honestly. ${
-    approvalsEnabled
-      ? "When approval cards are ON, unattended/batch task orders and Tier-2 API writes pause for cards."
-      : "When approval cards are OFF, batch task orders auto-approve as work logs and Tier-2 API writes run immediately with before/after evidence."
-  }${guideContext}`;
+Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. Approval cards are no longer part of normal Zoho CRM execution; zoho_api writes and browser tools run directly, with guardrails and honest read-back reporting.${guideContext}`;
 }
 
 async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
@@ -2883,13 +2715,9 @@ export async function runAgentTurn({
               user,
               sessionId,
               call: validatedCall,
-              taskOrderId: call.name === "browser_input" ? approvedOrder?.id ?? null : null,
               onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
             });
-            result =
-              call.name === "browser_input" && approvedOrder
-                ? withTaskOrderId(bridgedResult, approvedOrder.id)
-                : bridgedResult;
+            result = bridgedResult;
           } else {
             const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
             ok = evalResult.ok;

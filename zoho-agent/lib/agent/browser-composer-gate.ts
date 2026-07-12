@@ -1,5 +1,5 @@
 export const COMPOSER_INPUT_REQUIRES_APPROVAL =
-  "composer input requires an approved task order or approval; propose a task order first";
+  "composer input is ungated; use the composer-scoped send guard and verify by read-back";
 
 export function browserEvalIsProvablyReadOnly(code: string) {
   const source = code.trim();
@@ -24,15 +24,5 @@ export function composerBrowserGateDecision(input: {
   taskOrderId?: string | null;
 }) {
   if (!input.composerDetected) return { allowed: true as const, reason: "no_composer" };
-  if (input.approvalId || input.taskOrderId) return { allowed: true as const, reason: "approved_scope" };
-  if (input.toolName === "browser_input") {
-    return { allowed: false as const, reason: COMPOSER_INPUT_REQUIRES_APPROVAL };
-  }
-  if (input.toolName === "browser_eval") {
-    const code = typeof input.args?.code === "string" ? input.args.code : "";
-    if (!browserEvalIsProvablyReadOnly(code)) {
-      return { allowed: false as const, reason: COMPOSER_INPUT_REQUIRES_APPROVAL };
-    }
-  }
-  return { allowed: true as const, reason: "read_only_or_ungated_tool" };
+  return { allowed: true as const, reason: "composer_tools_ungated" };
 }

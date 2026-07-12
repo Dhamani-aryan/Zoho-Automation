@@ -7,7 +7,7 @@ function positiveIntEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-export const AGENT_DEFAULT_MAX_TOOL_CALLS = 60;
+export const AGENT_DEFAULT_MAX_TOOL_CALLS = 100;
 export const AGENT_DEFAULT_TURN_TIMEOUT_MS = 15 * 60 * 1000;
 export const AGENT_DEFAULT_JOB_TIMEOUT_MS = 90 * 1000;
 export const AGENT_DEFAULT_EXTENSION_LIVE_MS = 120 * 1000;
