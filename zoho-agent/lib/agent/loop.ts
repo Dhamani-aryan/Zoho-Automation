@@ -2569,7 +2569,7 @@ export async function runAgentTurn({
         user_id: user.id,
         event_type: "agent_turn",
         message: `Agent turn completed with ${toolCallCount} tool call(s).`,
-        metadata: { session_id: sessionId, provider: provider.name, latency_ms: Date.now() - started }
+        metadata: { session_id: sessionId, provider: provider.name, latency_ms: Date.now() - started, tool_call_count: toolCallCount }
       });
       await emit({ type: "done" });
       return;
