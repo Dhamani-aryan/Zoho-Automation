@@ -81,7 +81,7 @@ const dbSyncRecordsSchema = z.object({
   records: z.array(z.object({ id: z.string().trim().min(1) }).catchall(z.unknown())).min(1).max(200)
 });
 
-export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
+export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = ([
   {
     name: "zoho_search",
     tier: 1,
@@ -209,7 +209,7 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = [
       }
     }
   }
-];
+] as AgentToolDefinition[]).filter((tool) => tool.name === "zoho_api" || tool.name === "db_sync_records");
 
 export type Tier1ToolName = (typeof TIER1_TOOL_DEFINITIONS)[number]["name"];
 

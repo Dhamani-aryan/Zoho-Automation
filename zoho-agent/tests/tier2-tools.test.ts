@@ -385,3 +385,14 @@ test("zoho_api write receipts can derive targets and compare read-back fields", 
   assert.match(loopSource, /zohoApiReceiptStatsForOrder/);
   assert.match(loopSource, /require at least one verification receipt/);
 });
+
+test("Phase H6 model-facing tool surface is agent-first", () => {
+  const tier1Source = readFileSync(resolve(process.cwd(), "lib/agent/tier1-tools.ts"), "utf8");
+  assert.match(tier1Source, /tool\.name === "zoho_api" \|\| tool\.name === "db_sync_records"/);
+
+  const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
+  assert.doesNotMatch(loopSource, /\.\.\.TIER2_TOOL_DEFINITIONS/);
+  assert.doesNotMatch(loopSource, /\.\.\.EMAIL_SCHEDULING_TOOL_DEFINITIONS/);
+  assert.match(loopSource, /Use zoho_api POST\/PUT for CRM writes/);
+  assert.match(loopSource, /Email composer method: commit one recipient chip at a time/);
+});

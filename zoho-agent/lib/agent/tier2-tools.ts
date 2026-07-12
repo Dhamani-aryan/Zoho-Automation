@@ -245,11 +245,11 @@ export function verifiedWriteFollowup({
     mirror_sync_required: true,
     next_required_actions: [
       {
-        tool: "zoho_get_record",
+        tool: "zoho_api",
         reason: "Fetch the authoritative live Zoho record after the verified write.",
-        module: snapshot.module,
-        zoho_ids: recordIds,
-        fields
+        method: "GET",
+        paths: recordIds.map((id) => `/crm/v3/${snapshot.module}/${id}`),
+        params: { fields: fields.join(",") }
       },
       {
         tool: "db_sync_records",

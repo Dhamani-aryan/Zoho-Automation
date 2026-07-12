@@ -394,11 +394,11 @@ test("verified Tier-2 writes require live read-back before mirror sync", () => {
       mirror_sync_required: true,
       next_required_actions: [
         {
-          tool: "zoho_get_record",
+          tool: "zoho_api",
           reason: "Fetch the authoritative live Zoho record after the verified write.",
-          module: "Deals",
-          zoho_ids: ["D1"],
-          fields: ["Deal_Name", "Next_Step", "Closing_Date"]
+          method: "GET",
+          paths: ["/crm/v3/Deals/D1"],
+          params: { fields: "Deal_Name,Next_Step,Closing_Date" }
         },
         {
           tool: "db_sync_records",

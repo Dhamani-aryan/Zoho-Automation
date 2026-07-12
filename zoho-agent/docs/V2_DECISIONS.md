@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase H6 agent-first tool surface flip (2026-07-12, build)
+
+Flipped the model-facing tool surface toward the agent-first architecture. The agent now sees zoho_api plus browser primitives as the live Zoho action layer; old Tier-1 read wrappers are filtered out of TIER1_TOOL_DEFINITIONS, and the aggregate tool list no longer advertises the deterministic schedule_zoho_email_batch tool or the old Tier-2 business-verb write tools. The legacy validators/runners remain in code for internal compatibility, undo history, and a later deletion pass. Agent instructions now prefer db_* for discovery, zoho_api GET for authoritative reads, zoho_api POST/PUT for gated CRM writes with receipts, and browser tools for composer/scheduler UI. The post-write mirror-sync hint now names zoho_api for live read-back.
+
 ## Phase H5 zoho_api verification receipts (2026-07-12, build)
 
 Added server-side read-back receipts for mutating zoho_api calls. After POST/PUT jobs report, the agent loop derives touched records from body.data ids or Zoho response details ids, queues one zoho_api GET read-back per target through the extension bridge, compares requested fields, and attaches receipts with status, Zoho id, verified fields, correlation id, method, elapsed time, and error. Failed writes produce failed receipts when targets are known; read-back failures produce write_ok_unverified. complete_task_order now refuses a write order whose linked mutating zoho_api results have zero receipts.

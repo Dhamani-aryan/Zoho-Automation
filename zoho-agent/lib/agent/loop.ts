@@ -16,7 +16,6 @@ import {
 import { runBridgedTool } from "@/lib/agent/bridge";
 import {
   isTier2Tool,
-  TIER2_TOOL_DEFINITIONS,
   validateTier2Call,
   verifiedWriteFollowup,
   type Tier2Module
@@ -85,7 +84,6 @@ import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
 import {
-  EMAIL_SCHEDULING_TOOL_DEFINITIONS,
   isEmailSchedulingTool,
   resolveEmailScheduleBatch,
   validateEmailSchedulingToolCall,
@@ -156,9 +154,10 @@ Record navigation recovery:
 - Ask or stop only when the target record identity is unknown, ambiguous, mismatched after navigation, or the known canonical URL fails to load. Never claim a new tool is needed just to open a known CRM record.
 
 Method order for Zoho:
-1. Deterministic tools first. Use schedule_zoho_email_batch for structured email scheduling, including attached batches; it resolves Contact -> Account -> Deal, drives the known composer flow, and verifies each Scheduled row without model calls between records. Use Tier-0 Supabase mirror search/list tools for other record discovery, Tier-1 live Zoho reads to establish authoritative current state, db_sync_records after verified mirrorable changes, and Tier-2 write tools for supported field/owner/tag changes. These are cheaper, validated, and preferred.
-2. browser_eval when the deterministic toolbox does not fit. Write JavaScript that runs in the crm.zoho.com page MAIN world with the user's session. Prefer Zoho's internal API via #token and fetch(..., { credentials: "include" }). When frame_selector binds document to an iframe, read #token from window.document because the token remains in the top page. In the email editor, never replace #editorDiv innerHTML/textContent or use replaceChildren; construct the body and insert it immediately before #ecw_signature, preserving the existing signature. Never use ui_step fill_field on an editor containing the signature. Every eval that can change state must return a JSON-serializable object containing exact read-back values. If browser_eval reports returned=false, assume state may already have changed: use browser_observe/read-back before any retry, and never complete the task from that result alone. Use browser_eval to inspect fields, call internal endpoints, and perform task-specific work when no safer tool exists. Always state the purpose and verify the result.
-3. UI automation last. Use browser_observe to find controls, then ui_step only for UI-only flows or when the user asks to open/click/show something. In teach mode, take the user's goal and autonomously chain observe -> act -> verify while the user watches the dedicated Chrome window. Do not require one instruction per UI step.
+1. Use db_* mirror tools for fast discovery, bulk filtering, tags, stored Zoho ids, and canonical URLs. Use zoho_api GET for authoritative live CRM reads before writes, after uncertain mirror data, and for read-back verification. A 204 means an empty live result, not a tool failure.
+2. Use zoho_api POST/PUT for CRM writes that fit the API. It is the single CRM write primitive: writes are approval/task-order gated, delete/send-now endpoints are structurally blocked, and every mutating result includes server read-back receipts when targets are known. Include those receipts in final reports.
+3. Use browser_navigate, browser_observe, browser_input, browser_screenshot, and browser_eval for UI-only work such as the email composer and scheduler. browser_eval may inspect or surgically edit the page, but every state-changing eval must return exact read-back JSON. If browser_eval reports returned=false, assume state may already have changed and observe/read back before retrying. In the email editor, never replace #editorDiv innerHTML/textContent or use replaceChildren; insert body nodes before #ecw_signature and verify the signature remains.
+4. UI automation is evidence-driven. Observe before acting, target visible selectors/text from current evidence, act once, then verify. Do not run a stale fixed click plan.
 
 Task orders:
 - Call propose_task_order only for unattended or batch work (>3 records, file-driven runs, or work the user is not actively directing). Do not create task orders for simple watched browser steps such as opening a deal, clicking Compose, typing in a visible composer, or reading the page.
@@ -184,8 +183,8 @@ Search and matching:
 Workflows and guides:
 - Use read_workspace_file for local drafts, batch inputs, source playbooks, and reference docs. Read every required page by following next_start_line; never claim a file was parsed from its name or from a truncated first page.
 - When the user attaches or references a CRM work Markdown file, infer the requested operations from its sections: email fields mean schedule the email, New tasks means create those tasks, and Tasks to complete or Closed tasks means complete those exact tasks. An attachment-only message, "Process this", or "Do this" is a complete instruction; do not ask the user to restate the actions. Parse all rules, body, CC, subject, task sections, and contact sections. Resolve missing contact email and all Zoho Contact/Account/Deal/task ids and links yourself using Supabase mirror search first and live Zoho when current identity matters. Use contact email as the strongest supplied key, then contact name + account/company + deal name. Do not ask the user for links, email addresses that CRM can resolve, tool choices, selectors, or a walkthrough. Stop only for true identity ambiguity, missing required body/subject, or a missing schedule date/time the file/request does not specify.
-- For every structured email scheduling request, call schedule_zoho_email_batch after parsing the complete input. Its worker owns task write/read-back recovery; never use browser_eval, browser_observe, or ad hoc API fetches to re-verify task preparation after it fails. Do not manually reproduce email compose/schedule phases unless the deterministic tool returns a specific composer-only recoverable failure and one focused UI recovery is justified. For an attached file or more than 3 records, propose one task order first, then call the batch tool once with all email records and complete the order from its per-record report.
-- Put each email block's explicit New tasks into that record's new_tasks and Tasks to complete/Closed tasks into tasks_to_complete in the same schedule_zoho_email_batch call. Do not run a separate exploratory task workflow for those actions. Never invent a task subject or due date; completion requires one exact open-task match and creation requires a due date.
+- For every structured email scheduling request, parse the complete input first. For attached files or unattended work, propose one write task order before mutating. Resolve Contact -> Account -> Deal with db_* and zoho_api, create/complete requested Tasks with zoho_api POST/PUT plus receipts, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
+- Email composer method: commit one recipient chip at a time by focusing the address input, inserting the address, dispatching Enter keyDown/keyUp, then verifying committed chips, empty leftover input, and no invalid/red chips before moving on. Never rely on blur to commit chips. A blank CC in the current draft means no CC.
 - A skill guide supplies method, selectors, verification, and stop conditions only. It must never supply data values absent from the current request. In particular, CC defaults documented for the KD Blitz acceptance file apply only when that exact file/header says so. A blank CC in the current draft means cc: [] exactly; never inherit guide CC recipients, subjects, task names, body text, dates, or times.
 - Legacy ui_workflows remain runnable. If the user asks what saved workflows exist or how to run one, call list_ui_workflows and answer with names, effects, params, and an example run phrase.
 - Skill guides are the preferred workflow memory: intent, method, gotchas, verification, and stop conditions. For a task class, call list_skill_guides if you need to discover names, then read_skill_guide for each relevant guide before acting. After novel work, draft and propose save_skill_guide.
@@ -200,12 +199,10 @@ Reporting style:
 const AGENT_TOOL_DEFINITIONS = [
   ...TIER0_TOOL_DEFINITIONS,
   ...TIER1_TOOL_DEFINITIONS,
-  ...TIER2_TOOL_DEFINITIONS,
   ...TASK_ORDER_TOOL_DEFINITIONS,
   ...BROWSER_TOOL_DEFINITIONS,
   ...SKILL_GUIDE_TOOL_DEFINITIONS,
   ...UNDO_TOOL_DEFINITIONS,
-  ...EMAIL_SCHEDULING_TOOL_DEFINITIONS,
   ...UI_TOOL_DEFINITIONS
 ];
 
