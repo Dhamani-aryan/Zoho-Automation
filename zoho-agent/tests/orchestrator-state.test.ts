@@ -683,7 +683,7 @@ test("composer browser gate requires approval for composer-changing tools", () =
   );
 });
 
-test("scheduled email completion requires Scheduled read-back after composer browser writes", () => {
+test("scheduled email completion flags missing Scheduled read-back after composer browser writes", () => {
   assert.deepEqual(
     extractScheduledEmailVerification({
       result: {
@@ -740,18 +740,17 @@ test("scheduled email completion requires Scheduled read-back after composer bro
   assert.deepEqual(
     scheduledEmailCompletionDecision({ scope: "write", composerMutations: 1, scheduledVerifications: 0 }),
     {
-      ok: false,
-      error:
-        "Composer scheduling orders require scheduled email verification before completion. Read back the Scheduled tab first."
+      ok: true,
+      scheduled_email_verification_missing: true
     }
   );
   assert.deepEqual(
     scheduledEmailCompletionDecision({ scope: "write", composerMutations: 1, scheduledVerifications: 1 }),
-    { ok: true }
+    { ok: true, scheduled_email_verification_missing: false }
   );
   assert.deepEqual(
     scheduledEmailCompletionDecision({ scope: "read", composerMutations: 1, scheduledVerifications: 0 }),
-    { ok: true }
+    { ok: true, scheduled_email_verification_missing: false }
   );
 });
 

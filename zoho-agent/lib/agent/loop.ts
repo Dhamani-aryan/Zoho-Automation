@@ -897,6 +897,9 @@ async function zohoApiReceiptStatsForOrder(service: SupabaseClient, sessionId: s
   if (error) throw error;
   let mutatingResults = 0;
   let receipts = 0;
+  let verified = 0;
+  let failed = 0;
+  let writeOkUnverified = 0;
   for (const row of (data ?? []) as Array<{ tool_args: Record<string, unknown> | null; tool_result: unknown }>) {
     if (!isZohoApiWriteArgs(row.tool_args)) continue;
     const result = row.tool_result && typeof row.tool_result === "object" ? (row.tool_result as Record<string, unknown>) : {};
@@ -904,8 +907,21 @@ async function zohoApiReceiptStatsForOrder(service: SupabaseClient, sessionId: s
     mutatingResults += 1;
     const resultReceipts = Array.isArray(result.receipts) ? result.receipts : [];
     receipts += resultReceipts.length;
+    for (const receipt of resultReceipts) {
+      const status = receipt && typeof receipt === "object" ? (receipt as { status?: unknown }).status : null;
+      if (status === "verified") verified += 1;
+      else if (status === "write_ok_unverified") writeOkUnverified += 1;
+      else if (status === "failed") failed += 1;
+    }
   }
-  return { mutatingResults, receipts };
+  return {
+    mutatingResults,
+    receipts,
+    verified,
+    failed,
+    write_ok_unverified: writeOkUnverified,
+    zero_receipt_mutations: Math.max(0, mutatingResults - receipts)
+  };
 }
 
 async function composerBrowserMutationStatsForOrder(service: SupabaseClient, sessionId: string, orderId: string) {
@@ -1038,17 +1054,6 @@ async function completeTaskOrder({
 
   const report = typeof args.report === "string" ? { summary: args.report } : args.report;
   const receiptStats = await zohoApiReceiptStatsForOrder(service, sessionId, order.id);
-  if (order.scope === "write" && receiptStats.mutatingResults > 0 && receiptStats.receipts === 0) {
-    return {
-      ok: false,
-      result: {
-        task_order_id: order.id,
-        status: "not_completed",
-        error: "Mutating zoho_api task orders require at least one verification receipt before completion.",
-        receipt_stats: receiptStats
-      }
-    };
-  }
   const composerStats = await composerBrowserMutationStatsForOrder(service, sessionId, order.id);
   const scheduledVerifications = await scheduledEmailVerificationCountForOrder(service, user, sessionId, order.id);
   const scheduledEmailDecision = scheduledEmailCompletionDecision({
@@ -1056,22 +1061,21 @@ async function completeTaskOrder({
     composerMutations: composerStats.composerMutations,
     scheduledVerifications
   });
-  if (!scheduledEmailDecision.ok) {
-    return {
-      ok: false,
-      result: {
-        task_order_id: order.id,
-        status: "not_completed",
-        error: scheduledEmailDecision.error,
-        composer_stats: composerStats,
-        scheduled_email_verifications: scheduledVerifications
-      }
-    };
-  }
+  const verificationFlags = {
+    receipt_stats: receiptStats,
+    composer_stats: composerStats,
+    scheduled_email_verifications: scheduledVerifications,
+    scheduled_email_verification_missing: scheduledEmailDecision.scheduled_email_verification_missing,
+    has_unverified_receipts: receiptStats.failed > 0 || receiptStats.write_ok_unverified > 0 || receiptStats.zero_receipt_mutations > 0
+  };
+  const completionReport =
+    report && typeof report === "object" && !Array.isArray(report)
+      ? { ...(report as Record<string, unknown>), verification_flags: verificationFlags }
+      : { summary: report, verification_flags: verificationFlags };
   const completedAt = new Date().toISOString();
   const { data, error } = await service
     .from("task_orders")
-    .update({ status: "completed", report, completed_at: completedAt })
+    .update({ status: "completed", report: completionReport, completed_at: completedAt })
     .eq("id", order.id)
     .eq("user_id", user.id)
     .eq("status", "approved")
@@ -1679,58 +1683,78 @@ async function withZohoApiReceipts({
   if (!isZohoApiWriteArgs(args)) return job.result;
   const targets = zohoApiWriteTargets(args, job.result);
   const receipts: Array<Record<string, unknown>> = [];
-  for (const target of targets) {
-    const started = Date.now();
-    const fields = Object.keys(target.fields);
-    const correlationId = `${call.id}:${target.module}:${target.id}`;
-    if (!job.ok) {
+  const startedByTarget = new Map(targets.map((target) => [`${target.module}:${target.id}`, Date.now()]));
+  if (!job.ok) {
+    for (const target of targets) {
+      const started = startedByTarget.get(`${target.module}:${target.id}`) ?? Date.now();
       receipts.push({
         status: "failed",
         zoho_id: target.id,
         verified_fields: {},
-        correlation_id: correlationId,
-        method: "zoho_api_readback",
+        correlation_id: `${call.id}:${target.module}:${target.id}`,
+        method: "zoho_api_batch_readback",
         elapsed_ms: Date.now() - started,
         error: "write job failed before read-back verification"
       });
-      continue;
     }
+    const base = job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result };
+    return { ...base, receipts };
+  }
+
+  const byModule = new Map<string, typeof targets>();
+  for (const target of targets) {
+    byModule.set(target.module, [...(byModule.get(target.module) ?? []), target]);
+  }
+
+  for (const [moduleName, moduleTargets] of byModule.entries()) {
+    const started = Date.now();
+    const fields = [...new Set(moduleTargets.flatMap((target) => Object.keys(target.fields)))];
+    const ids = moduleTargets.map((target) => target.id);
     try {
       const readBack = (await runBridgedTool({
         service,
         user,
         sessionId,
         call: {
-          id: `${call.id}-verify-${target.id}`,
+          id: `${call.id}-verify-${moduleName}`,
           name: "zoho_api",
           args: {
             method: "GET",
-            path: `/crm/v3/${target.module}/${target.id}`,
-            params: fields.length ? { fields: fields.join(",") } : {}
+            path: `/crm/v3/${moduleName}`,
+            params: {
+              ids: ids.join(","),
+              ...(fields.length ? { fields: fields.join(",") } : {})
+            }
           }
         }
       })) as { body?: { data?: Array<Record<string, unknown>> } } | null;
-      const record = Array.isArray(readBack?.body?.data) ? readBack.body.data[0] ?? {} : {};
-      const compared = compareZohoApiReadBack(target.fields, record);
-      receipts.push({
-        status: compared.verified ? "verified" : "failed",
-        zoho_id: target.id,
-        verified_fields: compared.verified_fields,
-        correlation_id: correlationId,
-        method: "zoho_api_readback",
-        elapsed_ms: Date.now() - started,
-        error: compared.verified ? null : `read-back mismatch: ${compared.mismatches.join(", ")}`
-      });
+      const rows = Array.isArray(readBack?.body?.data) ? readBack.body.data : [];
+      const byId = new Map(rows.map((row) => [typeof row.id === "string" ? row.id : "", row]));
+      for (const target of moduleTargets) {
+        const record = byId.get(target.id) ?? {};
+        const compared = compareZohoApiReadBack(target.fields, record);
+        receipts.push({
+          status: compared.verified ? "verified" : "failed",
+          zoho_id: target.id,
+          verified_fields: compared.verified_fields,
+          correlation_id: `${call.id}:${target.module}:${target.id}`,
+          method: "zoho_api_batch_readback",
+          elapsed_ms: Date.now() - (startedByTarget.get(`${target.module}:${target.id}`) ?? started),
+          error: compared.verified ? null : `read-back mismatch: ${compared.mismatches.join(", ")}`
+        });
+      }
     } catch (error) {
-      receipts.push({
-        status: "write_ok_unverified",
-        zoho_id: target.id,
-        verified_fields: {},
-        correlation_id: correlationId,
-        method: "zoho_api_readback",
-        elapsed_ms: Date.now() - started,
-        error: error instanceof Error ? error.message : "read-back verification failed"
-      });
+      for (const target of moduleTargets) {
+        receipts.push({
+          status: "write_ok_unverified",
+          zoho_id: target.id,
+          verified_fields: {},
+          correlation_id: `${call.id}:${target.module}:${target.id}`,
+          method: "zoho_api_batch_readback",
+          elapsed_ms: Date.now() - (startedByTarget.get(`${target.module}:${target.id}`) ?? started),
+          error: error instanceof Error ? error.message : "read-back verification failed"
+        });
+      }
     }
   }
   const base = job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result };

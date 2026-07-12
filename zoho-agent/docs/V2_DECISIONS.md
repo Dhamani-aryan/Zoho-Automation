@@ -1,5 +1,9 @@
 # V2 Decisions
 
+## Phase I3 non-blocking batched receipts (2026-07-12, build)
+
+Converted verification receipts from completion gates into completion-report flags. complete_task_order now attaches receipt_stats, composer_stats, scheduled_email_verifications, scheduled_email_verification_missing, and has_unverified_receipts to the report instead of refusing zero/unverified receipts or missing scheduled-email verification. zoho_api write read-backs now batch touched records by module with one GET /crm/v3/{Module}?ids=... using the union of requested fields, and per-record receipts use method zoho_api_batch_readback.
+
 ## Phase I2 send guard exact controls and focused Enter (2026-07-12, build)
 
 Hardened the never-send guard without broad substring false positives. Send controls are now classified by exact accessible names such as Send, Send email, Send now, and Send mail, while Schedule and Schedule & Close are allowed and labels such as Resend or Send test are not blocked merely because they contain "send". The extension still rechecks elementFromPoint before trusted clicks, and both the eval-installed guard and the CDP press_key path now refuse plain Enter when the live focused element is on or inside a send control.

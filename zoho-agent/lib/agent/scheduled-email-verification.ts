@@ -6,7 +6,7 @@ export type ScheduledEmailVerification = {
 };
 
 export const SCHEDULED_EMAIL_READBACK_REQUIRED =
-  "Composer scheduling orders require scheduled email verification before completion. Read back the Scheduled tab first.";
+  "Composer scheduling orders should read back the Scheduled tab; if missing, flag it and continue.";
 
 function stringField(row: Record<string, unknown>, names: string[]) {
   for (const name of names) {
@@ -73,11 +73,9 @@ export function scheduledEmailCompletionDecision(input: {
   composerMutations: number;
   scheduledVerifications: number;
 }) {
-  if (input.scope === "write" && input.composerMutations > 0 && input.scheduledVerifications === 0) {
-    return {
-      ok: false as const,
-      error: SCHEDULED_EMAIL_READBACK_REQUIRED
-    };
-  }
-  return { ok: true as const };
+  return {
+    ok: true as const,
+    scheduled_email_verification_missing:
+      input.scope === "write" && input.composerMutations > 0 && input.scheduledVerifications === 0
+  };
 }

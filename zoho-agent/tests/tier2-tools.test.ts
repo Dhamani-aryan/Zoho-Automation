@@ -443,12 +443,14 @@ test("agent schedule popup instructions require live observation and Scheduled v
   assert.match(loopSource, /Emails -> Scheduled list or the internal scheduled-mail read-back/);
 });
 
-test("composer scheduling orders require scheduled email verification before completion", () => {
+test("composer scheduling verification is recorded as a completion flag", () => {
   const helperSource = readFileSync(resolve(process.cwd(), "lib/agent/scheduled-email-verification.ts"), "utf8");
   assert.match(helperSource, /scheduledEmailCompletionDecision/);
   assert.match(helperSource, /SCHEDULED_EMAIL_READBACK_REQUIRED/);
   assert.match(helperSource, /extractScheduledEmailVerification/);
   assert.match(helperSource, /hasComposerBrowserMutation/);
+  assert.match(helperSource, /scheduled_email_verification_missing/);
+  assert.match(helperSource, /flag it and continue/);
 
   const bridgeSource = readFileSync(resolve(process.cwd(), "lib/agent/bridge.ts"), "utf8");
   assert.match(bridgeSource, /taskOrderId\?: string \| null/);
@@ -460,7 +462,9 @@ test("composer scheduling orders require scheduled email verification before com
   assert.match(loopSource, /event_type: "scheduled_email_verified"/);
   assert.match(loopSource, /composerBrowserMutationStatsForOrder/);
   assert.match(loopSource, /scheduledEmailVerificationCountForOrder/);
-  assert.match(helperSource, /Read back the Scheduled tab first/);
+  assert.match(loopSource, /verification_flags/);
+  assert.match(loopSource, /scheduled_email_verification_missing/);
+  assert.match(loopSource, /has_unverified_receipts/);
 
   const jobsSource = readFileSync(resolve(process.cwd(), "extension/src/jobs.ts"), "utf8");
   assert.match(jobsSource, /withComposerGateResult/);
@@ -495,7 +499,11 @@ test("zoho_api write receipts can derive targets and compare read-back fields", 
   const loopSource = readFileSync(resolve(process.cwd(), "lib/agent/loop.ts"), "utf8");
   assert.match(loopSource, /withZohoApiReceipts/);
   assert.match(loopSource, /zohoApiReceiptStatsForOrder/);
-  assert.match(loopSource, /require at least one verification receipt/);
+  assert.match(loopSource, /zoho_api_batch_readback/);
+  assert.match(loopSource, /ids: ids\.join/);
+  assert.match(loopSource, /verification_flags/);
+  assert.match(loopSource, /zero_receipt_mutations/);
+  assert.doesNotMatch(loopSource, /require at least one verification receipt/);
 });
 
 test("Phase H6 model-facing tool surface is agent-first", () => {
