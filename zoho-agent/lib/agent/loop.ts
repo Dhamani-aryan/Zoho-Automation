@@ -1725,6 +1725,76 @@ async function withZohoApiReceipts({
   return { ...base, receipts };
 }
 
+function isUndoLogModule(moduleName: string): moduleName is Tier2Module {
+  return moduleName === "Accounts" || moduleName === "Contacts" || moduleName === "Deals";
+}
+
+async function snapshotZohoApiUndoValues({
+  service,
+  user,
+  sessionId,
+  call,
+  args
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  call: AgentToolCall;
+  args: ZohoApiArgs;
+}) {
+  if (!isZohoApiWriteArgs(args)) return;
+  const targets = zohoApiWriteTargets(args).filter(
+    (target) => isUndoLogModule(target.module) && Object.keys(target.fields).length > 0
+  );
+  if (targets.length === 0) return;
+
+  const byModule = new Map<Tier2Module, typeof targets>();
+  for (const target of targets) {
+    const moduleTargets = byModule.get(target.module as Tier2Module) ?? [];
+    moduleTargets.push(target);
+    byModule.set(target.module as Tier2Module, moduleTargets);
+  }
+
+  for (const [moduleName, moduleTargets] of byModule.entries()) {
+    const fields = [...new Set(moduleTargets.flatMap((target) => Object.keys(target.fields)))];
+    const ids = moduleTargets.map((target) => target.id);
+    const readBefore = (await runBridgedTool({
+      service,
+      user,
+      sessionId,
+      call: {
+        id: `${call.id}-undo-before-${moduleName}`,
+        name: "zoho_api",
+        args: {
+          method: "GET",
+          path: `/crm/v3/${moduleName}`,
+          params: {
+            ids: ids.join(","),
+            fields: fields.join(",")
+          }
+        }
+      }
+    })) as { body?: { data?: Array<Record<string, unknown>> } } | null;
+
+    const rows = Array.isArray(readBefore?.body?.data) ? readBefore.body.data : [];
+    const byId = new Map(rows.map((row) => [typeof row.id === "string" ? row.id : "", row]));
+    const undoRows = moduleTargets.map((target) => {
+      const record = byId.get(target.id) ?? {};
+      const beforeFields = Object.fromEntries(Object.keys(target.fields).map((field) => [field, record[field] ?? null]));
+      return {
+        user_id: user.id,
+        session_id: sessionId,
+        module: moduleName,
+        zoho_id: target.id,
+        before_fields: beforeFields
+      };
+    });
+
+    const { error } = await service.from("undo_log").insert(undoRows);
+    if (error) throw error;
+  }
+}
+
 async function runZohoApiTool({
   service,
   user,
@@ -1740,12 +1810,21 @@ async function runZohoApiTool({
   emit: Emit;
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const args = zohoApiReadSchema.parse(call.args);
-  const result = await runBridgedTool({
+  await snapshotZohoApiUndoValues({ service, user, sessionId, call, args });
+  const bridgedResult = await runBridgedTool({
     service,
     user,
     sessionId,
     call: { ...call, args },
     onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+  });
+  const result = await withZohoApiReceipts({
+    service,
+    user,
+    sessionId,
+    call,
+    args,
+    job: { ok: true, result: bridgedResult, waitedMs: 0 }
   });
   return { ok: true, result, pausedMs: 0 };
 }
@@ -2124,6 +2203,22 @@ type UndoAction = {
   call: AgentToolCall;
 };
 
+type UndoLogRow = {
+  id: string;
+  module: Tier2Module;
+  zoho_id: string;
+  before_fields: Record<string, unknown>;
+  created_at: string;
+};
+
+type UndoLogAction = {
+  source_log_id: string;
+  module: Tier2Module;
+  zoho_id: string;
+  description: string;
+  call: AgentToolCall;
+};
+
 function isKnownBeforeValue(value: unknown) {
   return value !== "unknown - verify in card" && value !== undefined;
 }
@@ -2286,6 +2381,73 @@ async function executeUndoActions({
   return { results, pausedMs, ok: results.every((item) => (item as { ok?: unknown }).ok === true) };
 }
 
+function undoActionFromLog(row: UndoLogRow, filter?: { fields?: string[] }) {
+  const fieldFilter = filter?.fields ? new Set(filter.fields) : null;
+  const fields = Object.fromEntries(
+    Object.entries(row.before_fields ?? {}).filter(([field]) => !fieldFilter || fieldFilter.has(field))
+  );
+  if (Object.keys(fields).length === 0) {
+    return {
+      action: null,
+      skipped: [`${row.zoho_id}: no logged before-values matched the requested fields.`]
+    };
+  }
+  return {
+    action: {
+      source_log_id: row.id,
+      module: row.module,
+      zoho_id: row.zoho_id,
+      description: `Revert fields ${Object.keys(fields).join(", ")} on ${row.zoho_id}.`,
+      call: {
+        id: `undo-log-${row.id}-${row.zoho_id}`,
+        name: "zoho_api",
+        args: {
+          method: "PUT",
+          path: `/crm/v2.2/${row.module}`,
+          body: { data: [{ id: row.zoho_id, ...fields }] }
+        }
+      }
+    } satisfies UndoLogAction,
+    skipped: [] as string[]
+  };
+}
+
+async function executeUndoLogAction({
+  service,
+  user,
+  sessionId,
+  emit,
+  action
+}: {
+  service: SupabaseClient;
+  user: AuthorizedUser;
+  sessionId: string;
+  emit: Emit;
+  action: UndoLogAction;
+}) {
+  const outcome = await runZohoApiTool({ service, user, sessionId, call: action.call, order: null, emit });
+  await service.from("audit_events").insert({
+    user_id: user.id,
+    event_type: "undo",
+    message: `${outcome.ok ? "Ran" : "Failed"} undo: ${action.description}`,
+    metadata: {
+      session_id: sessionId,
+      source_undo_log_id: action.source_log_id,
+      module: action.module,
+      zoho_id: action.zoho_id,
+      ok: outcome.ok
+    }
+  });
+  return {
+    source_undo_log_id: action.source_log_id,
+    zoho_id: action.zoho_id,
+    description: action.description,
+    ok: outcome.ok,
+    result: outcome.result,
+    pausedMs: outcome.pausedMs
+  };
+}
+
 async function undoRecord({
   supabase,
   service,
@@ -2304,23 +2466,22 @@ async function undoRecord({
   const validated = validateUndoToolCall(call);
   const args = validated.args as UndoRecordArgs;
   const { data, error } = await service
-    .from("pending_approvals")
-    .select("id,tool_name,args,summary,task_order_id,created_at")
+    .from("undo_log")
+    .select("id,module,zoho_id,before_fields,created_at")
     .eq("user_id", user.id)
-    .eq("status", "approved")
-    .in("tool_name", ["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"])
+    .eq("module", args.module)
+    .eq("zoho_id", args.zoho_id)
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(20);
   if (error) throw error;
 
   const skipped: string[] = [];
-  let selected: { row: PendingApprovalUndoRow; actions: UndoAction[] } | null = null;
-  for (const row of (data ?? []) as PendingApprovalUndoRow[]) {
-    if (moduleFromApproval(row) !== args.module) continue;
-    const built = undoActionsFromApproval(row, { zohoId: args.zoho_id, fields: args.fields });
+  let selected: { row: UndoLogRow; action: UndoLogAction } | null = null;
+  for (const row of (data ?? []) as UndoLogRow[]) {
+    const built = undoActionFromLog(row, { fields: args.fields });
     skipped.push(...built.skipped);
-    if (built.actions.length > 0) {
-      selected = { row, actions: built.actions };
+    if (built.action) {
+      selected = { row, action: built.action };
       break;
     }
   }
@@ -2337,13 +2498,13 @@ async function undoRecord({
     };
   }
 
-  const executed = await executeUndoActions({ supabase, service, user, sessionId, emit, actions: selected.actions });
+  const executed = await executeUndoLogAction({ service, user, sessionId, emit, action: selected.action });
   return {
     ok: executed.ok,
     result: {
       status: executed.ok ? "undone" : "partial",
-      source_approval_id: selected.row.id,
-      actions: executed.results,
+      source_undo_log_id: selected.row.id,
+      actions: [executed],
       skipped
     },
     pausedMs: executed.pausedMs
