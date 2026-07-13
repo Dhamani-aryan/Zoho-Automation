@@ -36,6 +36,12 @@ import {
   resolveBrowserSnapshotElement
 } from "../extension/src/browser-snapshot";
 import {
+  createUiAgilityState,
+  decideBrowserAction,
+  noteBrowserAction,
+  noteBrowserObservation
+} from "../lib/agent/ui-agility";
+import {
   browserEvalIsProvablyReadOnly,
   composerBrowserGateDecision
 } from "../lib/agent/browser-composer-gate";
@@ -426,6 +432,80 @@ test("browser snapshots normalize refs and reject stale or unknown targets", () 
   const expired = resolveBrowserSnapshotElement({ snapshot, ref: "@e1", currentUrl: snapshot.url, now: 700_000 });
   assert.equal(expired.ok, false);
   if (!expired.ok) assert.equal(expired.reason, "stale_snapshot");
+});
+
+test("UI agility requires visible observation, verification, and a different tactic after no change", () => {
+  const state = createUiAgilityState();
+  const clickChip = {
+    id: "click-1",
+    name: "browser_input",
+    args: { action: "click", ref: "@e2" }
+  };
+  const missingObservation = decideBrowserAction(state, clickChip);
+  assert.equal(missingObservation.allowed, false);
+  if (!missingObservation.allowed) assert.equal(missingObservation.reason, "observation_required");
+
+  const unchangedObservation = {
+    url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+    composer: { to_chips: ["Test Test"], cc_chips: [] },
+    snapshot: {
+      id: "volatile-1",
+      elements: [
+        { ref: "@e1", role: "textbox", name: "To", selector: "#to" },
+        { ref: "@e2", role: "clickable", name: "Test Test", selector: ".chip" }
+      ]
+    }
+  };
+  noteBrowserObservation(state, unchangedObservation);
+  const sameBatch = decideBrowserAction(state, clickChip, { observationVisibleToModel: false });
+  assert.equal(sameBatch.allowed, false);
+  if (!sameBatch.allowed) assert.equal(sameBatch.reason, "observation_required");
+
+  const first = decideBrowserAction(state, clickChip);
+  assert.equal(first.allowed, true);
+  if (!first.allowed) return;
+  noteBrowserAction(state, first);
+  const unverified = decideBrowserAction(state, { ...clickChip, id: "click-2" });
+  assert.equal(unverified.allowed, false);
+  if (!unverified.allowed) assert.equal(unverified.reason, "verification_required");
+
+  noteBrowserObservation(state, {
+    ...unchangedObservation,
+    snapshot: {
+      id: "volatile-2",
+      elements: [
+        { ref: "@e1", role: "textbox", name: "To", selector: "#to" },
+        { ref: "@e3", role: "clickable", name: "Test Test", selector: ".chip" }
+      ]
+    }
+  });
+  const identical = decideBrowserAction(state, {
+    ...clickChip,
+    id: "click-3",
+    args: { action: "click", ref: "@e3" }
+  });
+  assert.equal(identical.allowed, false);
+  if (!identical.allowed) assert.equal(identical.reason, "identical_no_change_retry");
+  assert.equal(
+    decideBrowserAction(state, {
+      id: "backspace",
+      name: "browser_input",
+      args: { action: "key", ref: "@e1", key: "Backspace", repeat: 2 }
+    }).allowed,
+    true
+  );
+});
+
+test("UI agility permits the same action when observation proves state changed", () => {
+  const state = createUiAgilityState();
+  const action = { id: "remove-1", name: "browser_input", args: { action: "click", ref: "@e3" } };
+  noteBrowserObservation(state, { composer: { to_chips: ["One", "Two"] }, snapshot: { id: "one", elements: [] } });
+  const first = decideBrowserAction(state, action);
+  assert.equal(first.allowed, true);
+  if (!first.allowed) return;
+  noteBrowserAction(state, first);
+  noteBrowserObservation(state, { composer: { to_chips: ["Two"] }, snapshot: { id: "two", elements: [] } });
+  assert.equal(decideBrowserAction(state, { ...action, id: "remove-2" }).allowed, true);
 });
 
 test("composer browser gate helper is non-blocking in V3", () => {

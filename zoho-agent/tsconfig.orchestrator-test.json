@@ -21,6 +21,7 @@
     "lib/agent/scheduled-email-verification.ts",
     "lib/agent/zoho-read-fields.ts",
     "lib/agent/turn-lock.ts",
+    "lib/agent/ui-agility.ts",
     "extension/src/browser-snapshot.ts",
     "lib/llm/provider.ts",
     "lib/llm/tool-calls.ts",

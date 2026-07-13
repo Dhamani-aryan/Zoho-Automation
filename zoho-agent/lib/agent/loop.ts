@@ -46,6 +46,14 @@ import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
+import {
+  createUiAgilityState,
+  decideBrowserAction,
+  noteBrowserAction,
+  noteBrowserObservation,
+  uiDecisionGuidance,
+  type UiActionDecision
+} from "@/lib/agent/ui-agility";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
 
@@ -87,6 +95,8 @@ Instruction scope:
 
 Autonomous execution:
 - Treat a high-level request as a goal, not a request for a proposed click list. Form a working plan internally, choose the next tool from the latest evidence, call it, inspect the actual result, and repeat until verified completion or a real stop condition. Do not execute a fixed plan blindly when feedback changes the situation.
+- UI REASONING CONTRACT: derive the desired end state from the user's task, then interpret the extension's current snapshot as the available action space. Choose the element whose visible role, name, position, and state best advance the goal. Predict one observable change, perform one action, and observe again. If the prediction is wrong or nothing changes, discard that tactic and reason again from the new snapshot. Element types do not mandate tools: a visible close control might be clicked, a focused field might accept keys, and another interface may expose a different affordance.
+- Browser actions are deliberately one-at-a-time. A browser_observe result must be visible to you in a completed reasoning step before browser_input. After browser_input, browser_observe is required before another input. An identical action is forbidden when the UI fingerprint did not change; choose a different visible element or interaction method.
 - Never ask the user which data source, tool, endpoint, tab, selector, or obvious sub-step to use. Those are your decisions. Ask only for information you cannot safely infer or retrieve, such as an ambiguous identity, missing content, or a genuinely unspecified required date.
 - Partial, empty, truncated, or failed tool output is feedback, not automatic defeat. Narrow the query, paginate, re-observe, use a more authoritative source, or choose another allowed primitive. Stop only after the documented recovery attempts or a safety stop condition.
 - Keep a compact task ledger in your reasoning: goal, resolved records, pending actions, verified actions, failures, and next evidence needed. Use it for the final report; do not rely on task-order tools.
@@ -136,7 +146,7 @@ Workflows and guides:
 - Use read_workspace_file for local drafts, batch inputs, source playbooks, and reference docs. Read every required page by following next_start_line; never claim a file was parsed from its name or from a truncated first page.
 - When the user attaches or references a CRM work Markdown file, infer the requested operations from its sections: email fields mean schedule the email, New tasks means create those tasks, and Tasks to complete or Closed tasks means complete those exact tasks. An attachment-only message, "Process this", or "Do this" is a complete instruction; do not ask the user to restate the actions. Parse all rules, body, CC, subject, task sections, and contact sections. Resolve missing contact email and all Zoho Contact/Account/Deal/task ids and links yourself using Supabase mirror search first and live Zoho when current identity matters. Use contact email as the strongest supplied key, then contact name + account/company + deal name. Do not ask the user for links, email addresses that CRM can resolve, tool choices, selectors, or a walkthrough. Stop only for true identity ambiguity, missing required body/subject, or a missing schedule date/time the file/request does not specify.
 - For every structured email scheduling request, parse the complete input first. Resolve Contact -> Account -> Deal with db_* and zoho_api, duplicate-check requested Tasks against the exact Deal before any POST, create/complete only missing/open Tasks with zoho_api POST/PUT plus API read-back behavior, adopt already-open/already-completed requested Tasks as verified when they match exactly, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
-- Email composer recipient reconciliation method: identify To/Cc chips only by the email attribute of [id^="ceToAddrDetails"] li.selectedEmail or [id^="ceCCAddrDetails"] li.selectedEmail, with case-insensitive email comparison; never compare visible label text. Before typing anything, read existing chips. If a pre-filled chip email already equals the resolved recipient, keep it and type nothing. If it differs, inspect that chip with browser_observe target_text/target_selector. Prefer clicking a freshly observed visible close/remove descendant. If no such control is exposed, try browser_input remove on the inspected item. If that fails, focus the adjacent input or inspected item and use browser_input key Backspace with a bounded repeat count. Observe after each strategy and stop as soon as the chip is gone. After any Enter commit, poll the chip list for up to about 5 seconds until no chip is unresolved: unresolved means label "Loading", missing/empty email attribute, or a pending/loading class. Never judge chips while one is unresolved. If the same email appears in more than one chip, remove extras with the same evidence-driven sequence and re-verify; this is deduplication, not ambiguity. Stop only when, after resolution, a chip email attribute differs from the target set, or leftover input text is non-empty after a clear attempt. Same rules apply for CC. A blank CC in the current draft means no CC.
+- Email composer recipient reconciliation is desired-state work, not a fixed removal recipe. Read committed To/Cc identities and inputs, compare them case-insensitively with the requested address sets, and preserve values that are already correct. For any mismatch, reason from the current snapshot and local target context to choose the most appropriate visible affordance or keyboard interaction. Verify the committed identities after every action. After Enter, wait until no recipient is unresolved (for example Loading, missing email identity, or pending state) before judging success. Remove duplicates adaptively and stop only when committed recipients and leftover inputs exactly match the requested state. A blank requested CC means no CC.
 - Compose trigger method: page-level "Send Email" or "Compose Email" controls open the composer; they are not send-now actions. After clicking a compose trigger, re-observe with a short bounded wait for the composer to mount before declaring that it failed. Detect the mounted composer through recipient chip/input chrome plus #ecw_signature, including same-origin iframes and overlay/dialog containers.
 - Composer gotchas: autocomplete can hijack Enter. After every chip Enter, assert that the committed chip email attribute equals the intended address exactly; if the wrong suggestion committed, remove that chip, dismiss the dropdown with Escape, and retry. A red or invalid chip is failure evidence, never success. Wait out Loading chips before judging. Cc and Bcc inputs exist only after their reveal controls are clicked. The composer may autosave a Draft once touched; ignore Drafts as evidence and verify Scheduled instead. Body inserted above #ecw_signature should match the signature font, Verdana around 13.3px, and preserve the blank-line gap before the signature.
 - General visible-item recovery: browser_observe returns Chrome Controller-style ranked @eN refs with roles, names, frame scope, and selector fallbacks. Prefer refs over hand-written selectors. If a click or removal fails or returns stale_ref, do not repeat the identical action: re-observe, choose the newly evidenced descendant/nearby control, then try hover, click, semantic remove, or focused repeated Backspace/Delete as appropriate. Use browser_eval only when the normal snapshot/input surface cannot expose the visible control. Never claim that an item was clicked or removed unless follow-up observation proves the requested state.
@@ -1002,8 +1012,12 @@ export async function runAgentTurn({
   let pausedMs = 0;
   const effectiveTurnTimeoutMs = agentTurnTimeoutMs();
   const effectiveMaxToolCalls = agentMaxToolCalls();
+  const uiAgility = createUiAgilityState();
+  let modelRound = 0;
+  let observationModelRound = -1;
 
   while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
+    modelRound += 1;
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
     const turnInstructions = instructionsForTurn(teachMode, automaticGuideContext);
     const model = await provider.runTools({
@@ -1066,6 +1080,7 @@ export async function runAgentTurn({
 
       let ok = true;
       let result: unknown;
+      let uiActionDecision: Extract<UiActionDecision, { allowed: true }> | null = null;
       try {
         if (isTier0Tool(call.name)) {
           result = await runTier0Tool({ call, supabase, userId: user.id });
@@ -1094,14 +1109,45 @@ export async function runAgentTurn({
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
           if (call.name !== "browser_eval") {
             const validatedCall = validateBrowserToolCall(call);
-            const bridgedResult = await runBridgedTool({
-              service,
-              user,
-              sessionId,
-              call: validatedCall,
-              onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-            });
-            result = bridgedResult;
+            if (call.name === "browser_input") {
+              const decision = decideBrowserAction(uiAgility, validatedCall, {
+                observationVisibleToModel: observationModelRound >= 0 && observationModelRound < modelRound
+              });
+              if (!decision.allowed) {
+                ok = false;
+                result = {
+                  blocked: true,
+                  reason: decision.reason,
+                  error: decision.guidance,
+                  required_next_step: "Reason from the latest browser_observe result; call browser_observe first if none is current."
+                };
+              } else {
+                uiActionDecision = decision;
+                result = await runBridgedTool({
+                  service,
+                  user,
+                  sessionId,
+                  call: validatedCall,
+                  onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+                });
+              }
+            } else {
+              result = await runBridgedTool({
+                service,
+                user,
+                sessionId,
+                call: validatedCall,
+                onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+              });
+              if (call.name === "browser_observe") {
+                noteBrowserObservation(uiAgility, result);
+                observationModelRound = modelRound;
+                result = {
+                  agent_decision_context: uiDecisionGuidance(content, uiAgility),
+                  ...(result && typeof result === "object" ? (result as Record<string, unknown>) : { result })
+                };
+              }
+            }
           } else {
             const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, emit });
             ok = evalResult.ok;
@@ -1136,6 +1182,8 @@ export async function runAgentTurn({
         ok = false;
         result = toolError(error);
       }
+
+      if (uiActionDecision) noteBrowserAction(uiAgility, uiActionDecision);
 
       const truncated = truncateToolResult(result);
       await supabase.from("agent_messages").insert({
