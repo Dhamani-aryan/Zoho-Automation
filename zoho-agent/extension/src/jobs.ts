@@ -837,7 +837,7 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: (rawStep: Record<string, unknown>) => {
+    func: async (rawStep: Record<string, unknown>) => {
       function textOf(element: Element) {
         return (element.textContent ?? "").replace(/\s+/g, " ").trim();
       }
@@ -896,11 +896,21 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
 
       element.scrollIntoView({ block: "center", inline: "center" });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
       const rect = element.getBoundingClientRect();
+      const x = Math.round(ctx.offsetX + rect.left + rect.width / 2);
+      const y = Math.round(ctx.offsetY + rect.top + rect.height / 2);
+      const view = ctx.doc.defaultView ?? window;
+      if (x < 0 || y < 0 || x > view.innerWidth || y > view.innerHeight) {
+        return {
+          ok: false,
+          error_message: `UI target was found but is outside the clickable viewport after scrolling (${x}, ${y}).`
+        };
+      }
       return {
         ok: true,
-        x: Math.round(ctx.offsetX + rect.left + rect.width / 2),
-        y: Math.round(ctx.offsetY + rect.top + rect.height / 2),
+        x,
+        y,
         observed: valueOf(element),
         tag_name: element.tagName.toLowerCase()
       };
@@ -1162,7 +1172,7 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
   }
 
   const located = await locateUiTarget(tabId, step);
-  if (!located.ok) return { ok: false, error_message: located.error_message };
+  if (!located.ok) throw new Error(located.error_message);
   if (type === "click") {
     const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
     if (sendGuard) return sendGuard;
@@ -1299,6 +1309,10 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
             null;
         }
         if (!target) return { ok: false, error_message: "Removable UI item was not found." };
+        for (const hoverTarget of [target, target.parentElement].filter(Boolean) as Element[]) {
+          hoverTarget.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+          hoverTarget.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true, cancelable: true, view: window }));
+        }
 
         function distanceBetween(a: DOMRect, b: DOMRect) {
           const ax = a.left + a.width / 2;

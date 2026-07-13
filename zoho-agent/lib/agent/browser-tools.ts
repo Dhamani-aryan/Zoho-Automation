@@ -113,7 +113,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_input",
     tier: 2,
     description:
-      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance for token/chip/tag/pill-style UI. For key, optionally provide selector/text to focus a target first, then dispatch one key such as Backspace, Enter, Tab, or Escape.",
+      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance for token/chip/tag/pill-style UI; use this for user requests like remove/cancel/delete a chip, tag, recipient, pill, or selected item instead of clicking the item itself. For key, optionally provide selector/text to focus a target first, then dispatch one key such as Backspace, Enter, Tab, or Escape.",
     parameters: {
       oneOf: [
         {
