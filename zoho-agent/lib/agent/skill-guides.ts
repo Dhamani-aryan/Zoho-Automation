@@ -47,7 +47,7 @@ export const SKILL_GUIDE_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "save_skill_guide",
     tier: 1,
     description:
-      "Save a new reusable skill guide or update the existing guide with the same exact name. Supply the complete retained guide when updating; add corrections to Gotchas instead of creating duplicates. Saves directly and audits the version.",
+      "Save a new reusable skill guide or update the existing guide with the same exact name. Supply the complete retained guide when updating; add corrections to Gotchas instead of creating duplicates. Guides store METHOD only, never run-specific data: put every value that varies (e.g. deal_id, account_name, contact_email, date, subject, body) into params, and write method_api/method_ui to resolve those identity slots via db_search_records/db_query first and a zoho_api GET to confirm before any write. Saves directly and audits the version.",
     parameters: {
       type: "object",
       additionalProperties: false,
