@@ -15,32 +15,6 @@ import {
 } from "@/lib/agent/tier1-tools";
 import { runBridgedTool } from "@/lib/agent/bridge";
 import {
-  isTier2Tool,
-  validateTier2Call,
-  verifiedWriteFollowup,
-  type Tier2Module
-} from "@/lib/agent/tier2-tools";
-import {
-  isUiTool,
-  type PreparedUiWorkflow,
-  prepareUiWorkflowReplay,
-  type RunUiWorkflowArgs,
-  type SavedUiWorkflow,
-  uiStepTeachModeDecision,
-  validateUiToolCall
-} from "@/lib/agent/ui-tools";
-import {
-  defaultTaskOrderBudget,
-  isTaskOrderTool,
-  expandedAgentLimits,
-  taskOrderBudgetDecision,
-  taskOrderRecordUsage,
-  taskOrderProposalDecision,
-  validateTaskOrderToolCall,
-  type ActiveTaskOrder,
-  type ExpectedChange
-} from "@/lib/agent/task-orders";
-import {
   BROWSER_TOOL_DEFINITIONS,
   isBrowserTool,
   validateBrowserToolCall,
@@ -66,35 +40,14 @@ import {
   type UndoRecordArgs,
   type UndoTaskArgs
 } from "@/lib/agent/undo-tools";
-import {
-  buildApprovalRequest,
-  createPendingApproval,
-  resolvedFromLiveRecord,
-  waitForApprovalJob,
-  waitForApprovalOutcome,
-  type ApprovalSummaryRecord,
-  type LiveRecordFetch
-} from "@/lib/agent/tier2";
 import { getLLMProviderForUser } from "@/lib/llm";
 import type { AgentPromptMessage, AgentToolCall } from "@/lib/llm/provider";
 import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
-import {
-  isEmailSchedulingTool,
-  resolveEmailScheduleBatch,
-  validateEmailSchedulingToolCall,
-  type ResolvedEmailScheduleItem
-} from "@/lib/agent/email-scheduling-tools";
-import {
-  extractScheduledEmailVerification,
-  hasComposerBrowserMutation,
-  scheduledEmailCompletionDecision
-} from "@/lib/agent/scheduled-email-verification";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
-const JOB_POLL_INTERVAL_MS = 500;
 
 export type AgentStreamEvent =
   | { type: "assistant_delta"; text: string }
@@ -120,6 +73,8 @@ type AgentMessageRow = {
   tool_args: Record<string, unknown> | null;
   tool_result: unknown;
 };
+
+type UndoLogModule = "Accounts" | "Contacts" | "Deals";
 
 const AGENT_INSTRUCTIONS = `You are ZohoOps, an autonomous operations agent for the KloudData sales team.
 
@@ -277,199 +232,6 @@ function toolError(error: unknown) {
   };
 }
 
-function normalizeModule(value: unknown): Tier2Module | "" {
-  const raw = String(value ?? "").trim().toLowerCase();
-  if (raw === "accounts") return "Accounts";
-  if (raw === "contacts") return "Contacts";
-  if (raw === "deals") return "Deals";
-  return "";
-}
-
-function liveNameField(module: Tier2Module): string {
-  if (module === "Accounts") return "Account_Name";
-  if (module === "Contacts") return "Full_Name";
-  return "Deal_Name";
-}
-
-// Live-fetch fallback for the approval summary, backed by the Phase B read
-// bridge. Best-effort: if the extension is offline the bridge throws and the
-// summary shows "unknown - verify in card".
-function makeLiveFetch(service: SupabaseClient, user: AuthorizedUser, sessionId: string): LiveRecordFetch {
-  return async ({ module, zohoIds, fields }) => {
-    const out = new Map<string, ReturnType<typeof resolvedFromLiveRecord>>();
-    const requested = [...new Set([...fields, liveNameField(module)])];
-    for (const zohoId of zohoIds) {
-      try {
-        const body = (await runBridgedTool({
-          service,
-          user,
-          sessionId,
-          call: { id: `approval-summary-${zohoId}`, name: "zoho_get_record", args: { module, zoho_id: zohoId, fields: requested } }
-        })) as { data?: Array<Record<string, unknown>> } | null;
-        const record = Array.isArray(body?.data) ? body?.data[0] : undefined;
-        if (record) out.set(zohoId, resolvedFromLiveRecord(module, record));
-      } catch {
-        // Skip this record; the summary will mark it unknown.
-      }
-    }
-    return out;
-  };
-}
-
-// Runs the full approval gate for one validated Tier-2 call and returns the
-// observation to feed back to the model. Validation errors throw (never reach a
-// card); reject/expire are normal observations, not exceptions.
-async function handleTier2Call({
-  supabase,
-  service,
-  user,
-  sessionId,
-  call,
-  emit
-}: {
-  supabase: SupabaseClient;
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const moduleGuess = normalizeModule((call.args as { module?: unknown })?.module);
-  const { data: metaRows } = moduleGuess
-    ? await service
-        .from("zoho_field_meta")
-        .select("module,api_name,data_type,picklist_values")
-        .eq("module", moduleGuess)
-    : { data: [] as Array<{ module: string; api_name: string; data_type: string | null; picklist_values: unknown }> };
-
-  // Throws on invalid args/rules -> caught by the caller as an error observation.
-  const prepared = validateTier2Call(call, { fieldMeta: metaRows ?? [], role: user.role });
-
-  const liveFetch = makeLiveFetch(service, user, sessionId);
-  const { summary, snapshot } = await buildApprovalRequest({ supabase, prepared, liveFetch });
-  const approvalId = await createPendingApproval({
-    service,
-    sessionId,
-    userId: user.id,
-    snapshot,
-    summary,
-    status: user.approvals_enabled ? "pending" : "approved"
-  });
-
-  if (!user.approvals_enabled) {
-    const { error: jobError } = await service.from("tool_jobs").insert({
-      user_id: user.id,
-      session_id: sessionId,
-      tool_name: snapshot.tool_name,
-      args: snapshot,
-      approval_id: approvalId
-    });
-    if (jobError) throw jobError;
-    await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-    const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
-    const jobResult = job.result as Record<string, unknown> | null;
-    const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
-    return {
-      ok: job.ok,
-      result: {
-        approval_id: approvalId,
-        status: job.ok ? "executed" : "failed",
-        auto_approved: true,
-        ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult }),
-        ...(followup ?? {})
-      },
-      pausedMs: job.waitedMs
-    };
-  }
-
-  await emit({
-    type: "approval_required",
-    call_id: call.id,
-    approval_id: approvalId,
-    tool_name: call.name,
-    summary
-  });
-
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-  if (decision.outcome === "rejected") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: "rejected", error: "The user rejected this action." },
-      pausedMs: decision.waitedMs
-    };
-  }
-  if (decision.outcome === "expired") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: "expired", error: "The approval expired before the user decided." },
-      pausedMs: decision.waitedMs
-    };
-  }
-
-  const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
-  const pausedMs = decision.waitedMs + job.waitedMs;
-  const jobResult = job.result as Record<string, unknown> | null;
-  const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
-  return {
-    ok: job.ok,
-    result: {
-      approval_id: approvalId,
-      status: job.ok ? "executed" : "failed",
-      ...(jobResult && typeof jobResult === "object" ? jobResult : { result: jobResult }),
-      ...(followup ?? {})
-    },
-    pausedMs
-  };
-}
-
-type UiWorkflowRow = {
-  name: string;
-  description: string | null;
-  params: unknown;
-  effect: "read" | "write";
-  trusted: boolean;
-  version: number;
-  updated_at: string;
-};
-
-function workflowSummary(workflow: PreparedUiWorkflow, existingVersion: number | null): ApprovalSummaryRecord[] {
-  return [
-    {
-      zoho_id: "ui_workflow",
-      name: workflow.name,
-      before: {
-        version: existingVersion,
-        trusted: false
-      },
-      after: {
-        effect: workflow.effect,
-        steps: workflow.steps.length,
-        params: workflow.params.map((param) => param.name).join(", ") || "(none)"
-      }
-    }
-  ];
-}
-
-async function listUiWorkflows(service: SupabaseClient) {
-  const { data, error } = await service
-    .from("ui_workflows")
-    .select("name,description,params,effect,trusted,version,updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(50);
-  if (error) throw error;
-  return {
-    workflows: ((data ?? []) as UiWorkflowRow[]).map((workflow) => ({
-      name: workflow.name,
-      description: workflow.description ?? "",
-      params: workflow.params,
-      effect: workflow.effect,
-      trusted: workflow.trusted,
-      version: workflow.version,
-      updated_at: workflow.updated_at
-    }))
-  };
-}
-
 async function listSkillGuides(service: SupabaseClient) {
   const { data, error } = await service
     .from("skill_guides")
@@ -608,22 +370,6 @@ async function guideContextForTurn(
   };
 }
 
-function skillGuideSummary(guide: SaveSkillGuideArgs, existingVersion: number | null): ApprovalSummaryRecord[] {
-  return [
-    {
-      zoho_id: "skill_guide",
-      name: guide.name,
-      before: { version: existingVersion },
-      after: {
-        intent: guide.intent,
-        params: guide.params.map((param) => param.name).join(", ") || "(none)",
-        has_api_method: guide.method_api.trim().length > 0,
-        has_ui_method: guide.method_ui.trim().length > 0
-      }
-    }
-  ];
-}
-
 async function saveSkillGuide({
   service,
   user,
@@ -686,801 +432,8 @@ async function currentTeachMode(service: SupabaseClient, user: AuthorizedUser, s
   return (sessionRow as { teach_mode?: boolean } | null)?.teach_mode === true;
 }
 
-async function activeTaskOrder(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
-  const { data, error } = await service
-    .from("task_orders")
-    .select("id,session_id,user_id,goal,plan,scope,status,budget,decided_at,created_at")
-    .eq("session_id", sessionId)
-    .eq("user_id", user.id)
-    .eq("status", "approved")
-    .maybeSingle();
-  if (error) throw error;
-  return data as ActiveTaskOrder | null;
-}
-
-async function taskOrderById(service: SupabaseClient, user: AuthorizedUser, id: string) {
-  const { data, error } = await service
-    .from("task_orders")
-    .select("id,session_id,user_id,goal,plan,scope,status,budget,decided_at,created_at")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (error) throw error;
-  return data as ActiveTaskOrder | null;
-}
-
-function taskOrderSummary(goal: string, planSummary: string, expectedChanges: ExpectedChange[]): ApprovalSummaryRecord[] {
-  if (expectedChanges.length === 0) {
-    return [
-      {
-        zoho_id: "task_order",
-        name: goal,
-        before: { status: "not started" },
-        after: { plan: planSummary, expected_changes: 0 }
-      }
-    ];
-  }
-  return expectedChanges.map((change, index) => ({
-    zoho_id: change.record || `expected_change_${index + 1}`,
-    name: change.record || `Expected change ${index + 1}`,
-    before: { status: "not started" },
-    after: { action: change.action, detail: change.detail }
-  }));
-}
-
-async function proposeTaskOrder({
-  service,
-  user,
-  sessionId,
-  call,
-  userRequest,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  userRequest: string;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const validated = validateTaskOrderToolCall(call);
-  const args = validated.args as {
-    goal: string;
-    plan_summary: string;
-    expected_changes: ExpectedChange[];
-    scope: "read" | "write";
-  };
-  const existing = await activeTaskOrder(service, user, sessionId);
-  if (existing) {
-    throw new Error(`Task order already active: ${existing.goal}. Complete or stop it before proposing another.`);
-  }
-
-  const proposal = taskOrderProposalDecision(args.expected_changes, userRequest);
-  if (!proposal.allowed) throw new Error(proposal.reason);
-
-  const budget = defaultTaskOrderBudget(args.expected_changes);
-  const nowIso = new Date().toISOString();
-  const { data: order, error } = await service
-    .from("task_orders")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      goal: args.goal,
-      plan: {
-        plan_summary: args.plan_summary,
-        expected_changes: args.expected_changes
-      },
-      scope: args.scope,
-      status: args.scope === "read" || !user.approvals_enabled ? "approved" : "proposed",
-      budget,
-      decided_at: args.scope === "read" || !user.approvals_enabled ? nowIso : null
-    })
-    .select("id,goal,scope,status,budget")
-    .single();
-  if (error) throw error;
-
-  const taskOrderId = (order as { id: string }).id;
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "task_order_proposed",
-    message: `Task order proposed: ${args.goal}.`,
-    metadata: { session_id: sessionId, task_order_id: taskOrderId, scope: args.scope, budget }
-  });
-
-  if (args.scope === "read" || !user.approvals_enabled) {
-    return {
-      ok: true,
-      result: {
-        task_order_id: taskOrderId,
-        status: "approved",
-        scope: args.scope,
-        budget,
-        auto_approved: args.scope !== "read" && !user.approvals_enabled
-      },
-      pausedMs: 0
-    };
-  }
-
-  const summary = taskOrderSummary(args.goal, args.plan_summary, args.expected_changes);
-  const { data: approval, error: approvalError } = await service
-    .from("pending_approvals")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      tool_name: "task_order",
-      args: { task_order_id: taskOrderId, goal: args.goal, scope: args.scope },
-      summary
-    })
-    .select("id")
-    .single();
-  if (approvalError) throw approvalError;
-
-  const approvalId = (approval as { id: string }).id;
-  await emit({
-    type: "approval_required",
-    call_id: call.id,
-    approval_id: approvalId,
-    tool_name: "task_order",
-    summary
-  });
-
-  const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-  if (decision.outcome === "rejected" || decision.outcome === "expired") {
-    await service
-      .from("task_orders")
-      .update({
-        status: decision.outcome,
-        decided_at: new Date().toISOString(),
-        report: { status: decision.outcome, approval_id: approvalId }
-      })
-      .eq("id", taskOrderId)
-      .eq("user_id", user.id)
-      .eq("status", "proposed");
-    return {
-      ok: false,
-      result: { approval_id: approvalId, task_order_id: taskOrderId, status: decision.outcome },
-      pausedMs: decision.waitedMs
-    };
-  }
-
-  return {
-    ok: true,
-    result: { approval_id: approvalId, task_order_id: taskOrderId, status: "approved", budget },
-    pausedMs: decision.waitedMs
-  };
-}
-
-async function zohoApiReceiptStatsForOrder(service: SupabaseClient, sessionId: string, orderId: string) {
-  const { data, error } = await service
-    .from("agent_messages")
-    .select("tool_args,tool_result")
-    .eq("session_id", sessionId)
-    .eq("role", "tool")
-    .eq("tool_name", "zoho_api")
-    .limit(500);
-  if (error) throw error;
-  let mutatingResults = 0;
-  let receipts = 0;
-  let verified = 0;
-  let failed = 0;
-  let writeOkUnverified = 0;
-  for (const row of (data ?? []) as Array<{ tool_args: Record<string, unknown> | null; tool_result: unknown }>) {
-    if (!isZohoApiWriteArgs(row.tool_args)) continue;
-    const result = row.tool_result && typeof row.tool_result === "object" ? (row.tool_result as Record<string, unknown>) : {};
-    if (result.task_order_id !== orderId) continue;
-    mutatingResults += 1;
-    const resultReceipts = Array.isArray(result.receipts) ? result.receipts : [];
-    receipts += resultReceipts.length;
-    for (const receipt of resultReceipts) {
-      const status = receipt && typeof receipt === "object" ? (receipt as { status?: unknown }).status : null;
-      if (status === "verified") verified += 1;
-      else if (status === "write_ok_unverified") writeOkUnverified += 1;
-      else if (status === "failed") failed += 1;
-    }
-  }
-  return {
-    mutatingResults,
-    receipts,
-    verified,
-    failed,
-    write_ok_unverified: writeOkUnverified,
-    zero_receipt_mutations: Math.max(0, mutatingResults - receipts)
-  };
-}
-
-async function composerBrowserMutationStatsForOrder(service: SupabaseClient, sessionId: string, orderId: string) {
-  const { data, error } = await service
-    .from("audit_events")
-    .select("metadata")
-    .eq("event_type", "composer_browser_mutation")
-    .contains("metadata", { session_id: sessionId, task_order_id: orderId })
-    .limit(500);
-  if (error) throw error;
-  return { composerMutations: (data ?? []).length };
-}
-
-async function scheduledEmailVerificationCountForOrder(
-  service: SupabaseClient,
-  user: AuthorizedUser,
-  sessionId: string,
-  orderId: string
-) {
-  const { data, error } = await service
-    .from("audit_events")
-    .select("metadata")
-    .eq("user_id", user.id)
-    .eq("event_type", "scheduled_email_verified")
-    .contains("metadata", { session_id: sessionId, task_order_id: orderId })
-    .limit(500);
-  if (error) throw error;
-  return (data ?? []).length;
-}
-
-function taskOrderIdFromToolResult(result: unknown) {
-  if (!result || typeof result !== "object") return null;
-  const id = (result as Record<string, unknown>).task_order_id;
-  return typeof id === "string" && id.trim() ? id : null;
-}
-
-function withTaskOrderId(result: unknown, taskOrderId: string) {
-  if (result && typeof result === "object" && !Array.isArray(result)) {
-    return { ...(result as Record<string, unknown>), task_order_id: taskOrderId };
-  }
-  return { task_order_id: taskOrderId, result };
-}
-
-async function recordScheduledEmailVerificationIfPresent({
-  service,
-  user,
-  sessionId,
-  taskOrderId,
-  toolName,
-  callId,
-  result
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  taskOrderId: string | null;
-  toolName: string;
-  callId: string;
-  result: unknown;
-}) {
-  if (!taskOrderId) return;
-  if (toolName !== "browser_eval" && toolName !== "zoho_api") return;
-  const verification = extractScheduledEmailVerification(result);
-  if (!verification) return;
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "scheduled_email_verified",
-    message: `Verified scheduled email: ${verification.subject}.`,
-    metadata: {
-      session_id: sessionId,
-      task_order_id: taskOrderId,
-      tool_name: toolName,
-      call_id: callId,
-      recipient: verification.recipient,
-      subject: verification.subject,
-      date: verification.date,
-      time: verification.time
-    }
-  });
-}
-
-async function recordComposerBrowserMutationIfPresent({
-  service,
-  user,
-  sessionId,
-  taskOrderId,
-  toolName,
-  callId,
-  result
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  taskOrderId: string | null;
-  toolName: string;
-  callId: string;
-  result: unknown;
-}) {
-  if (!taskOrderId) return;
-  if (toolName !== "browser_input" && toolName !== "browser_eval") return;
-  if (!hasComposerBrowserMutation(result)) return;
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "composer_browser_mutation",
-    message: `Recorded composer browser mutation from ${toolName}.`,
-    metadata: {
-      session_id: sessionId,
-      task_order_id: taskOrderId,
-      tool_name: toolName,
-      call_id: callId
-    }
-  });
-}
-
-async function completeTaskOrder({
-  service,
-  user,
-  sessionId,
-  call
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-}): Promise<{ ok: boolean; result: unknown }> {
-  const validated = validateTaskOrderToolCall(call);
-  const args = validated.args as { report: unknown };
-  const order = await activeTaskOrder(service, user, sessionId);
-  if (!order) throw new Error("No active approved task order to complete.");
-
-  const report = typeof args.report === "string" ? { summary: args.report } : args.report;
-  const receiptStats = await zohoApiReceiptStatsForOrder(service, sessionId, order.id);
-  const composerStats = await composerBrowserMutationStatsForOrder(service, sessionId, order.id);
-  const scheduledVerifications = await scheduledEmailVerificationCountForOrder(service, user, sessionId, order.id);
-  const scheduledEmailDecision = scheduledEmailCompletionDecision({
-    scope: order.scope,
-    composerMutations: composerStats.composerMutations,
-    scheduledVerifications
-  });
-  const verificationFlags = {
-    receipt_stats: receiptStats,
-    composer_stats: composerStats,
-    scheduled_email_verifications: scheduledVerifications,
-    scheduled_email_verification_missing: scheduledEmailDecision.scheduled_email_verification_missing,
-    has_unverified_receipts: receiptStats.failed > 0 || receiptStats.write_ok_unverified > 0 || receiptStats.zero_receipt_mutations > 0
-  };
-  const completionReport =
-    report && typeof report === "object" && !Array.isArray(report)
-      ? { ...(report as Record<string, unknown>), verification_flags: verificationFlags }
-      : { summary: report, verification_flags: verificationFlags };
-  const completedAt = new Date().toISOString();
-  const { data, error } = await service
-    .from("task_orders")
-    .update({ status: "completed", report: completionReport, completed_at: completedAt })
-    .eq("id", order.id)
-    .eq("user_id", user.id)
-    .eq("status", "approved")
-    .select("id,goal,status,report,completed_at")
-    .single();
-  if (error) throw error;
-
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "task_order_completed",
-    message: `Task order completed: ${order.goal}.`,
-    metadata: { session_id: sessionId, task_order_id: order.id }
-  });
-
-  return { ok: true, result: { task_order: data } };
-}
-
-async function failTaskOrder(service: SupabaseClient, user: AuthorizedUser, orderId: string, reason: string) {
-  await service
-    .from("task_orders")
-    .update({
-      status: "failed",
-      completed_at: new Date().toISOString(),
-      report: { status: "failed", reason }
-    })
-    .eq("id", orderId)
-    .eq("user_id", user.id)
-    .eq("status", "approved");
-}
-
-async function waitForToolJobById({
-  service,
-  jobId,
-  userId
-}: {
-  service: SupabaseClient;
-  jobId: string;
-  userId: string;
-}) {
-  const started = Date.now();
-  while (Date.now() - started < agentTurnTimeoutMs()) {
-    const { data, error } = await service
-      .from("tool_jobs")
-      .select("id,status,result,error_message")
-      .eq("id", jobId)
-      .eq("user_id", userId)
-      .single();
-    if (error) throw error;
-    const row = data as { status: string; result: unknown; error_message: string | null };
-    if (row.status === "done") return { ok: true, result: row.result, waitedMs: Date.now() - started };
-    if (row.status === "failed" || row.status === "expired") {
-      return {
-        ok: false,
-        result: { status: row.status, error: row.error_message ?? "Task-order job failed.", result: row.result },
-        waitedMs: Date.now() - started
-      };
-    }
-    await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
-  }
-  await service
-    .from("tool_jobs")
-    .update({
-      status: "expired",
-      completed_at: new Date().toISOString(),
-      error_message: "Timed out waiting for the Chrome extension to report this task-order job."
-    })
-    .eq("id", jobId)
-    .eq("user_id", userId)
-    .in("status", ["queued", "running"]);
-  return { ok: false, result: { status: "expired", error: "Task-order job timed out." }, waitedMs: Date.now() - started };
-}
-
-function databaseScheduleTime(value: string) {
-  const raw = value.trim().toUpperCase();
-  const twelveHour = /^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/.exec(raw);
-  if (!twelveHour) return /^([01]?\d|2[0-3]):[0-5]\d$/.test(raw) ? `${raw.padStart(5, "0")}:00` : raw;
-  let hour = Number(twelveHour[1]);
-  if (twelveHour[3] === "AM" && hour === 12) hour = 0;
-  if (twelveHour[3] === "PM" && hour !== 12) hour += 12;
-  return `${String(hour).padStart(2, "0")}:${twelveHour[2]}:00`;
-}
-
-async function runEmailSchedulingBatch({
-  service,
-  user,
-  sessionId,
-  call,
-  order,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  order: ActiveTaskOrder | null;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const validated = validateEmailSchedulingToolCall(call);
-  const args = validated.args as { emails: ResolvedEmailScheduleItem[] };
-  if (args.emails.length > 3 && !order) {
-    throw new Error("Scheduling more than 3 emails requires an approved task order before calling schedule_zoho_email_batch.");
-  }
-
-  const resolution = await resolveEmailScheduleBatch(service, validated.args);
-  const resolved = resolution.filter((row): row is { ok: true; item: ResolvedEmailScheduleItem } => row.ok);
-  const unresolved = resolution.filter((row) => !row.ok);
-  if (resolved.length === 0) {
-    return { ok: false, result: { status: "not_started", resolved: 0, failures: unresolved }, pausedMs: 0 };
-  }
-  if (order && resolved.length > order.budget.max_records_touched) {
-    throw new Error(`Resolved batch exceeds task-order record budget (${order.budget.max_records_touched}).`);
-  }
-
-  const summary: ApprovalSummaryRecord[] = resolved.map(({ item }) => ({
-    zoho_id: item.deal_zoho_id,
-    name: `${item.contact_name} - ${item.deal_name}`,
-    before: { scheduled: false },
-    after: {
-      action: "schedule_email",
-      to: item.to,
-      cc: item.cc,
-      subject: item.subject,
-      schedule_date: item.schedule_date,
-      schedule_time: item.schedule_time,
-      timezone: item.timezone,
-      preserve_signature: true
-    }
-  }));
-
-  let approvalId: string | null = null;
-  let pausedMs = 0;
-  if (!order) {
-    const snapshot = { tool_name: "schedule_zoho_email_batch", emails: resolved.map((row) => row.item) };
-    const { data: approval, error } = await service
-      .from("pending_approvals")
-      .insert({
-        session_id: sessionId,
-        user_id: user.id,
-        tool_name: snapshot.tool_name,
-        args: snapshot,
-        summary,
-        status: user.approvals_enabled ? "pending" : "approved",
-        decided_at: user.approvals_enabled ? null : new Date().toISOString()
-      })
-      .select("id")
-      .single();
-    if (error) throw error;
-    approvalId = (approval as { id: string }).id;
-    if (user.approvals_enabled) {
-      await emit({
-        type: "approval_required",
-        call_id: call.id,
-        approval_id: approvalId,
-        tool_name: "schedule_zoho_email_batch",
-        summary
-      });
-      const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-      pausedMs += decision.waitedMs;
-      if (decision.outcome !== "approved") {
-        return {
-          ok: false,
-          result: { approval_id: approvalId, status: decision.outcome, failures: unresolved },
-          pausedMs
-        };
-      }
-    }
-  }
-
-  const outcomes: Array<Record<string, unknown>> = unresolved.map((failure) => ({
-    reference: failure.reference,
-    status: "not_started",
-    error: failure.error,
-    candidates: failure.candidates ?? []
-  }));
-  let consecutiveFailures = 0;
-  let executed = 0;
-  let failed = unresolved.length;
-  const startedAt = Date.now();
-
-  for (const { item } of resolved) {
-    if (order) {
-      const { data: currentOrder, error: orderError } = await service
-        .from("task_orders")
-        .select("status")
-        .eq("id", order.id)
-        .eq("user_id", user.id)
-        .single();
-      if (orderError) throw orderError;
-      if ((currentOrder as { status: string }).status !== "approved") {
-        outcomes.push({ reference: item.reference, status: "not_started", error: "Task order was stopped." });
-        break;
-      }
-      if (executed >= order.budget.max_tool_calls) {
-        outcomes.push({ reference: item.reference, status: "not_started", error: "Task-order tool-call budget reached." });
-        break;
-      }
-      if (Date.now() - startedAt > order.budget.max_wall_ms) {
-        outcomes.push({ reference: item.reference, status: "not_started", error: "Task-order wall-clock budget reached." });
-        break;
-      }
-    }
-
-    const scheduleTime = databaseScheduleTime(item.schedule_time);
-    const { data: duplicate, error: duplicateError } = await service
-      .from("scheduled_emails")
-      .select("id,zoho_url")
-      .eq("related_deal_id", item.deal_id)
-      .eq("related_contact_id", item.contact_id)
-      .ilike("to_email", item.to)
-      .eq("subject", item.subject)
-      .eq("schedule_date", item.schedule_date)
-      .eq("schedule_time", scheduleTime)
-      .eq("status", "scheduled")
-      .maybeSingle();
-    if (duplicateError) throw duplicateError;
-    if (duplicate) {
-      outcomes.push({
-        reference: item.reference,
-        status: "already_scheduled",
-        deal_url: item.deal_url,
-        scheduled_email_id: (duplicate as { id: string }).id
-      });
-      consecutiveFailures = 0;
-      continue;
-    }
-
-    const { data: inserted, error: insertError } = await service
-      .from("tool_jobs")
-      .insert({
-        user_id: user.id,
-        session_id: sessionId,
-        tool_name: "schedule_zoho_email",
-        args: item,
-        ...(order ? { task_order_id: order.id } : { approval_id: approvalId })
-      })
-      .select("id")
-      .single();
-    if (insertError) throw insertError;
-
-    await service.from("audit_events").insert({
-      user_id: user.id,
-      event_type: "deterministic_email_queued",
-      message: `Queued deterministic email schedule for ${item.reference}.`,
-      metadata: {
-        session_id: sessionId,
-        task_order_id: order?.id ?? null,
-        approval_id: approvalId,
-        deal_id: item.deal_zoho_id,
-        reference: item.reference
-      }
-    });
-    await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-    const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
-    pausedMs += job.waitedMs;
-    executed += 1;
-
-    if (job.ok) {
-      consecutiveFailures = 0;
-      const result = job.result as Record<string, unknown> | null;
-      outcomes.push({ reference: item.reference, status: "scheduled", deal_url: item.deal_url, result });
-      const { error: emailLogError } = await service.from("scheduled_emails").insert({
-        related_deal_id: item.deal_id,
-        related_contact_id: item.contact_id,
-        to_email: item.to,
-        cc_emails: item.cc,
-        subject: item.subject,
-        body_hash: createHash("sha256").update(item.body, "utf8").digest("hex"),
-        schedule_date: item.schedule_date,
-        schedule_time: scheduleTime,
-        status: "scheduled",
-        zoho_url: item.deal_url,
-        raw_data: result ?? {}
-      });
-      if (emailLogError) throw emailLogError;
-    } else {
-      consecutiveFailures += 1;
-      failed += 1;
-      outcomes.push({ reference: item.reference, status: "failed", deal_url: item.deal_url, result: job.result });
-    }
-
-    await service.from("audit_events").insert({
-      user_id: user.id,
-      event_type: "deterministic_email_completed",
-      message: `${job.ok ? "Scheduled" : "Failed"} deterministic email for ${item.reference}.`,
-      metadata: {
-        session_id: sessionId,
-        task_order_id: order?.id ?? null,
-        approval_id: approvalId,
-        deal_id: item.deal_zoho_id,
-        reference: item.reference,
-        ok: job.ok
-      }
-    });
-
-    const processed = executed + unresolved.length;
-    if (consecutiveFailures >= 3 || (processed >= 5 && failed / processed > 0.2)) break;
-  }
-
-  const scheduled = outcomes.filter((row) => row.status === "scheduled").length;
-  const alreadyScheduled = outcomes.filter((row) => row.status === "already_scheduled").length;
-  const failures = outcomes.filter((row) => row.status === "failed" || row.status === "not_started").length;
-  return {
-    ok: failures === 0,
-    result: {
-      status: failures === 0 ? "completed" : scheduled + alreadyScheduled > 0 ? "partial" : "failed",
-      task_order_id: order?.id ?? null,
-      approval_id: approvalId,
-      counts: { requested: validated.args.emails.length, scheduled, already_scheduled: alreadyScheduled, failures },
-      records: outcomes,
-      expected_vs_actual: { expected: validated.args.emails.length, accounted_for: outcomes.length }
-    },
-    pausedMs
-  };
-}
-
-async function runTier2UnderTaskOrder({
-  supabase,
-  service,
-  user,
-  sessionId,
-  call,
-  order,
-  emit
-}: {
-  supabase: SupabaseClient;
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  order: ActiveTaskOrder;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const moduleGuess = normalizeModule((call.args as { module?: unknown })?.module);
-  const { data: metaRows } = moduleGuess
-    ? await service
-        .from("zoho_field_meta")
-        .select("module,api_name,data_type,picklist_values")
-        .eq("module", moduleGuess)
-    : { data: [] as Array<{ module: string; api_name: string; data_type: string | null; picklist_values: unknown }> };
-  const prepared = validateTier2Call(call, { fieldMeta: metaRows ?? [], role: user.role });
-  const liveFetch = makeLiveFetch(service, user, sessionId);
-  const { summary, snapshot } = await buildApprovalRequest({ supabase, prepared, liveFetch });
-  const approvalId = await createPendingApproval({
-    service,
-    sessionId,
-    userId: user.id,
-    snapshot,
-    summary,
-    status: "approved",
-    taskOrderId: order.id
-  });
-
-  const { data: inserted, error } = await service
-    .from("tool_jobs")
-    .insert({
-      user_id: user.id,
-      session_id: sessionId,
-      tool_name: snapshot.tool_name,
-      args: snapshot,
-      task_order_id: order.id,
-      approval_id: approvalId
-    })
-    .select("id")
-    .single();
-  if (error) throw error;
-
-  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
-  const followup = verifiedWriteFollowup({ ok: job.ok, snapshot });
-  return {
-    ok: job.ok,
-    result: {
-      task_order_id: order.id,
-      approval_id: approvalId,
-      status: job.ok ? "executed" : "failed",
-      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
-      ...(followup ?? {})
-    },
-    pausedMs: job.waitedMs
-  };
-}
-
-async function runUiStepUnderTaskOrder({
-  service,
-  user,
-  sessionId,
-  call,
-  order,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  order: ActiveTaskOrder;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const validatedCall = validateUiToolCall(call);
-  const { data: inserted, error } = await service
-    .from("tool_jobs")
-    .insert({
-      user_id: user.id,
-      session_id: sessionId,
-      tool_name: validatedCall.name,
-      args: validatedCall.args,
-      task_order_id: order.id
-    })
-    .select("id")
-    .single();
-  if (error) throw error;
-
-  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
-  return {
-    ok: job.ok,
-    result: {
-      task_order_id: order.id,
-      ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result })
-    },
-    pausedMs: job.waitedMs
-  };
-}
-
 function codeHash(code: string) {
   return createHash("sha256").update(code, "utf8").digest("hex");
-}
-
-function browserEvalSummary(args: BrowserEvalArgs): ApprovalSummaryRecord[] {
-  return [
-    {
-      zoho_id: "browser_eval",
-      name: args.purpose,
-      before: { status: "not executed" },
-      after: {
-        purpose: args.purpose,
-        code_sha256: codeHash(args.code),
-        code_bytes: Buffer.byteLength(args.code, "utf8"),
-        code: args.code
-      }
-    }
-  ];
 }
 
 async function enqueueBrowserEval({
@@ -1489,8 +442,6 @@ async function enqueueBrowserEval({
   sessionId,
   call,
   args,
-  taskOrderId,
-  approvalId,
   emit
 }: {
   service: SupabaseClient;
@@ -1498,8 +449,6 @@ async function enqueueBrowserEval({
   sessionId: string;
   call: AgentToolCall;
   args: BrowserEvalArgs;
-  taskOrderId?: string | null;
-  approvalId?: string | null;
   emit: Emit;
 }) {
   const hash = codeHash(args.code);
@@ -1511,122 +460,47 @@ async function enqueueBrowserEval({
       session_id: sessionId,
       purpose: args.purpose,
       code_sha256: hash,
-      code_bytes: Buffer.byteLength(args.code, "utf8"),
-      task_order_id: taskOrderId ?? null,
-      approval_id: approvalId ?? null
+      code_bytes: Buffer.byteLength(args.code, "utf8")
     }
   });
 
-  const { data: inserted, error } = await service
-    .from("tool_jobs")
-    .insert({
+  try {
+    const result = await runBridgedTool({
+      service,
+      user,
+      sessionId,
+      call: { ...call, args },
+      onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
+    });
+    await service.from("audit_events").insert({
       user_id: user.id,
-      session_id: sessionId,
-      tool_name: "browser_eval",
-      args,
-      ...(taskOrderId ? { task_order_id: taskOrderId } : {}),
-      ...(approvalId ? { approval_id: approvalId } : {})
-    })
-    .select("id")
-    .single();
-  if (error) throw error;
-
-  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "browser_eval_completed",
-    message: `${job.ok ? "Completed" : "Failed"} browser_eval: ${args.purpose}.`,
-    metadata: {
-      session_id: sessionId,
-      purpose: args.purpose,
-      code_sha256: hash,
-      code_bytes: Buffer.byteLength(args.code, "utf8"),
-      task_order_id: taskOrderId ?? null,
-      approval_id: approvalId ?? null,
-      ok: job.ok
-    }
-  });
-  return job;
-}
-
-function zohoApiSummary(args: ZohoApiArgs): ApprovalSummaryRecord[] {
-  return [
-    {
-      zoho_id: "zoho_api",
-      name: `${args.method} ${args.path}`,
-      before: { status: "not executed" },
-      after: {
-        method: args.method,
-        path: args.path,
-        params: args.params,
-        ...(args.method === "GET" ? {} : { body: args.body })
+      event_type: "browser_eval_completed",
+      message: `Completed browser_eval: ${args.purpose}.`,
+      metadata: {
+        session_id: sessionId,
+        purpose: args.purpose,
+        code_sha256: hash,
+        code_bytes: Buffer.byteLength(args.code, "utf8"),
+        ok: true
       }
-    }
-  ];
-}
-
-async function enqueueZohoApi({
-  service,
-  user,
-  sessionId,
-  call,
-  args,
-  taskOrderId,
-  approvalId,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  args: ZohoApiArgs;
-  taskOrderId?: string | null;
-  approvalId?: string | null;
-  emit: Emit;
-}) {
-  const { data: inserted, error } = await service
-    .from("tool_jobs")
-    .insert({
+    });
+    return { ok: true, result, waitedMs: 0 };
+  } catch (error) {
+    await service.from("audit_events").insert({
       user_id: user.id,
-      session_id: sessionId,
-      tool_name: "zoho_api",
-      args,
-      ...(taskOrderId ? { task_order_id: taskOrderId } : {}),
-      ...(approvalId ? { approval_id: approvalId } : {})
-    })
-    .select("id")
-    .single();
-  if (error) throw error;
-
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "zoho_api_queued",
-    message: `Queued zoho_api ${args.method} ${args.path}.`,
-    metadata: {
-      session_id: sessionId,
-      method: args.method,
-      path: args.path,
-      task_order_id: taskOrderId ?? null,
-      approval_id: approvalId ?? null
-    }
-  });
-  await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-  const job = await waitForToolJobById({ service, jobId: (inserted as { id: string }).id, userId: user.id });
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: "zoho_api_completed",
-    message: `${job.ok ? "Completed" : "Failed"} zoho_api ${args.method} ${args.path}.`,
-    metadata: {
-      session_id: sessionId,
-      method: args.method,
-      path: args.path,
-      task_order_id: taskOrderId ?? null,
-      approval_id: approvalId ?? null,
-      ok: job.ok
-    }
-  });
-  return job;
+      event_type: "browser_eval_completed",
+      message: `Failed browser_eval: ${args.purpose}.`,
+      metadata: {
+        session_id: sessionId,
+        purpose: args.purpose,
+        code_sha256: hash,
+        code_bytes: Buffer.byteLength(args.code, "utf8"),
+        ok: false,
+        error: error instanceof Error ? error.message : "browser_eval failed"
+      }
+    });
+    throw error;
+  }
 }
 
 async function withZohoApiReceipts({
@@ -1725,7 +599,7 @@ async function withZohoApiReceipts({
   return { ...base, receipts };
 }
 
-function isUndoLogModule(moduleName: string): moduleName is Tier2Module {
+function isUndoLogModule(moduleName: string): moduleName is UndoLogModule {
   return moduleName === "Accounts" || moduleName === "Contacts" || moduleName === "Deals";
 }
 
@@ -1748,11 +622,11 @@ async function snapshotZohoApiUndoValues({
   );
   if (targets.length === 0) return;
 
-  const byModule = new Map<Tier2Module, typeof targets>();
+  const byModule = new Map<UndoLogModule, typeof targets>();
   for (const target of targets) {
-    const moduleTargets = byModule.get(target.module as Tier2Module) ?? [];
+    const moduleTargets = byModule.get(target.module as UndoLogModule) ?? [];
     moduleTargets.push(target);
-    byModule.set(target.module as Tier2Module, moduleTargets);
+    byModule.set(target.module as UndoLogModule, moduleTargets);
   }
 
   for (const [moduleName, moduleTargets] of byModule.entries()) {
@@ -1806,7 +680,6 @@ async function runZohoApiTool({
   user: AuthorizedUser;
   sessionId: string;
   call: AgentToolCall;
-  order: ActiveTaskOrder | null;
   emit: Emit;
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const args = zohoApiReadSchema.parse(call.args);
@@ -1840,7 +713,6 @@ async function runBrowserEvalTool({
   user: AuthorizedUser;
   sessionId: string;
   call: AgentToolCall;
-  order: ActiveTaskOrder | null;
   emit: Emit;
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const validated = validateBrowserToolCall(call);
@@ -1865,7 +737,7 @@ async function runBrowserEvalTool({
   };
 }
 
-function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean, guideContext: string) {
+function instructionsForTurn(teachMode: boolean, guideContext: string) {
   const modeInstructions = teachMode
     ? `
 
@@ -1888,324 +760,9 @@ REPEAT / EXPLORE TURN RULES:
 Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. Approval cards are no longer part of normal Zoho CRM execution; zoho_api writes and browser tools run directly, with guardrails and honest read-back reporting.${modeInstructions}${guideContext}`;
 }
 
-async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
-  const decision = uiStepTeachModeDecision(await currentTeachMode(service, user, sessionId));
-  if (!decision.allowed) throw new Error(decision.reason);
-}
-
-async function saveUiWorkflow({
-  service,
-  user,
-  sessionId,
-  call,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  await ensureTeachMode(service, user, sessionId);
-  const validatedCall = validateUiToolCall(call);
-  const workflow = validatedCall.args as PreparedUiWorkflow;
-
-  const { data: existing, error: existingError } = await service
-    .from("ui_workflows")
-    .select("id,version")
-    .eq("name", workflow.name)
-    .maybeSingle();
-  if (existingError) throw existingError;
-
-  const existingVersion = (existing as { id: string; version: number } | null)?.version ?? null;
-  const summary = workflowSummary(workflow, existingVersion);
-  const { data: approval, error: approvalError } = await service
-    .from("pending_approvals")
-    .insert({
-      session_id: sessionId,
-      user_id: user.id,
-      tool_name: "save_ui_workflow",
-      args: workflow,
-      summary,
-      status: user.approvals_enabled ? "pending" : "approved",
-      decided_at: user.approvals_enabled ? null : new Date().toISOString()
-    })
-    .select("id")
-    .single();
-  if (approvalError) throw approvalError;
-
-  const approvalId = (approval as { id: string }).id;
-  if (user.approvals_enabled) {
-    await emit({
-      type: "approval_required",
-      call_id: call.id,
-      approval_id: approvalId,
-      tool_name: "save_ui_workflow",
-      summary
-    });
-  }
-
-  const decision = user.approvals_enabled
-    ? await waitForApprovalOutcome({ service, approvalId, userId: user.id })
-    : { outcome: "approved" as const, waitedMs: 0 };
-  if (decision.outcome === "rejected") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: "rejected", error: "The user rejected this workflow save." },
-      pausedMs: decision.waitedMs
-    };
-  }
-  if (decision.outcome === "expired") {
-    return {
-      ok: false,
-      result: { approval_id: approvalId, status: "expired", error: "The workflow save approval expired." },
-      pausedMs: decision.waitedMs
-    };
-  }
-
-  const payload = {
-    name: workflow.name,
-    description: workflow.description,
-    params: workflow.params,
-    steps: workflow.steps,
-    effect: workflow.effect,
-    trusted: false,
-    version: (existingVersion ?? 0) + 1
-  };
-  const query = existingVersion
-    ? service.from("ui_workflows").update(payload).eq("name", workflow.name)
-    : service.from("ui_workflows").insert({ ...payload, created_by: user.id });
-
-  const { data: saved, error: saveError } = await query
-    .select("name,effect,trusted,version,updated_at")
-    .single();
-  if (saveError) throw saveError;
-
-  await service.from("audit_events").insert({
-    user_id: user.id,
-    event_type: existingVersion ? "workflow_updated" : "workflow_saved",
-    message: `${existingVersion ? "Updated" : "Saved"} UI workflow ${workflow.name}.`,
-    metadata: {
-      name: workflow.name,
-      effect: workflow.effect,
-      version: payload.version,
-      source: "agent_save_ui_workflow"
-    }
-  });
-
-  return {
-    ok: true,
-    result: { approval_id: approvalId, status: "saved", auto_approved: !user.approvals_enabled, workflow: saved },
-    pausedMs: decision.waitedMs
-  };
-}
-
-function workflowReplaySucceeded(result: unknown) {
-  return Boolean(result && typeof result === "object" && (result as { ok?: unknown }).ok === true);
-}
-
-function describeUiStep(step: Record<string, unknown>) {
-  const out: Record<string, unknown> = { type: step.type };
-  for (const key of ["url", "text", "selector", "value", "equals", "key", "press_enter"]) {
-    if (Object.hasOwn(step, key)) out[key] = step[key];
-  }
-  return out;
-}
-
-function workflowReplaySummary(name: string, steps: Array<Record<string, unknown>>): ApprovalSummaryRecord[] {
-  return steps.map((step, index) => ({
-    zoho_id: `workflow_step_${index + 1}`,
-    name: `${index + 1}. ${String(step.type ?? "step")}`,
-    before: { workflow: name, status: "not executed" },
-    after: describeUiStep(step)
-  }));
-}
-
-async function markWorkflowTrusted(
-  service: SupabaseClient,
-  replay: { name: string; version: number; trusted: boolean },
-  result: unknown
-) {
-  const verified = workflowReplaySucceeded(result);
-  if (verified && !replay.trusted) {
-    await service
-      .from("ui_workflows")
-      .update({ trusted: true })
-      .eq("name", replay.name)
-      .eq("version", replay.version);
-  }
-  return verified;
-}
-
-async function runUiWorkflowTool({
-  service,
-  user,
-  sessionId,
-  call,
-  emit
-}: {
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  call: AgentToolCall;
-  emit: Emit;
-}): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
-  const validatedCall = validateUiToolCall(call);
-  const args = validatedCall.args as RunUiWorkflowArgs;
-  const { data: workflowRow, error } = await service
-    .from("ui_workflows")
-    .select("name,description,params,steps,effect,trusted,version")
-    .eq("name", args.name)
-    .maybeSingle();
-  if (error) throw error;
-  if (!workflowRow) throw new Error(`Workflow "${args.name}" was not found.`);
-
-  const replay = prepareUiWorkflowReplay(workflowRow as SavedUiWorkflow, args);
-  const jobCall: AgentToolCall = {
-    id: call.id,
-    name: "ui_workflow",
-    args: {
-      name: replay.name,
-      effect: replay.effect,
-      trusted_before: replay.trusted,
-      version: replay.version,
-      steps: replay.steps
-    }
-  };
-
-  if (replay.effect === "write") {
-    const summary = workflowReplaySummary(replay.name, replay.steps as Array<Record<string, unknown>>);
-    const { data: approval, error: approvalError } = await service
-      .from("pending_approvals")
-      .insert({
-        session_id: sessionId,
-        user_id: user.id,
-        tool_name: "ui_workflow",
-        args: jobCall.args,
-        summary,
-        status: user.approvals_enabled ? "pending" : "approved",
-        decided_at: user.approvals_enabled ? null : new Date().toISOString()
-      })
-      .select("id")
-      .single();
-    if (approvalError) throw approvalError;
-
-    const approvalId = (approval as { id: string }).id;
-    if (!user.approvals_enabled) {
-      const { error: jobError } = await service.from("tool_jobs").insert({
-        user_id: user.id,
-        session_id: sessionId,
-        tool_name: "ui_workflow",
-        args: jobCall.args,
-        approval_id: approvalId
-      });
-      if (jobError) throw jobError;
-      await emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status: "queued" });
-      const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
-      const verified = await markWorkflowTrusted(service, replay, job.result);
-      const replayOk = job.ok && verified;
-      return {
-        ok: replayOk,
-        result: {
-          approval_id: approvalId,
-          status: replayOk ? "executed" : "failed",
-          auto_approved: true,
-          ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
-          trusted_before: replay.trusted,
-          trusted_after: verified ? true : replay.trusted
-        },
-        pausedMs: job.waitedMs
-      };
-    }
-
-    await emit({
-      type: "approval_required",
-      call_id: call.id,
-      approval_id: approvalId,
-      tool_name: "ui_workflow",
-      summary
-    });
-
-    const decision = await waitForApprovalOutcome({ service, approvalId, userId: user.id });
-    if (decision.outcome === "rejected") {
-      return {
-        ok: false,
-        result: { approval_id: approvalId, status: "rejected", error: "The user rejected this workflow replay." },
-        pausedMs: decision.waitedMs
-      };
-    }
-    if (decision.outcome === "expired") {
-      return {
-        ok: false,
-        result: { approval_id: approvalId, status: "expired", error: "The workflow replay approval expired." },
-        pausedMs: decision.waitedMs
-      };
-    }
-
-    const job = await waitForApprovalJob({ service, approvalId, userId: user.id });
-    const verified = await markWorkflowTrusted(service, replay, job.result);
-    // The job may report "done" while the workflow itself failed mid-step
-    // (inner ok:false with failed_step_index). Only a fully verified replay
-    // counts as an executed success; anything else is reported as failed so
-    // the trace and the model cannot claim success for a failed replay.
-    const replayOk = job.ok && verified;
-    return {
-      ok: replayOk,
-      result: {
-        approval_id: approvalId,
-        status: replayOk ? "executed" : "failed",
-        ...(job.result && typeof job.result === "object" ? (job.result as Record<string, unknown>) : { result: job.result }),
-        trusted_before: replay.trusted,
-        trusted_after: verified ? true : replay.trusted
-      },
-      pausedMs: decision.waitedMs + job.waitedMs
-    };
-  }
-
-  const bridgedResult = await runBridgedTool({
-    service,
-    user,
-    sessionId,
-    call: jobCall,
-    onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-  });
-
-  const verified = await markWorkflowTrusted(service, replay, bridgedResult);
-
-  // Same honesty rule as the write path: a bridged job can complete while the
-  // workflow failed mid-step. Report ok only for a fully verified replay.
-  return {
-    ok: verified,
-    result: {
-      ...(bridgedResult && typeof bridgedResult === "object" ? (bridgedResult as Record<string, unknown>) : { result: bridgedResult }),
-      trusted_before: replay.trusted,
-      trusted_after: verified ? true : replay.trusted,
-      warning: replay.trusted ? null : "This workflow was untrusted before replay; a fully verified replay marks it trusted."
-    },
-    pausedMs: 0
-  };
-}
-
-type PendingApprovalUndoRow = {
-  id: string;
-  tool_name: string;
-  args: Record<string, unknown>;
-  summary: ApprovalSummaryRecord[] | null;
-  task_order_id: string | null;
-  created_at: string;
-};
-
-type UndoAction = {
-  source_approval_id: string;
-  module: Tier2Module;
-  zoho_id: string;
-  description: string;
-  call: AgentToolCall;
-};
-
 type UndoLogRow = {
   id: string;
-  module: Tier2Module;
+  module: UndoLogModule;
   zoho_id: string;
   before_fields: Record<string, unknown>;
   created_at: string;
@@ -2213,173 +770,11 @@ type UndoLogRow = {
 
 type UndoLogAction = {
   source_log_id: string;
-  module: Tier2Module;
+  module: UndoLogModule;
   zoho_id: string;
   description: string;
   call: AgentToolCall;
 };
-
-function isKnownBeforeValue(value: unknown) {
-  return value !== "unknown - verify in card" && value !== undefined;
-}
-
-function moduleFromApproval(row: PendingApprovalUndoRow): Tier2Module | null {
-  const moduleValue = row.args?.module;
-  return moduleValue === "Accounts" || moduleValue === "Contacts" || moduleValue === "Deals" ? moduleValue : null;
-}
-
-function stringArray(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-}
-
-function undoActionsFromApproval(row: PendingApprovalUndoRow, filter?: { zohoId?: string; fields?: string[] }) {
-  const moduleName = moduleFromApproval(row);
-  if (!moduleName) return { actions: [] as UndoAction[], skipped: [`${row.id}: missing supported module.`] };
-
-  const fieldFilter = filter?.fields ? new Set(filter.fields) : null;
-  const actions: UndoAction[] = [];
-  const skipped: string[] = [];
-  for (const item of row.summary ?? []) {
-    if (filter?.zohoId && item.zoho_id !== filter.zohoId) continue;
-
-    if (row.tool_name === "zoho_update_fields") {
-      const fields: Record<string, string | number | boolean | null> = {};
-      for (const [field, value] of Object.entries(item.before ?? {})) {
-        if (fieldFilter && !fieldFilter.has(field)) continue;
-        if (!isKnownBeforeValue(value)) {
-          skipped.push(`${item.zoho_id}: ${field} had no logged before-value.`);
-          continue;
-        }
-        if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
-          fields[field] = value as string | number | boolean | null;
-        } else {
-          skipped.push(`${item.zoho_id}: ${field} before-value is not a simple field value.`);
-        }
-      }
-      if (Object.keys(fields).length > 0) {
-        actions.push({
-          source_approval_id: row.id,
-          module: moduleName,
-          zoho_id: item.zoho_id,
-          description: `Revert fields ${Object.keys(fields).join(", ")} on ${item.zoho_id}.`,
-          call: {
-            id: `undo-fields-${row.id}-${item.zoho_id}`,
-            name: "zoho_update_fields",
-            args: { module: moduleName, updates: [{ zoho_id: item.zoho_id, fields }] }
-          }
-        });
-      }
-      continue;
-    }
-
-    if (row.tool_name === "zoho_change_owner") {
-      const owner = item.before?.Owner;
-      if (typeof owner === "string" && owner.trim() && isKnownBeforeValue(owner)) {
-        actions.push({
-          source_approval_id: row.id,
-          module: moduleName,
-          zoho_id: item.zoho_id,
-          description: `Revert owner on ${item.zoho_id} to ${owner}.`,
-          call: {
-            id: `undo-owner-${row.id}-${item.zoho_id}`,
-            name: "zoho_change_owner",
-            args: { module: moduleName, zoho_ids: [item.zoho_id], owner_name: owner }
-          }
-        });
-      } else {
-        skipped.push(`${item.zoho_id}: owner had no logged before-value.`);
-      }
-      continue;
-    }
-
-    if (row.tool_name === "zoho_add_tags") {
-      const beforeTags = stringArray(item.before?.tags);
-      const addedTags = stringArray(item.after?.add).filter((tag) => !beforeTags.includes(tag));
-      if (beforeTags.length === 0 && !Array.isArray(item.before?.tags)) {
-        skipped.push(`${item.zoho_id}: tags had no logged before-value.`);
-      }
-      if (addedTags.length > 0) {
-        actions.push({
-          source_approval_id: row.id,
-          module: moduleName,
-          zoho_id: item.zoho_id,
-          description: `Remove tags ${addedTags.join(", ")} from ${item.zoho_id}.`,
-          call: {
-            id: `undo-add-tags-${row.id}-${item.zoho_id}`,
-            name: "zoho_remove_tags",
-            args: { module: moduleName, zoho_ids: [item.zoho_id], tags: addedTags }
-          }
-        });
-      }
-      continue;
-    }
-
-    if (row.tool_name === "zoho_remove_tags") {
-      const beforeTags = stringArray(item.before?.tags);
-      const removedTags = stringArray(item.after?.remove).filter((tag) => beforeTags.includes(tag));
-      if (beforeTags.length === 0 && !Array.isArray(item.before?.tags)) {
-        skipped.push(`${item.zoho_id}: tags had no logged before-value.`);
-      }
-      if (removedTags.length > 0) {
-        actions.push({
-          source_approval_id: row.id,
-          module: moduleName,
-          zoho_id: item.zoho_id,
-          description: `Add tags ${removedTags.join(", ")} back to ${item.zoho_id}.`,
-          call: {
-            id: `undo-remove-tags-${row.id}-${item.zoho_id}`,
-            name: "zoho_add_tags",
-            args: { module: moduleName, zoho_ids: [item.zoho_id], tags: removedTags }
-          }
-        });
-      }
-    }
-  }
-  return { actions, skipped };
-}
-
-async function executeUndoActions({
-  supabase,
-  service,
-  user,
-  sessionId,
-  emit,
-  actions
-}: {
-  supabase: SupabaseClient;
-  service: SupabaseClient;
-  user: AuthorizedUser;
-  sessionId: string;
-  emit: Emit;
-  actions: UndoAction[];
-}) {
-  const results: unknown[] = [];
-  let pausedMs = 0;
-  for (const action of actions) {
-    const outcome = await handleTier2Call({ supabase, service, user, sessionId, call: action.call, emit });
-    pausedMs += outcome.pausedMs;
-    results.push({
-      source_approval_id: action.source_approval_id,
-      zoho_id: action.zoho_id,
-      description: action.description,
-      ok: outcome.ok,
-      result: outcome.result
-    });
-    await service.from("audit_events").insert({
-      user_id: user.id,
-      event_type: "undo",
-      message: `${outcome.ok ? "Ran" : "Failed"} undo: ${action.description}`,
-      metadata: {
-        session_id: sessionId,
-        source_approval_id: action.source_approval_id,
-        module: action.module,
-        zoho_id: action.zoho_id,
-        ok: outcome.ok
-      }
-    });
-  }
-  return { results, pausedMs, ok: results.every((item) => (item as { ok?: unknown }).ok === true) };
-}
 
 function undoActionFromLog(row: UndoLogRow, filter?: { fields?: string[] }) {
   const fieldFilter = filter?.fields ? new Set(filter.fields) : null;
@@ -2425,7 +820,7 @@ async function executeUndoLogAction({
   emit: Emit;
   action: UndoLogAction;
 }) {
-  const outcome = await runZohoApiTool({ service, user, sessionId, call: action.call, order: null, emit });
+  const outcome = await runZohoApiTool({ service, user, sessionId, call: action.call, emit });
   await service.from("audit_events").insert({
     user_id: user.id,
     event_type: "undo",
@@ -2512,12 +907,7 @@ async function undoRecord({
 }
 
 async function undoTask({
-  supabase,
-  service,
-  user,
-  sessionId,
-  call,
-  emit
+  call
 }: {
   supabase: SupabaseClient;
   service: SupabaseClient;
@@ -2528,67 +918,17 @@ async function undoTask({
 }): Promise<{ ok: boolean; result: unknown; pausedMs: number }> {
   const validated = validateUndoToolCall(call);
   const args = validated.args as UndoTaskArgs;
-  const { data: order, error: orderError } = await service
-    .from("task_orders")
-    .select("id,goal,report")
-    .eq("id", args.task_order_id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (orderError) throw orderError;
-  if (!order) throw new Error("Task order was not found.");
-
-  const { data, error } = await service
-    .from("pending_approvals")
-    .select("id,tool_name,args,summary,task_order_id,created_at")
-    .eq("user_id", user.id)
-    .eq("status", "approved")
-    .eq("task_order_id", args.task_order_id)
-    .in("tool_name", ["zoho_update_fields", "zoho_change_owner", "zoho_add_tags", "zoho_remove_tags"])
-    .order("created_at", { ascending: false })
-    .limit(500);
-  if (error) throw error;
-
-  const skipped: string[] = [];
-  const actions: UndoAction[] = [];
-  for (const row of (data ?? []) as PendingApprovalUndoRow[]) {
-    const built = undoActionsFromApproval(row);
-    actions.push(...built.actions);
-    skipped.push(...built.skipped);
-  }
-
-  const reportText = JSON.stringify((order as { report?: unknown }).report ?? "").toLowerCase();
-  const nonRevertible =
-    reportText.includes("email") || reportText.includes("schedule")
-      ? [
-          "Scheduled emails are not automatically revertible in scope. Manual path: open the related deal, Emails, Scheduled tab, find the matching recipient/subject/time, then cancel/delete it in Zoho UI."
-        ]
-      : [];
-
-  if (actions.length === 0) {
-    return {
-      ok: nonRevertible.length === 0 ? false : true,
-      result: {
-        task_order_id: args.task_order_id,
-        status: "nothing_revertible",
-        actions: [],
-        skipped,
-        non_revertible: nonRevertible
-      },
-      pausedMs: 0
-    };
-  }
-
-  const executed = await executeUndoActions({ supabase, service, user, sessionId, emit, actions });
   return {
-    ok: executed.ok,
+    ok: false,
     result: {
       task_order_id: args.task_order_id,
-      status: executed.ok ? "undone" : "partial",
-      actions: executed.results,
-      skipped,
-      non_revertible: nonRevertible
+      status: "legacy_task_order_undo_removed",
+      error: "Task-order undo is no longer supported. Use undo_record with module and zoho_id; reversible record writes are logged in undo_log.",
+      non_revertible: [
+        "Scheduled emails are not automatically revertible in scope. Manual path: open the related deal, Emails, Scheduled tab, find the matching recipient/subject/time, then cancel/delete it in Zoho UI."
+      ]
     },
-    pausedMs: executed.pausedMs
+    pausedMs: 0
   };
 }
 
@@ -2658,68 +998,13 @@ export async function runAgentTurn({
     });
   }
   let toolCallCount = 0;
-  // Time spent blocked on a Tier-2 approval card does NOT count against the
-  // turn budget (a human may take minutes to decide). We subtract it.
   let pausedMs = 0;
-  const turnTimeoutMs = agentTurnTimeoutMs();
-  const maxToolCalls = agentMaxToolCalls();
-  let effectiveTurnTimeoutMs = turnTimeoutMs;
-  let effectiveMaxToolCalls = maxToolCalls;
-  let activeTaskOrderId: string | null = null;
-  let taskOrderToolCalls = 0;
-  let taskOrderRecordsTouched = 0;
+  const effectiveTurnTimeoutMs = agentTurnTimeoutMs();
+  const effectiveMaxToolCalls = agentMaxToolCalls();
 
   while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
-    let approvedOrder: ActiveTaskOrder | null = null;
-    if (service) {
-      if (activeTaskOrderId) {
-        const tracked = await taskOrderById(service, user, activeTaskOrderId);
-        if (!tracked || tracked.status !== "approved") {
-          const message = "Stopped because the active task order is no longer approved.";
-          await supabase.from("agent_messages").insert({
-            session_id: sessionId,
-            role: "assistant",
-            content: message
-          });
-          await emit({ type: "assistant_delta", text: message });
-          await emit({ type: "done" });
-          return;
-        }
-        approvedOrder = tracked;
-      } else {
-        approvedOrder = await activeTaskOrder(service, user, sessionId);
-        activeTaskOrderId = approvedOrder?.id ?? null;
-      }
-      if (approvedOrder) {
-        const expandedLimits = expandedAgentLimits({
-          currentMaxToolCalls: effectiveMaxToolCalls,
-          currentTurnTimeoutMs: effectiveTurnTimeoutMs,
-          orderBudget: approvedOrder.budget
-        });
-        effectiveTurnTimeoutMs = expandedLimits.turnTimeoutMs;
-        effectiveMaxToolCalls = expandedLimits.maxToolCalls;
-        const budget = taskOrderBudgetDecision({
-          order: approvedOrder,
-          nowMs: Date.now(),
-          toolCalls: taskOrderToolCalls,
-          recordsTouched: taskOrderRecordsTouched
-        });
-        if (!budget.ok) {
-          await failTaskOrder(service, user, approvedOrder.id, budget.reason);
-          const message = `Stopped task order: ${budget.reason}.`;
-          await supabase.from("agent_messages").insert({
-            session_id: sessionId,
-            role: "assistant",
-            content: message
-          });
-          await emit({ type: "assistant_delta", text: message });
-          await emit({ type: "done" });
-          return;
-        }
-      }
-    }
     const teachMode = service ? await currentTeachMode(service, user, sessionId) : false;
-    const turnInstructions = instructionsForTurn(teachMode, user.approvals_enabled, automaticGuideContext);
+    const turnInstructions = instructionsForTurn(teachMode, automaticGuideContext);
     const model = await provider.runTools({
       instructions: turnInstructions,
       messages: transcript,
@@ -2786,7 +1071,7 @@ export async function runAgentTurn({
         } else if (isTier1Tool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for extension jobs.");
           if (call.name === "zoho_api") {
-            const apiResult = await runZohoApiTool({ service, user, sessionId, call, order: approvedOrder, emit });
+            const apiResult = await runZohoApiTool({ service, user, sessionId, call, emit });
             ok = apiResult.ok;
             result = apiResult.result;
             pausedMs += apiResult.pausedMs;
@@ -2804,38 +1089,6 @@ export async function runAgentTurn({
               });
             }
           }
-        } else if (isTaskOrderTool(call.name)) {
-          if (!service) throw new Error("Supabase service role is not configured for task orders.");
-          if (call.name === "propose_task_order") {
-            const proposed = await proposeTaskOrder({ service, user, sessionId, call, userRequest: content, emit });
-            ok = proposed.ok;
-            result = proposed.result;
-            pausedMs += proposed.pausedMs;
-            const orderId = (proposed.result as { task_order_id?: unknown } | null)?.task_order_id;
-            if (proposed.ok && typeof orderId === "string") {
-              activeTaskOrderId = orderId;
-              taskOrderToolCalls = 0;
-              taskOrderRecordsTouched = 0;
-            }
-          } else {
-            const completed = await completeTaskOrder({ service, user, sessionId, call });
-            ok = completed.ok;
-            result = completed.result;
-            activeTaskOrderId = null;
-          }
-        } else if (isEmailSchedulingTool(call.name)) {
-          if (!service) throw new Error("Supabase service role is not configured for deterministic email scheduling.");
-          const scheduled = await runEmailSchedulingBatch({
-            service,
-            user,
-            sessionId,
-            call,
-            order: approvedOrder,
-            emit
-          });
-          ok = scheduled.ok;
-          result = scheduled.result;
-          pausedMs += scheduled.pausedMs;
         } else if (isBrowserTool(call.name)) {
           if (!service) throw new Error("Supabase service role is not configured for browser tools.");
           if (call.name !== "browser_eval") {
@@ -2849,7 +1102,7 @@ export async function runAgentTurn({
             });
             result = bridgedResult;
           } else {
-            const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, order: approvedOrder, emit });
+            const evalResult = await runBrowserEvalTool({ service, user, sessionId, call, emit });
             ok = evalResult.ok;
             result = evalResult.result;
             pausedMs += evalResult.pausedMs;
@@ -2875,73 +1128,12 @@ export async function runAgentTurn({
           ok = undone.ok;
           result = undone.result;
           pausedMs += undone.pausedMs;
-        } else if (isUiTool(call.name)) {
-          if (!service) throw new Error("Supabase service role is not configured for UI steps.");
-          if (call.name === "list_ui_workflows") {
-            result = await listUiWorkflows(service);
-          } else if (call.name === "save_ui_workflow") {
-            const saved = await saveUiWorkflow({ service, user, sessionId, call, emit });
-            ok = saved.ok;
-            result = saved.result;
-            pausedMs += saved.pausedMs;
-          } else if (call.name === "run_ui_workflow") {
-            const replayed = await runUiWorkflowTool({ service, user, sessionId, call, emit });
-            ok = replayed.ok;
-            result = replayed.result;
-            pausedMs += replayed.pausedMs;
-          } else {
-            if (approvedOrder) {
-              const stepped = await runUiStepUnderTaskOrder({ service, user, sessionId, call, order: approvedOrder, emit });
-              ok = stepped.ok;
-              result = stepped.result;
-              pausedMs += stepped.pausedMs;
-            } else {
-              const validatedCall = validateUiToolCall(call);
-              result = await runBridgedTool({
-                service,
-                user,
-                sessionId,
-                call: validatedCall,
-                onStatus: (status) => emit({ type: "tool_status", call_id: call.id, tool_name: call.name, status })
-              });
-            }
-          }
-        } else if (isTier2Tool(call.name)) {
-          if (!service) throw new Error("Supabase service role is not configured for approvals.");
-          const gated = approvedOrder
-            ? await runTier2UnderTaskOrder({ supabase, service, user, sessionId, call, order: approvedOrder, emit })
-            : await handleTier2Call({ supabase, service, user, sessionId, call, emit });
-          ok = gated.ok;
-          result = gated.result;
-          pausedMs += gated.pausedMs;
         } else {
           throw new Error(`Unknown or unavailable tool "${call.name}".`);
         }
       } catch (error) {
         ok = false;
         result = toolError(error);
-      }
-
-      if (ok && service) {
-        const resultTaskOrderId = taskOrderIdFromToolResult(result) ?? activeTaskOrderId;
-        await recordComposerBrowserMutationIfPresent({
-          service,
-          user,
-          sessionId,
-          taskOrderId: resultTaskOrderId,
-          toolName: call.name,
-          callId: call.id,
-          result
-        });
-        await recordScheduledEmailVerificationIfPresent({
-          service,
-          user,
-          sessionId,
-          taskOrderId: resultTaskOrderId,
-          toolName: call.name,
-          callId: call.id,
-          result
-        });
       }
 
       const truncated = truncateToolResult(result);
@@ -2958,12 +1150,8 @@ export async function runAgentTurn({
         user_id: user.id,
         event_type: "tool_call",
         message: `${ok ? "Ran" : "Failed"} agent tool ${call.name}.`,
-        metadata: { session_id: sessionId, call_id: call.id, tool_name: call.name, ok, task_order_id: activeTaskOrderId }
+        metadata: { session_id: sessionId, call_id: call.id, tool_name: call.name, ok }
       });
-      if (activeTaskOrderId && !isTaskOrderTool(call.name)) {
-        taskOrderToolCalls += 1;
-        taskOrderRecordsTouched += taskOrderRecordUsage(call.name, call.args);
-      }
       transcript.push({
         role: "tool",
         toolName: call.name,

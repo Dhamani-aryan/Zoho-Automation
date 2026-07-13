@@ -5,7 +5,6 @@ import {
   Database,
   FileUp,
   LayoutDashboard,
-  ListChecks,
   Settings,
   Settings2
 } from "lucide-react";
@@ -25,7 +24,6 @@ const navItems: Array<{
   { href: "/agent", label: "Agent", icon: BotMessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/records", label: "Records", icon: Database },
-  { href: "/workflows", label: "Workflows", icon: ListChecks, roles: ["admin", "operator"] },
   { href: "/imports", label: "Imports", icon: FileUp },
   { href: "/runs", label: "Runs", icon: ClipboardList },
   { href: "/settings", label: "Settings", icon: Settings },

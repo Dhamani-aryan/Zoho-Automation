@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import {
-  approvalExpiryPatch,
   queuedJobExpiryPatch,
   sweepCutoffs
 } from "@/lib/agent/sweeps";
@@ -31,22 +30,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
     if (messagesError) throw messagesError;
 
-    // Expiry sweep on load (status-guarded, owner-scoped): expire any pending
-    // approval older than the wait window and old unclaimed jobs before we read
-    // them back. This mirrors claim-time sweeping so a reopened session cannot
-    // show stale pending work.
+    // Expiry sweep on load (status-guarded, owner-scoped): expire old
+    // unclaimed jobs before we read the session back.
     const service = createServiceSupabaseClient();
     if (service) {
       const cutoffs = sweepCutoffs();
-      const { error: sweepError } = await service
-        .from("pending_approvals")
-        .update(approvalExpiryPatch(cutoffs.nowIso))
-        .eq("session_id", id)
-        .eq("user_id", auth.user.id)
-        .eq("status", "pending")
-        .lt("created_at", cutoffs.pendingApprovalBeforeIso);
-      if (sweepError) throw sweepError;
-
       const { error: jobSweepError } = await service
         .from("tool_jobs")
         .update(queuedJobExpiryPatch(cutoffs.nowIso))
@@ -57,16 +45,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       if (jobSweepError) throw jobSweepError;
     }
 
-    // Approval cards are rebuilt from the DB on load so a reconnect shows the
-    // correct state (pending / approved / rejected / expired).
-    const { data: approvals, error: approvalsError } = await auth.supabase
-      .from("pending_approvals")
-      .select("id,tool_name,summary,status,created_at,decided_at")
-      .eq("session_id", id)
-      .order("created_at", { ascending: true });
-
-    if (approvalsError) throw approvalsError;
-    return NextResponse.json({ session, messages: messages ?? [], approvals: approvals ?? [] });
+    return NextResponse.json({ session, messages: messages ?? [], approvals: [] });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent session failed to load.";
     console.error("[agent-session-detail]", message, error);

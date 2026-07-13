@@ -1,8 +1,6 @@
-// Shared field-validation rule logic used by BOTH the v1 plan previewer
-// (lib/plan/validation.ts) and the v2 Tier-2 write validator
-// (lib/agent/tier2-tools.ts). Extracted verbatim from validation.ts so the
-// two paths cannot drift: picklist membership, email format, and date validity
-// are defined once here.
+// Shared field-validation rule logic for plan preview and any future CRM write
+// validation. Picklist membership, email format, and date validity are defined
+// once here.
 
 export type FieldMetaRow = {
   module: string;

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Check,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -11,7 +10,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  ShieldAlert,
   Square,
   Trash2,
   Wrench,
@@ -39,22 +37,6 @@ type AgentMessageRow = {
   created_at: string;
 };
 
-type ApprovalSummaryRecord = {
-  zoho_id: string;
-  name: string | null;
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-};
-
-type ApprovalRow = {
-  id: string;
-  tool_name: string;
-  summary: ApprovalSummaryRecord[] | null;
-  status: string;
-  created_at: string;
-  decided_at?: string | null;
-};
-
 type TimelineItem =
   | { id: string; kind: "user" | "assistant"; content: string }
   | {
@@ -66,13 +48,6 @@ type TimelineItem =
       ok?: boolean;
       tier?: number | null;
       status?: string;
-    }
-  | {
-      id: string; // approval_id
-      kind: "approval";
-      toolName: string;
-      summary: ApprovalSummaryRecord[];
-      status: string; // pending | approved | rejected | expired | executed | failed
     };
 
 type AttachedContextFile = {
@@ -86,7 +61,7 @@ const ATTACHMENT_MAX_FILES = 4;
 const ATTACHMENT_MAX_BYTES = 750_000;
 const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".csv", ".tsv"]);
 
-function buildTimeline(rows: AgentMessageRow[], approvals: ApprovalRow[]): TimelineItem[] {
+function buildTimeline(rows: AgentMessageRow[]): TimelineItem[] {
   type Stamped = { at: string; seq: number; item: TimelineItem };
   const stamped: Stamped[] = [];
   let seq = 0;
@@ -148,20 +123,6 @@ function buildTimeline(rows: AgentMessageRow[], approvals: ApprovalRow[]): Timel
     }
   }
 
-  for (const approval of approvals) {
-    stamped.push({
-      at: approval.created_at,
-      seq: seq++,
-      item: {
-        id: approval.id,
-        kind: "approval",
-        toolName: approval.tool_name,
-        summary: Array.isArray(approval.summary) ? approval.summary : [],
-        status: approval.status
-      }
-    });
-  }
-
   stamped.sort((a, b) => (a.at === b.at ? a.seq - b.seq : a.at < b.at ? -1 : 1));
   return stamped.map((entry) => entry.item);
 }
@@ -170,13 +131,6 @@ function shortJson(value: unknown) {
   if (value == null) return "";
   const text = JSON.stringify(value, null, 2);
   return text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
-}
-
-function taskOrderIdFromToolResult(item: { name: string; result?: unknown }) {
-  if (item.name !== "complete_task_order") return null;
-  const taskOrder = item.result && typeof item.result === "object" ? (item.result as { task_order?: unknown }).task_order : null;
-  const id = taskOrder && typeof taskOrder === "object" ? (taskOrder as { id?: unknown }).id : null;
-  return typeof id === "string" && id ? id : null;
 }
 
 function titleFor(session: AgentSession) {
@@ -224,11 +178,9 @@ function linkifyContent(text: string, linkClass: string): ReactNode[] {
 // Collapsible tool-trace row (ChatGPT-style): shows "Working / Worked / Failed"
 // with the raw tool output hidden behind a click.
 function ToolTrace({
-  item,
-  onUndoTask
+  item
 }: {
   item: { name: string; tier?: number | null; status?: string; result?: unknown; args: unknown };
-  onUndoTask?: (taskOrderId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const status = item.status ?? "";
@@ -236,7 +188,6 @@ function ToolTrace({
   const failed = status === "failed";
   const label = failed ? "Failed" : running ? "Working" : "Worked";
   const Chevron = open ? ChevronDown : ChevronRight;
-  const taskOrderId = taskOrderIdFromToolResult(item);
 
   return (
     <div className="border border-line bg-surface">
@@ -259,18 +210,6 @@ function ToolTrace({
       </button>
       {open ? (
         <div className="border-t border-line">
-          {taskOrderId && onUndoTask ? (
-            <div className="flex justify-end border-b border-line bg-white px-3 py-2">
-              <button
-                type="button"
-                onClick={() => onUndoTask(taskOrderId)}
-                className="inline-flex h-8 items-center gap-2 rounded-md border border-line px-3 text-xs font-semibold text-ink hover:bg-surface"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Undo task
-              </button>
-            </div>
-          ) : null}
           <pre className="max-h-64 overflow-auto whitespace-pre-wrap px-3 py-2 text-xs text-ink">
             {shortJson(item.result ?? item.args)}
           </pre>
@@ -295,7 +234,7 @@ export function AgentChat({
   const [activeSessionId, setActiveSessionId] = useState(
     initialActiveSessionId ?? initialSessions[0]?.id ?? ""
   );
-  const [timeline, setTimeline] = useState<TimelineItem[]>(buildTimeline(initialMessages, []));
+  const [timeline, setTimeline] = useState<TimelineItem[]>(buildTimeline(initialMessages));
   const [input, setInput] = useState(initialDraft);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -319,7 +258,7 @@ export function AgentChat({
     el.setSelectionRange(initialDraft.length, initialDraft.length);
   }, [initialDraft]);
 
-  // Hydrate the active session on mount so approval cards rebuild from the DB
+  // Hydrate the active session on mount so the persisted tool trace rebuilds
   // after a reload/reconnect.
   useEffect(() => {
     if (activeSessionId) {
@@ -327,30 +266,6 @@ export function AgentChat({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function decideApproval(approvalId: string, decision: "approve" | "reject") {
-    setTimeline((current) =>
-      current.map((item) =>
-        item.kind === "approval" && item.id === approvalId
-          ? { ...item, status: decision === "approve" ? "approved" : "rejected" }
-          : item
-      )
-    );
-    const response = await fetch(`/api/agent/approvals/${approvalId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision })
-    });
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      setError(payload.error ?? "Could not record your decision.");
-      setTimeline((current) =>
-        current.map((item) =>
-          item.kind === "approval" && item.id === approvalId ? { ...item, status: "pending" } : item
-        )
-      );
-    }
-  }
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -373,7 +288,6 @@ export function AgentChat({
     const payload = (await response.json().catch(() => ({}))) as {
       session?: AgentSession;
       messages?: AgentMessageRow[];
-      approvals?: ApprovalRow[];
       error?: string;
     };
     if (!response.ok) throw new Error(payload.error ?? "Could not load agent session.");
@@ -382,7 +296,7 @@ export function AgentChat({
         current.map((session) => (session.id === payload.session?.id ? payload.session : session))
       );
     }
-    setTimeline(buildTimeline(payload.messages ?? [], payload.approvals ?? []));
+    setTimeline(buildTimeline(payload.messages ?? []));
   }
 
   function extensionFor(name: string) {
@@ -519,29 +433,12 @@ export function AgentChat({
       );
       return;
     }
-    if (eventName === "approval_required") {
-      const approvalId = typeof object.approval_id === "string" ? object.approval_id : "";
-      const toolName = typeof object.tool_name === "string" ? object.tool_name : "";
-      const summary = Array.isArray(object.summary) ? (object.summary as ApprovalSummaryRecord[]) : [];
-      if (!approvalId) return;
-      setTimeline((current) => [
-        ...current,
-        { id: approvalId, kind: "approval", toolName, summary, status: "pending" }
-      ]);
-      return;
-    }
     if (eventName === "tool_result") {
       const callId = typeof object.call_id === "string" ? object.call_id : "";
-      const result = object.result as { approval_id?: unknown; status?: unknown } | null;
-      const approvalId = result && typeof result.approval_id === "string" ? result.approval_id : "";
-      const approvalStatus = result && typeof result.status === "string" ? result.status : "";
       setTimeline((current) =>
         current.map((item) => {
           if (item.kind === "tool" && item.id === callId) {
             return { ...item, result: object.result, ok: object.ok === true, status: object.ok === true ? "done" : "failed" };
-          }
-          if (item.kind === "approval" && approvalId && item.id === approvalId) {
-            return { ...item, status: approvalStatus || item.status };
           }
           return item;
         })
@@ -639,11 +536,6 @@ export function AgentChat({
       el.focus();
       el.setSelectionRange(content.length, content.length);
     }
-  }
-
-  function undoTask(taskOrderId: string) {
-    if (loading) return;
-    void runTurn(`Undo task ${taskOrderId}`);
   }
 
   return (
@@ -748,7 +640,7 @@ export function AgentChat({
             <div>
               <div className="text-sm font-semibold">{activeSession ? titleFor(activeSession) : "Agent chat"}</div>
               <div className="text-xs text-muted">
-                Phase G: autonomous task orders, live browser tools, approval-gated writes, and skill-guided workflows.
+                Agent-guided Zoho work with live browser tools, skill guides, and verified CRM writes.
               </div>
             </div>
             <button
@@ -772,7 +664,7 @@ export function AgentChat({
           </div>
           {activeSession?.teach_mode ? (
             <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              Teach mode is on. The agent can use the visible Zoho window as a watched walkthrough, with writes still scoped by approvals or task orders.
+              Teach mode is on. The agent will do one live action per instruction, verify it, and distill the method into a skill guide when you ask it to remember.
             </div>
           ) : null}
         </div>
@@ -785,13 +677,7 @@ export function AgentChat({
           ) : (
             timeline.map((item) => {
               if (item.kind === "tool") {
-                return <ToolTrace key={item.id} item={item} onUndoTask={undoTask} />;
-              }
-              if (item.kind === "approval") {
-                // NOT gated on `loading`: the agent turn is intentionally still
-                // running (blocked waiting on this decision), so disabling the
-                // card while loading would deadlock approvals forever.
-                return <ApprovalCard key={item.id} item={item} onDecide={decideApproval} />;
+                return <ToolTrace key={item.id} item={item} />;
               }
               if (item.kind === "user") {
                 return (
@@ -935,116 +821,3 @@ export function AgentChat({
   );
 }
 
-function renderValue(value: unknown) {
-  if (value == null) return "(empty)";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-type FieldChange = { recordName: string; field: string; before: unknown; after: unknown };
-
-function toFieldChanges(summary: ApprovalSummaryRecord[]): FieldChange[] {
-  const rows: FieldChange[] = [];
-  for (const record of summary) {
-    const name = record.name || record.zoho_id;
-    const keys = [...new Set([...Object.keys(record.after ?? {}), ...Object.keys(record.before ?? {})])];
-    if (keys.length === 0) {
-      rows.push({ recordName: name, field: "-", before: record.before, after: record.after });
-      continue;
-    }
-    for (const key of keys) {
-      rows.push({ recordName: name, field: key, before: record.before?.[key], after: record.after?.[key] });
-    }
-  }
-  return rows;
-}
-
-function ApprovalCard({
-  item,
-  onDecide
-}: {
-  item: { id: string; toolName: string; summary: ApprovalSummaryRecord[]; status: string };
-  onDecide: (approvalId: string, decision: "approve" | "reject") => Promise<void> | void;
-}) {
-  // Per-card double-click guard; the buttons unmount once the optimistic
-  // status flip lands, and the server 409s a second decision regardless.
-  const [deciding, setDeciding] = useState(false);
-  async function decide(decision: "approve" | "reject") {
-    setDeciding(true);
-    try {
-      await onDecide(item.id, decision);
-    } finally {
-      setDeciding(false);
-    }
-  }
-  const changes = toFieldChanges(item.summary);
-  const pending = item.status === "pending";
-  const statusLabel: Record<string, string> = {
-    pending: "Awaiting your approval",
-    approved: "Approved - executing",
-    executed: "Approved and written (verified)",
-    rejected: "Rejected",
-    expired: "Expired (not written)",
-    failed: "Approved, but the write failed"
-  };
-  const tone =
-    item.status === "executed" || item.status === "approved"
-      ? "border-emerald-300 bg-emerald-50"
-      : item.status === "rejected" || item.status === "expired" || item.status === "failed"
-        ? "border-amber-300 bg-amber-50"
-        : "border-line bg-white";
-
-  return (
-    <div className={`border ${tone} p-4`}>
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0] text-muted">
-        <ShieldAlert className="h-3.5 w-3.5" />
-        Approval required: {item.toolName}
-        <span className="text-[11px] normal-case text-muted">({statusLabel[item.status] ?? item.status})</span>
-      </div>
-
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr className="text-muted">
-              <th className="py-1 pr-3 font-medium">Record</th>
-              <th className="py-1 pr-3 font-medium">Field</th>
-              <th className="py-1 pr-3 font-medium">Before</th>
-              <th className="py-1 pr-3 font-medium">After</th>
-            </tr>
-          </thead>
-          <tbody>
-            {changes.map((change, index) => (
-              <tr key={index} className="border-t border-line align-top">
-                <td className="py-1 pr-3">{change.recordName}</td>
-                <td className="py-1 pr-3 font-mono">{change.field}</td>
-                <td className="py-1 pr-3 text-muted">{renderValue(change.before)}</td>
-                <td className="py-1 pr-3 font-medium text-ink">{renderValue(change.after)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {pending ? (
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            disabled={deciding}
-            onClick={() => decide("approve")}
-            className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Check className="h-3.5 w-3.5" /> Approve
-          </button>
-          <button
-            type="button"
-            disabled={deciding}
-            onClick={() => decide("reject")}
-            className="inline-flex items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <X className="h-3.5 w-3.5" /> Reject
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
