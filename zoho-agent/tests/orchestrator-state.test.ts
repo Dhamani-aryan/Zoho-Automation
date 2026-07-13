@@ -38,6 +38,7 @@ import {
 import {
   createUiAgilityState,
   decideBrowserAction,
+  lastBrowserActionChangedState,
   noteBrowserAction,
   noteBrowserObservation
 } from "../lib/agent/ui-agility";
@@ -479,6 +480,7 @@ test("UI agility requires visible observation, verification, and a different tac
       ]
     }
   });
+  assert.equal(lastBrowserActionChangedState(state), false);
   const identical = decideBrowserAction(state, {
     ...clickChip,
     id: "click-3",
@@ -505,6 +507,7 @@ test("UI agility permits the same action when observation proves state changed",
   if (!first.allowed) return;
   noteBrowserAction(state, first);
   noteBrowserObservation(state, { composer: { to_chips: ["Two"] }, snapshot: { id: "two", elements: [] } });
+  assert.equal(lastBrowserActionChangedState(state), true);
   assert.equal(decideBrowserAction(state, { ...action, id: "remove-2" }).allowed, true);
 });
 

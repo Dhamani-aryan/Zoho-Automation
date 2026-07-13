@@ -49,6 +49,7 @@ import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
 import {
   createUiAgilityState,
   decideBrowserAction,
+  lastBrowserActionChangedState,
   noteBrowserAction,
   noteBrowserObservation,
   uiDecisionGuidance,
@@ -754,8 +755,8 @@ function instructionsForTurn(teachMode: boolean, guideContext: string) {
 
 TEACH MODE TURN RULES:
 - Re-observe the live Zoho page before acting. Ground the user's latest instruction to one real element by visible text, label, role, aria-label, or current DOM landmark.
-- Perform exactly ONE user-instructed action with the general tools only: zoho_api for data-expressible work, or browser_navigate/browser_observe/browser_input/browser_eval/browser_screenshot for live UI work. Do not use ui_step, save_ui_workflow, run_ui_workflow, or fixed replay click lists.
-- After that one action, verify/read back what changed, report what happened plainly, and wait for the next instruction.
+- Treat the user's latest instruction as the unit of work. If it requests one atomic action, perform that one action and verify it. If it specifies a multi-field or end-state goal, perform every necessary observe-act-verify cycle until the complete stated goal is verified; do not stop after the first sub-action. Use only the general tools: zoho_api for data-expressible work, or browser_navigate/browser_observe/browser_input/browser_eval/browser_screenshot for live UI work. Do not use ui_step, save_ui_workflow, run_ui_workflow, or fixed replay click lists.
+- After the complete latest instruction is verified, report what happened plainly and wait for the next instruction.
 - If the target is missing or ambiguous, do not guess the closest element. State the relevant visible options or missing evidence and ask one focused question.
 - Keep the teach transcript in the session messages. When the user says "remember this", "make a skill", "save this workflow", or otherwise gives a save signal, distill the transcript into save_skill_guide with intent, method_api and/or method_ui, gotchas, verification, stop_conditions, and params for every varying identity/content/date/value slot.
 - A distilled guide stores method, gotchas, and verification only. It must not include the specific records, Zoho ids, emails, dates, subjects, body text, or other run data from the teach run; those become params. UI selectors are hints to confirm live, never a stale fixed click list. Use one guide-level confirmation, not per-field gates.`
@@ -1015,6 +1016,9 @@ export async function runAgentTurn({
   const uiAgility = createUiAgilityState();
   let modelRound = 0;
   let observationModelRound = -1;
+  let uiRecoveryRequired = false;
+  let browserActionAwaitingVerification = false;
+  let uiRecoveryNudges = 0;
 
   while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
     modelRound += 1;
@@ -1026,17 +1030,37 @@ export async function runAgentTurn({
       tools: AGENT_TOOL_DEFINITIONS
     });
 
-    if (model.text.trim()) {
-      await supabase.from("agent_messages").insert({
-        session_id: sessionId,
-        role: "assistant",
-        content: model.text
-      });
-      transcript.push({ role: "assistant", content: model.text });
-      await emit({ type: "assistant_delta", text: model.text });
-    }
-
     if (model.toolCalls.length === 0) {
+      if (uiRecoveryRequired || browserActionAwaitingVerification) {
+        uiRecoveryNudges += 1;
+        if (uiRecoveryNudges > 5) {
+          const recoveryFailure =
+            "The UI task is not verified. The agent exhausted its recovery reasoning attempts without reaching the requested state.";
+          await supabase.from("agent_messages").insert({
+            session_id: sessionId,
+            role: "assistant",
+            content: recoveryFailure
+          });
+          await emit({ type: "assistant_delta", text: recoveryFailure });
+          await emit({ type: "done" });
+          return;
+        }
+        transcript.push({
+          role: "user",
+          content:
+            "UI RECOVERY REQUIRED: Do not report that an action happened or that the task is complete. The requested UI state is still unverified. Review the latest observation. If an observation is required, call browser_observe. Otherwise choose a different visible element or interaction method, perform one browser_input, and verify with browser_observe."
+        });
+        continue;
+      }
+      if (model.text.trim()) {
+        await supabase.from("agent_messages").insert({
+          session_id: sessionId,
+          role: "assistant",
+          content: model.text
+        });
+        transcript.push({ role: "assistant", content: model.text });
+        await emit({ type: "assistant_delta", text: model.text });
+      }
       await supabase.from("audit_events").insert({
         user_id: user.id,
         event_type: "agent_turn",
@@ -1115,6 +1139,7 @@ export async function runAgentTurn({
               });
               if (!decision.allowed) {
                 ok = false;
+                uiRecoveryRequired = true;
                 result = {
                   blocked: true,
                   reason: decision.reason,
@@ -1142,6 +1167,11 @@ export async function runAgentTurn({
               if (call.name === "browser_observe") {
                 noteBrowserObservation(uiAgility, result);
                 observationModelRound = modelRound;
+                if (browserActionAwaitingVerification) {
+                  uiRecoveryRequired = lastBrowserActionChangedState(uiAgility) !== true;
+                  browserActionAwaitingVerification = false;
+                  if (!uiRecoveryRequired) uiRecoveryNudges = 0;
+                }
                 result = {
                   agent_decision_context: uiDecisionGuidance(content, uiAgility),
                   ...(result && typeof result === "object" ? (result as Record<string, unknown>) : { result })
@@ -1183,7 +1213,11 @@ export async function runAgentTurn({
         result = toolError(error);
       }
 
-      if (uiActionDecision) noteBrowserAction(uiAgility, uiActionDecision);
+      if (uiActionDecision) {
+        noteBrowserAction(uiAgility, uiActionDecision);
+        browserActionAwaitingVerification = true;
+        uiRecoveryRequired = true;
+      }
 
       const truncated = truncateToolResult(result);
       await supabase.from("agent_messages").insert({

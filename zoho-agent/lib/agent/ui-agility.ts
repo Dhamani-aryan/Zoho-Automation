@@ -148,6 +148,11 @@ export function noteBrowserAction(state: UiAgilityState, decision: Extract<UiAct
   state.actionSinceObservation = true;
 }
 
+export function lastBrowserActionChangedState(state: UiAgilityState): boolean | null {
+  if (!state.lastAction || !state.observationFingerprint || state.actionSinceObservation) return null;
+  return state.lastAction.beforeFingerprint !== state.observationFingerprint;
+}
+
 export function uiDecisionGuidance(goal: string, state: UiAgilityState) {
   return {
     goal,
