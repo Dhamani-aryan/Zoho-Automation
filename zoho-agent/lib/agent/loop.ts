@@ -594,12 +594,17 @@ async function guideContextForTurn(
   const missingWarning = missingNames.length
     ? `\n\nRequired routed skill guides are missing from the backend: ${missingNames.join(", ")}. Stop before that workflow and report that the Phase G guide seed must be applied.`
     : "";
+  const availableCatalog = rows.length
+    ? `\n\nAvailable skill guides (name - intent); call read_skill_guide before running a matching task class:\n${rows
+        .map((guide) => `- ${guide.name}: ${(guide.intent ?? "").replace(/\s+/g, " ").trim().slice(0, 140)}`)
+        .join("\n")}`
+    : "";
 
   return {
     context:
       (formatted.length > 0
         ? `\n\nAutomatically loaded backend skill guides for this turn:\n\n${formatted.join("\n\n---\n\n")}`
-        : "") + missingWarning,
+        : "") + missingWarning + availableCatalog,
     requestedNames: routed.names,
     loadedNames,
     missingNames,
