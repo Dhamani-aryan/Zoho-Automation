@@ -607,6 +607,7 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
       recovery_hint: result.recovery_hint,
       verification_hint: result.verification_hint,
       composer: result.composer,
+      removable_items: result.removable_items,
       truncated: true,
       preview: json.slice(0, LIMIT)
     }
@@ -1247,6 +1248,7 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
         }
         const ctx = frameContext();
         if ("error" in ctx) return { ok: false, error_message: ctx.error };
+        const doc = ctx.doc;
 
         const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
         const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
@@ -1287,10 +1289,10 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
         ].join(",");
         let target: Element | null = null;
         if (selector) {
-          const selected = ctx.doc.querySelector(selector);
+          const selected = doc.querySelector(selector);
           target = selected && isVisible(selected) ? selected : null;
         } else if (text) {
-          const candidates = Array.from(ctx.doc.querySelectorAll(tokenSelector)).filter(isVisible);
+          const candidates = Array.from(doc.querySelectorAll(tokenSelector)).filter(isVisible);
           target =
             candidates.find((candidate) => textOf(candidate).toLowerCase() === text) ??
             candidates.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
@@ -1298,14 +1300,84 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
         }
         if (!target) return { ok: false, error_message: "Removable UI item was not found." };
 
+        function distanceBetween(a: DOMRect, b: DOMRect) {
+          const ax = a.left + a.width / 2;
+          const ay = a.top + a.height / 2;
+          const bx = b.left + b.width / 2;
+          const by = b.top + b.height / 2;
+          return Math.hypot(ax - bx, ay - by);
+        }
+        function nearestRemoverByGeometry(item: Element) {
+          const itemRect = item.getBoundingClientRect();
+          const scope: ParentNode =
+            item.closest(
+              "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose'],ul,ol"
+            ) ?? doc;
+          const removers = Array.from(scope.querySelectorAll(removeSelector))
+            .filter((candidate) => candidate !== item)
+            .map((candidate) => {
+              const rect = candidate.getBoundingClientRect();
+              const visibleEnough = isVisible(candidate) || (rect.width > 0 && rect.height > 0);
+              return { candidate, rect, visibleEnough };
+            })
+            .filter(({ rect, visibleEnough }) => {
+              if (!visibleEnough) return false;
+              const verticallyOverlaps = rect.bottom >= itemRect.top - 8 && rect.top <= itemRect.bottom + 8;
+              const nearRightEdge = rect.left >= itemRect.left - 8 && rect.left <= itemRect.right + 36;
+              const insideOrAdjacent = rect.right >= itemRect.left && rect.left <= itemRect.right + 36;
+              return verticallyOverlaps && (nearRightEdge || insideOrAdjacent);
+            })
+            .sort((left, right) => {
+              const rightEdgeBiasLeft = Math.abs(left.rect.left - itemRect.right);
+              const rightEdgeBiasRight = Math.abs(right.rect.left - itemRect.right);
+              return rightEdgeBiasLeft - rightEdgeBiasRight || distanceBetween(itemRect, left.rect) - distanceBetween(itemRect, right.rect);
+            });
+          return removers[0]?.candidate ?? null;
+        }
+        function adjacentRemover(item: Element) {
+          const relatives = [
+            item.nextElementSibling,
+            item.previousElementSibling,
+            item.parentElement,
+            item.parentElement?.nextElementSibling,
+            item.parentElement?.previousElementSibling,
+            item.parentElement?.parentElement
+          ].filter(Boolean) as Element[];
+          for (const relative of relatives) {
+            if (relative.matches(removeSelector)) return relative;
+            const found = relative.querySelector(removeSelector);
+            if (found) return found;
+          }
+          return null;
+        }
+
         const remove =
           target.matches(removeSelector)
             ? target
             : target.querySelector(removeSelector) ??
-              target.closest(tokenSelector)?.querySelector(removeSelector) ??
+              adjacentRemover(target) ??
+              nearestRemoverByGeometry(target) ??
               null;
         if (!(remove instanceof HTMLElement) || !isVisible(remove)) {
-          return { ok: false, error_message: "Remove/close control was not found for the matched UI item." };
+          return {
+            ok: false,
+            error_message: "Remove/close control was not found for the matched UI item.",
+            result: {
+              matched_text: textOf(target),
+              matched_tag: target.tagName.toLowerCase(),
+              matched_class: target.getAttribute("class") ?? "",
+              nearby_remove_candidates: Array.from(doc.querySelectorAll(removeSelector))
+                .slice(0, 20)
+                .map((candidate) => ({
+                  tag: candidate.tagName.toLowerCase(),
+                  text: textOf(candidate),
+                  class: candidate.getAttribute("class") ?? "",
+                  aria_label: candidate.getAttribute("aria-label") ?? "",
+                  title: candidate.getAttribute("title") ?? "",
+                  visible: isVisible(candidate)
+                }))
+            }
+          };
         }
         const before = textOf(target);
         remove.click();
