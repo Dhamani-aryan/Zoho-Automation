@@ -7,6 +7,7 @@ import { zohoWritePageRunner } from "./page-runner-write";
 import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, isPlainEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
 import {
+  compactBrowserObservation,
   normalizeBrowserSnapshot,
   resolveBrowserSnapshotElement,
   type BrowserSnapshotCache
@@ -950,14 +951,18 @@ function browserObservePageRunner(input?: {
         if (sourceRole === "generic" && !symbolControl) return null;
         const target = actionableElementFor(source, sourceRole);
         const role = implicitRole(target) === "generic" ? sourceRole : implicitRole(target);
+        const snapshotRole = symbolControl && role === "generic" ? "clickable" : role;
         const selectors = selectorCandidatesFor(target);
         if (selectors.length === 0) return null;
         const rect = target.getBoundingClientRect();
         const view = target.ownerDocument.defaultView ?? window;
         const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
         const name = accessibleName(source) || accessibleName(target) || directText;
+        const activeSurface = Boolean(
+          source.closest("dialog,[role='dialog'],[aria-modal='true'],[class*='modal' i],[class*='popup' i],[class*='compose' i]")
+        );
         return {
-          role: symbolControl && role === "generic" ? "clickable" : role,
+          role: snapshotRole,
           name,
           tag: target.tagName.toLowerCase(),
           selector: selectors[0],
@@ -975,7 +980,8 @@ function browserObservePageRunner(input?: {
           y: Math.round(context.offsetY + rect.top + rect.height / 2),
           _priority:
             (inViewport ? 100 : 0) +
-            ({ button: 80, link: 70, textbox: 75, searchbox: 75, combobox: 75, checkbox: 65, radio: 65, clickable: 60, focusable: 40 }[role] ?? 20) +
+            (activeSurface ? 100 : 0) +
+            ({ button: 80, link: 70, textbox: 75, searchbox: 75, combobox: 75, checkbox: 65, radio: 65, clickable: 60, focusable: 40 }[snapshotRole] ?? 20) +
             (name ? 10 : 0)
         };
       })
@@ -2869,7 +2875,10 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
         return { ok: false, error_message: "browser_observe returned no result." };
       }
-      if (result.ok) await cacheBrowserSnapshot(tabId, result.result);
+      if (result.ok) {
+        await cacheBrowserSnapshot(tabId, result.result);
+        return { ...result, result: compactBrowserObservation(result.result) };
+      }
       return result;
     } catch (error) {
       return {

@@ -32,10 +32,12 @@ import {
 import { normalizeZohoReadFields } from "../lib/agent/zoho-read-fields";
 import { validateBrowserToolCall } from "../lib/agent/browser-tools";
 import {
+  compactBrowserObservation,
   normalizeBrowserSnapshot,
   resolveBrowserSnapshotElement
 } from "../extension/src/browser-snapshot";
 import {
+  assistantAdmitsUiIncomplete,
   createUiAgilityState,
   decideBrowserAction,
   lastBrowserActionChangedState,
@@ -435,6 +437,31 @@ test("browser snapshots normalize refs and reject stale or unknown targets", () 
   if (!expired.ok) assert.equal(expired.reason, "stale_snapshot");
 });
 
+test("browser observations expose compact refs while preserving composer state", () => {
+  const elements = Array.from({ length: 60 }, (_, index) => ({
+    ref: `@e${index + 1}`,
+    role: index === 0 ? "clickable" : "button",
+    name: index === 0 ? "x" : `Control ${index + 1}`,
+    tag: "span",
+    selector: `.very-long-selector-${index}`,
+    alternative_selectors: [`.fallback-${index}`],
+    in_viewport: true
+  }));
+  const compact = compactBrowserObservation({
+    url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+    title: "Deal",
+    composer: { to_chips: ["Test Test"], cc_chips: [], subject: "" },
+    snapshot: { id: "snap-1", count: elements.length, elements },
+    preview: "x".repeat(20_000)
+  }) as { composer: unknown; snapshot: { count: number; elements: Array<Record<string, unknown>> } };
+  assert.deepEqual(compact.composer, { to_chips: ["Test Test"], cc_chips: [], subject: "" });
+  assert.equal(compact.snapshot.count, 60);
+  assert.equal(compact.snapshot.elements.length, 30);
+  assert.equal(compact.snapshot.elements[0].name, "x");
+  assert.equal("selector" in compact.snapshot.elements[0], false);
+  assert.ok(JSON.stringify(compact).length < 8_000);
+});
+
 test("UI agility requires visible observation, verification, and a different tactic after no change", () => {
   const state = createUiAgilityState();
   const clickChip = {
@@ -509,6 +536,12 @@ test("UI agility permits the same action when observation proves state changed",
   noteBrowserObservation(state, { composer: { to_chips: ["Two"] }, snapshot: { id: "two", elements: [] } });
   assert.equal(lastBrowserActionChangedState(state), true);
   assert.equal(decideBrowserAction(state, { ...action, id: "remove-2" }).allowed, true);
+});
+
+test("UI agility recognizes an admitted incomplete result", () => {
+  assert.equal(assistantAdmitsUiIncomplete("The requested UI state is still not achieved."), true);
+  assert.equal(assistantAdmitsUiIncomplete("Test Test remains in the To field."), true);
+  assert.equal(assistantAdmitsUiIncomplete("Done. To, CC, and Subject match the request."), false);
 });
 
 test("composer browser gate helper is non-blocking in V3", () => {

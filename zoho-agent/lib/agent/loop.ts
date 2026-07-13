@@ -47,6 +47,7 @@ import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
 import {
+  assistantAdmitsUiIncomplete,
   createUiAgilityState,
   decideBrowserAction,
   lastBrowserActionChangedState,
@@ -141,7 +142,7 @@ CRM writes and safety:
 
 Search and matching:
 - Treat the user's wording as intent. If a search returns no results, retry broader terms, try significant words, check tags, and offer close candidates before asking.
-- Stop and ask one focused question when identity mismatches, required data is missing, more than one match has no rule, a duplicate exists, Zoho errors, the user is logged out, 3 failures happen consecutively, or failures exceed 20%.
+- Stop and ask one focused question when identity mismatches, required data is missing, more than one match has no rule, a duplicate exists, Zoho errors, or the user is logged out. For reversible UI work, failed tactics are evidence to re-plan, not a reason to stop while a safe visible affordance, focused keyboard interaction, targeted observation, or browser_eval inspection remains untried. Stop only at a guardrail, true ambiguity, exhausted safe action space, or the turn budget.
 
 Workflows and guides:
 - Use read_workspace_file for local drafts, batch inputs, source playbooks, and reference docs. Read every required page by following next_start_line; never claim a file was parsed from its name or from a truncated first page.
@@ -1019,6 +1020,7 @@ export async function runAgentTurn({
   let uiRecoveryRequired = false;
   let browserActionAwaitingVerification = false;
   let uiRecoveryNudges = 0;
+  let browserInteractionStarted = false;
 
   while (Date.now() - started - pausedMs < effectiveTurnTimeoutMs) {
     modelRound += 1;
@@ -1031,6 +1033,9 @@ export async function runAgentTurn({
     });
 
     if (model.toolCalls.length === 0) {
+      if (browserInteractionStarted && assistantAdmitsUiIncomplete(model.text)) {
+        uiRecoveryRequired = true;
+      }
       if (uiRecoveryRequired || browserActionAwaitingVerification) {
         uiRecoveryNudges += 1;
         if (uiRecoveryNudges > 5) {
@@ -1134,6 +1139,7 @@ export async function runAgentTurn({
           if (call.name !== "browser_eval") {
             const validatedCall = validateBrowserToolCall(call);
             if (call.name === "browser_input") {
+              browserInteractionStarted = true;
               const decision = decideBrowserAction(uiAgility, validatedCall, {
                 observationVisibleToModel: observationModelRound >= 0 && observationModelRound < modelRound
               });

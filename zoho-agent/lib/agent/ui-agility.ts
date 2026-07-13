@@ -153,6 +153,19 @@ export function lastBrowserActionChangedState(state: UiAgilityState): boolean | 
   return state.lastAction.beforeFingerprint !== state.observationFingerprint;
 }
 
+export function assistantAdmitsUiIncomplete(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return false;
+  return [
+    /\bstill (?:not|isn't|is not) (?:done|complete|completed|achieved|correct)\b/,
+    /\b(?:requested )?(?:ui )?state (?:is )?(?:still )?not achieved\b/,
+    /\b(?:could not|couldn't|unable to|failed to)\b/,
+    /\bno change yet\b/,
+    /\bremains? (?:in|unchanged|present)\b/,
+    /\bnot done\b/
+  ].some((pattern) => pattern.test(normalized));
+}
+
 export function uiDecisionGuidance(goal: string, state: UiAgilityState) {
   return {
     goal,
