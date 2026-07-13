@@ -6,6 +6,11 @@ const optionalSelectorSchema = z.preprocess(
   z.string().trim().min(1).max(500).optional()
 );
 
+const optionalElementRefSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().regex(/^@e\d+$/, "Element ref must look like @e1.").optional()
+);
+
 const browserEvalSchema = z.object({
   purpose: z.string().trim().min(1),
   code: z.string().trim().min(1).max(200_000),
@@ -34,12 +39,14 @@ const browserScreenshotSchema = z.object({});
 const browserInputSchema = z.union([
   z.object({
     action: z.literal("click"),
+    ref: optionalElementRefSchema,
     selector: optionalSelectorSchema,
     text: optionalSelectorSchema,
     frame_selector: optionalSelectorSchema
   }),
   z.object({
     action: z.literal("type"),
+    ref: optionalElementRefSchema,
     selector: optionalSelectorSchema,
     text: optionalSelectorSchema,
     frame_selector: optionalSelectorSchema,
@@ -48,21 +55,38 @@ const browserInputSchema = z.union([
   }),
   z.object({
     action: z.literal("remove"),
+    ref: optionalElementRefSchema,
     selector: optionalSelectorSchema,
     text: optionalSelectorSchema,
     frame_selector: optionalSelectorSchema
   }),
   z.object({
     action: z.literal("key"),
+    ref: optionalElementRefSchema,
     selector: optionalSelectorSchema,
     text: optionalSelectorSchema,
     frame_selector: optionalSelectorSchema,
     key: z.string().trim().min(1).max(40),
     repeat: z.number().int().min(1).max(20).optional()
+  }),
+  z.object({
+    action: z.enum(["hover", "focus", "clear", "check", "uncheck"]),
+    ref: optionalElementRefSchema,
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema
+  }),
+  z.object({
+    action: z.literal("select"),
+    ref: optionalElementRefSchema,
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema,
+    value: z.string()
   })
 ]).superRefine((args, ctx) => {
-  if ((args.action === "click" || args.action === "type" || args.action === "remove") && !args.selector && !args.text) {
-    ctx.addIssue({ code: "custom", message: `browser_input ${args.action} requires selector or text.` });
+  if (args.action !== "key" && !args.ref && !args.selector && !args.text) {
+    ctx.addIssue({ code: "custom", message: `browser_input ${args.action} requires ref, selector, or text.` });
   }
 });
 
@@ -75,7 +99,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_observe",
     tier: 1,
     description:
-      "Read the current crm.zoho.com page state. Before manipulating a specific visible item, pass target_selector or target_text to inspect that item, its visible descendants, siblings, nearby hit targets, and pseudo-element content. Read-only and ungated.",
+      "Capture the current crm.zoho.com page as a ranked interactive snapshot. Returns stable @eN refs with roles, accessible names, primary/fallback selectors, frame scope, state, and geometry. Use those refs with browser_input. Pass target_selector or target_text for extra local descendants, siblings, hit targets, and pseudo-element content. Read-only and ungated.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -124,7 +148,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_input",
     tier: 2,
     description:
-      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance. For key, optionally provide selector/text to focus a target first, then dispatch a key such as Backspace, Enter, Tab, or Escape; repeat can send it 1-20 times. Inspect a specific item with browser_observe before manipulating it and verify afterward.",
+      "Act on the current Zoho page using a fresh browser_observe snapshot. Prefer an @eN ref; the extension resolves its primary and fallback selectors and rejects stale refs. Supports click, type, key, hover, focus, clear, select, check, uncheck, and semantic remove. Trusted CDP is used for pointer/keyboard input. key repeat sends 1-20 presses. Observe again afterward to verify state.",
     parameters: {
       oneOf: [
         {
@@ -133,6 +157,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
           required: ["action"],
           properties: {
             action: { const: "click" },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
             selector: { type: "string" },
             text: { type: "string" },
             frame_selector: { type: "string" }
@@ -144,6 +169,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
           required: ["action", "value"],
           properties: {
             action: { const: "type" },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
             selector: { type: "string" },
             text: { type: "string" },
             frame_selector: { type: "string" },
@@ -157,6 +183,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
           required: ["action"],
           properties: {
             action: { const: "remove" },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
             selector: { type: "string" },
             text: { type: "string" },
             frame_selector: { type: "string" }
@@ -168,6 +195,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
           required: ["action", "key"],
           properties: {
             action: { const: "key" },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
             selector: { type: "string" },
             text: { type: "string" },
             frame_selector: { type: "string" },
@@ -178,6 +206,31 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
               maximum: 20,
               description: "Number of trusted key presses to dispatch after focusing the target. Defaults to 1."
             }
+          }
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: { enum: ["hover", "focus", "clear", "check", "uncheck"] },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" }
+          }
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["action", "value"],
+          properties: {
+            action: { const: "select" },
+            ref: { type: "string", description: "Fresh @eN reference from browser_observe." },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" },
+            value: { type: "string" }
           }
         }
       ]

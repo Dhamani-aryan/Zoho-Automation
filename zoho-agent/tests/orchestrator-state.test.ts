@@ -32,6 +32,10 @@ import {
 import { normalizeZohoReadFields } from "../lib/agent/zoho-read-fields";
 import { validateBrowserToolCall } from "../lib/agent/browser-tools";
 import {
+  normalizeBrowserSnapshot,
+  resolveBrowserSnapshotElement
+} from "../extension/src/browser-snapshot";
+import {
   browserEvalIsProvablyReadOnly,
   composerBrowserGateDecision
 } from "../lib/agent/browser-composer-gate";
@@ -329,6 +333,28 @@ test("browser primitives validate navigation and input shapes", () => {
   );
   assert.equal(
     validateBrowserToolCall({
+      id: "input-ref",
+      name: "browser_input",
+      args: { action: "click", ref: "@e12" }
+    }).name,
+    "browser_input"
+  );
+  for (const action of ["hover", "focus", "clear", "check", "uncheck"] as const) {
+    assert.equal(
+      validateBrowserToolCall({ id: `input-${action}`, name: "browser_input", args: { action, ref: "@e2" } }).name,
+      "browser_input"
+    );
+  }
+  assert.equal(
+    validateBrowserToolCall({
+      id: "input-select",
+      name: "browser_input",
+      args: { action: "select", ref: "@e3", value: "Scheduled" }
+    }).name,
+    "browser_input"
+  );
+  assert.equal(
+    validateBrowserToolCall({
       id: "input",
       name: "browser_input",
       args: { action: "key", selector: "#ceToAddr_1", key: "Backspace", repeat: 3 }
@@ -354,8 +380,52 @@ test("browser primitives validate navigation and input shapes", () => {
   );
   assert.throws(
     () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click" } }),
-    /requires selector or text/
+    /requires ref, selector, or text/
   );
+  assert.throws(
+    () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click", ref: "button-2" } }),
+    /Element ref must look like @e1/
+  );
+});
+
+test("browser snapshots normalize refs and reject stale or unknown targets", () => {
+  const snapshot = normalizeBrowserSnapshot(
+    {
+      id: "snap-1",
+      url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+      elements: [
+        {
+          ref: "@e1",
+          selector: "button[aria-label=Close]",
+          alternative_selectors: ["div.compose > button:nth-of-type(2)"],
+          frame_selectors: ["iframe.compose"]
+        },
+        { ref: "bad", selector: "#ignored" }
+      ]
+    },
+    1_000
+  );
+  assert.ok(snapshot);
+  assert.equal(snapshot.elements.length, 1);
+  assert.equal(
+    resolveBrowserSnapshotElement({ snapshot, ref: "@e1", currentUrl: snapshot.url, now: 1_100 }).ok,
+    true
+  );
+  assert.deepEqual(
+    resolveBrowserSnapshotElement({ snapshot, ref: "@e9", currentUrl: snapshot.url, now: 1_100 }),
+    { ok: false, reason: "unknown_ref", snapshot }
+  );
+  const wrongUrl = resolveBrowserSnapshotElement({
+    snapshot,
+    ref: "@e1",
+    currentUrl: `${snapshot.url}?changed=1`,
+    now: 1_100
+  });
+  assert.equal(wrongUrl.ok, false);
+  if (!wrongUrl.ok) assert.equal(wrongUrl.reason, "stale_snapshot");
+  const expired = resolveBrowserSnapshotElement({ snapshot, ref: "@e1", currentUrl: snapshot.url, now: 700_000 });
+  assert.equal(expired.ok, false);
+  if (!expired.ok) assert.equal(expired.reason, "stale_snapshot");
 });
 
 test("composer browser gate helper is non-blocking in V3", () => {

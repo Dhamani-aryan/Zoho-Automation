@@ -19,16 +19,23 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
 
   function isVisible(element: Element) {
     const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
+    const style = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
 
   function rootDocument() {
-    const frameSelector = typeof step.frame_selector === "string" ? step.frame_selector : "";
-    if (!frameSelector) return document;
-    const frame = document.querySelector(frameSelector);
-    if (frame instanceof HTMLIFrameElement && frame.contentDocument) return frame.contentDocument;
-    return document;
+    const frameSelectors = Array.isArray(step.frame_selectors)
+      ? step.frame_selectors.filter((value): value is string => typeof value === "string" && Boolean(value))
+      : typeof step.frame_selector === "string" && step.frame_selector
+        ? [step.frame_selector]
+        : [];
+    let doc = document;
+    for (const frameSelector of frameSelectors) {
+      const frame = doc.querySelector(frameSelector) as HTMLIFrameElement | null;
+      if (!frame || !["iframe", "frame"].includes(frame.tagName.toLowerCase()) || !frame.contentDocument) return document;
+      doc = frame.contentDocument;
+    }
+    return doc;
   }
 
   function findByText(text: string) {
@@ -43,11 +50,23 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
   }
 
   function target() {
-    const selector = typeof step.selector === "string" ? step.selector : "";
+    const selectors = [
+      typeof step.selector === "string" ? step.selector : "",
+      ...(Array.isArray(step.alternative_selectors)
+        ? step.alternative_selectors.filter((value): value is string => typeof value === "string")
+        : [])
+    ].filter(Boolean);
     const text = typeof step.text === "string" ? step.text : "";
-    if (selector) {
-      const element = rootDocument().querySelector(selector);
-      return element && isVisible(element) ? element : null;
+    for (const selector of selectors) {
+      let matches: Element[] = [];
+      try {
+        matches = Array.from(rootDocument().querySelectorAll(selector));
+      } catch {
+        continue;
+      }
+      if (matches.length === 1 && isVisible(matches[0])) return matches[0];
+      const visible = matches.filter(isVisible);
+      if (visible.length === 1) return visible[0];
     }
     if (text) return findByText(text);
     return null;
@@ -127,6 +146,31 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
       mouseClick(element);
       return { ok: true, result: { observed: valueOf(element) } };
     }
+    if (type === "hover") {
+      const element = await waitForTarget(5000);
+      if (!element) return { ok: false, error_message: "UI hover target was not found." };
+      element.scrollIntoView({ block: "center", inline: "center" });
+      const rect = element.getBoundingClientRect();
+      for (const eventType of ["mouseover", "mousemove"]) {
+        element.dispatchEvent(
+          new MouseEvent(eventType, {
+            bubbles: true,
+            cancelable: true,
+            view: element.ownerDocument.defaultView,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2
+          })
+        );
+      }
+      return { ok: true, result: { observed: valueOf(element), action: "hover" } };
+    }
+    if (type === "focus") {
+      const element = await waitForTarget(5000);
+      if (!(element instanceof HTMLElement)) return { ok: false, error_message: "UI focus target was not found." };
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus({ preventScroll: true });
+      return { ok: true, result: { observed: valueOf(element), action: "focus" } };
+    }
     if (type === "fill_field") {
       const element = await waitForTarget(5000);
       if (!element) return { ok: false, error_message: "UI field was not found." };
@@ -147,6 +191,33 @@ export async function zohoUiPageRunner(job: { tool_name: string; args: Record<st
       if (!element) return { ok: false, error_message: "UI field was not found." };
       element.scrollIntoView({ block: "center", inline: "center" });
       return { ok: true, result: { observed: valueOf(element) } };
+    }
+    if (type === "select_field") {
+      const element = await waitForTarget(5000);
+      if (!(element instanceof HTMLSelectElement)) return { ok: false, error_message: "UI select target was not found or is not a select." };
+      const wanted = String(step.value ?? "");
+      const option = Array.from(element.options).find((candidate) => candidate.value === wanted) ??
+        Array.from(element.options).find((candidate) => textOf(candidate).toLowerCase() === wanted.toLowerCase());
+      if (!option) return { ok: false, error_message: `Select option was not found: ${wanted}` };
+      element.value = option.value;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true, result: { observed: element.value, action: "select" } };
+    }
+    if (type === "set_checked") {
+      const element = await waitForTarget(5000);
+      if (!(element instanceof HTMLElement)) return { ok: false, error_message: "UI check target was not found." };
+      const expected = step.checked === true;
+      const current = element instanceof HTMLInputElement
+        ? element.checked
+        : element.getAttribute("aria-checked") === "true";
+      if (current !== expected) element.click();
+      const observed = element instanceof HTMLInputElement
+        ? element.checked
+        : element.getAttribute("aria-checked") === "true";
+      return observed === expected
+        ? { ok: true, result: { observed, action: expected ? "check" : "uncheck" } }
+        : { ok: false, error_message: `Expected checked=${expected} but observed ${observed}.`, result: { observed } };
     }
     if (type === "press_key") {
       pressKey(String(step.key ?? ""));

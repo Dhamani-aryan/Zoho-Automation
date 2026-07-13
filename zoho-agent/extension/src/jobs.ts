@@ -6,6 +6,11 @@ import { zohoUiPageRunner } from "./page-runner-ui";
 import { zohoWritePageRunner } from "./page-runner-write";
 import { SEND_NOW_BLOCKED_MESSAGE, isModifierEnterKey, isPlainEnterKey, looksLikeSendNowEndpoint } from "./send-guard";
 import { loadSettings, saveLastJobStatus } from "./storage";
+import {
+  normalizeBrowserSnapshot,
+  resolveBrowserSnapshotElement,
+  type BrowserSnapshotCache
+} from "./browser-snapshot";
 
 // Tier-2 write tools. Kept in sync with lib/agent/tier2-tools.ts
 // TIER2_WRITE_TOOL_NAMES; the lib-side extensionAcceptsWriteJob() encodes the
@@ -41,8 +46,94 @@ let realtimeTimer: number | undefined;
 let realtimeClient: SupabaseClient | null = null;
 let realtimeChannel: RealtimeChannel | null = null;
 
+const browserSnapshotCache = new Map<number, BrowserSnapshotCache>();
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function snapshotStorageKey(tabId: number) {
+  return `browser_snapshot_${tabId}`;
+}
+
+async function cacheBrowserSnapshot(tabId: number, payload: unknown) {
+  if (!payload || typeof payload !== "object") return;
+  const snapshot = (payload as { snapshot?: unknown }).snapshot;
+  if (!snapshot || typeof snapshot !== "object") return;
+  const cached = normalizeBrowserSnapshot(snapshot);
+  if (!cached) return;
+  browserSnapshotCache.set(tabId, cached);
+  await chrome.storage.local.set({ [snapshotStorageKey(tabId)]: cached });
+}
+
+async function readBrowserSnapshot(tabId: number) {
+  const memory = browserSnapshotCache.get(tabId);
+  if (memory) return memory;
+  const key = snapshotStorageKey(tabId);
+  const stored = await new Promise<Record<string, unknown>>((resolve) => {
+    chrome.storage.local.get({ [key]: null }, (items) => resolve(items));
+  });
+  const snapshot = stored[key] as BrowserSnapshotCache | undefined;
+  if (snapshot?.id && snapshot.url && Array.isArray(snapshot.elements)) {
+    browserSnapshotCache.set(tabId, snapshot);
+    return snapshot;
+  }
+  return null;
+}
+
+async function resolveBrowserSnapshotRef(
+  tabId: number,
+  args: Record<string, unknown>
+): Promise<{ ok: true; target: Record<string, unknown> } | { ok: false; response: PageResult }> {
+  const ref = typeof args.ref === "string" ? args.ref.trim() : "";
+  if (!ref) return { ok: true, target: args };
+  if (!/^@e\d+$/.test(ref)) {
+    return { ok: false, response: { ok: false, error_message: `Invalid browser element ref: ${ref}` } };
+  }
+  const snapshot = await readBrowserSnapshot(tabId);
+  if (!snapshot) {
+    return {
+      ok: false,
+      response: { ok: false, error_message: `No browser snapshot is available for ${ref}. Run browser_observe again.` }
+    };
+  }
+  const tab = await chrome.tabs.get(tabId);
+  const resolution = resolveBrowserSnapshotElement({ snapshot, ref, currentUrl: tab.url ?? null });
+  if (!resolution.ok && resolution.reason === "stale_snapshot") {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        error_message: `Browser snapshot ${snapshot.id} is stale for ${ref}. Run browser_observe again.`,
+        result: { stale_ref: true, ref, snapshot_url: snapshot.url, current_url: tab.url ?? null }
+      }
+    };
+  }
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        error_message:
+          resolution.reason === "missing_snapshot"
+            ? `No browser snapshot is available for ${ref}. Run browser_observe again.`
+            : `Unknown browser element ref ${ref}. Run browser_observe again.`
+      }
+    };
+  }
+  const element = resolution.element;
+  return {
+    ok: true,
+    target: {
+      ...args,
+      selector: element.selector,
+      alternative_selectors: element.alternative_selectors ?? [],
+      ...(element.frame_selector ? { frame_selector: element.frame_selector } : {}),
+      ...(element.frame_selectors ? { frame_selectors: element.frame_selectors } : {}),
+      snapshot_id: snapshot.id,
+      ref
+    }
+  };
 }
 
 function debuggerApi() {
@@ -383,6 +474,7 @@ function browserObservePageRunner(input?: {
     root: ParentNode;
     frame: string;
     frameSelector: string | null;
+    frameSelectors: string[];
     offsetX: number;
     offsetY: number;
   };
@@ -478,6 +570,7 @@ function browserObservePageRunner(input?: {
         root: childDoc,
         frame,
         frameSelector,
+        frameSelectors: [...parent.frameSelectors, frameSelector],
         offsetX: parent.offsetX + rect.left,
         offsetY: parent.offsetY + rect.top
       };
@@ -488,7 +581,7 @@ function browserObservePageRunner(input?: {
 
   function collectContexts() {
     const contexts: ObserveContext[] = [
-      { doc: document, root: document, frame: "main", frameSelector: null, offsetX: 0, offsetY: 0 }
+      { doc: document, root: document, frame: "main", frameSelector: null, frameSelectors: [], offsetX: 0, offsetY: 0 }
     ];
     for (let index = 0; index < contexts.length; index += 1) {
       const context = contexts[index];
@@ -750,6 +843,157 @@ function browserObservePageRunner(input?: {
     .filter((item) => item.text || item.selector)
     .map(({ _priority, ...item }) => item);
 
+  function implicitRole(element: Element) {
+    const explicit = element.getAttribute("role")?.trim().toLowerCase();
+    if (explicit) return explicit;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "button" || tag === "summary") return "button";
+    if (tag === "a" && element.hasAttribute("href")) return "link";
+    if (tag === "textarea" || (element instanceof HTMLElement && element.isContentEditable)) return "textbox";
+    if (tag === "select") return "combobox";
+    if (tag === "input") {
+      const type = (element.getAttribute("type") || "text").toLowerCase();
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (["button", "submit", "reset", "image"].includes(type)) return "button";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    const el = element as HTMLElement;
+    const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+    if (element.hasAttribute("onclick") || typeof el.onclick === "function" || style?.cursor === "pointer") return "clickable";
+    if (el.tabIndex >= 0) return "focusable";
+    return "generic";
+  }
+
+  function accessibleName(element: Element) {
+    const labelledBy = element.getAttribute("aria-labelledby");
+    const labelledText = labelledBy
+      ? labelledBy
+          .split(/\s+/)
+          .map((id) => element.ownerDocument.getElementById(id)?.textContent ?? "")
+          .join(" ")
+      : "";
+    const input = element as HTMLInputElement;
+    const labels = "labels" in input && input.labels
+      ? Array.from(input.labels).map((label) => label.textContent ?? "").join(" ")
+      : "";
+    return [
+      element.getAttribute("aria-label"),
+      labelledText,
+      labels,
+      element.getAttribute("alt"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("title"),
+      input.value && ["button", "submit", "reset"].includes((input.type || "").toLowerCase()) ? input.value : "",
+      textOf(element)
+    ]
+      .find((value) => typeof value === "string" && value.trim())
+      ?.replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180) ?? "";
+  }
+
+  function selectorCandidatesFor(element: Element) {
+    const doc = element.ownerDocument;
+    const tag = element.tagName.toLowerCase();
+    const candidates: string[] = [];
+    const add = (candidate: string) => {
+      try {
+        if (doc.querySelectorAll(candidate).length === 1 && !candidates.includes(candidate)) candidates.push(candidate);
+      } catch {
+        // Ignore selectors containing values the browser cannot parse.
+      }
+    };
+    if ((element as HTMLElement).id) add(`#${CSS.escape((element as HTMLElement).id)}`);
+    for (const attribute of ["data-testid", "data-test-id", "data-test", "data-qa", "data-cy", "name", "aria-label", "placeholder", "title"]) {
+      const value = element.getAttribute(attribute);
+      if (value) add(`${tag}[${attribute}="${CSS.escape(value)}"]`);
+    }
+    if (tag === "a" && element.getAttribute("href")) add(`${tag}[href="${CSS.escape(element.getAttribute("href") ?? "")}"]`);
+    add(selectorFor(element));
+    return candidates;
+  }
+
+  function actionableElementFor(element: Element, role: string) {
+    const selectorByRole: Record<string, string> = {
+      button: "button,summary,[role='button']",
+      link: "a[href]",
+      textbox: "input:not([type='hidden']),textarea,[role='textbox'],[contenteditable='true']",
+      searchbox: "input[type='search'],[role='searchbox']",
+      combobox: "select,[role='combobox'],[role='listbox']",
+      checkbox: "input[type='checkbox'],[role='checkbox']",
+      radio: "input[type='radio'],[role='radio']"
+    };
+    const selector = selectorByRole[role];
+    if (!selector) return element;
+    if (element.matches(selector) && isVisible(element)) return element;
+    const descendant = Array.from(element.querySelectorAll(selector)).find(isVisible);
+    if (descendant) return descendant;
+    const ancestor = element.closest(selector);
+    return ancestor && isVisible(ancestor) ? ancestor : element;
+  }
+
+  const snapshotCandidates = scoped.contexts.flatMap((context) =>
+    Array.from(context.root.querySelectorAll?.("*") ?? [])
+      .filter(isVisible)
+      .map((source) => {
+        const sourceRole = implicitRole(source);
+        const directText = Array.from(source.childNodes)
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent ?? "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        const symbolControl = /^(x|\u00d7|\u2715|\u2716)$/i.test(directText) ||
+          /(^|[-_])(close|remove|dismiss|clear|delete)([-_]|$)/i.test(source.getAttribute("class") ?? "");
+        if (sourceRole === "generic" && !symbolControl) return null;
+        const target = actionableElementFor(source, sourceRole);
+        const role = implicitRole(target) === "generic" ? sourceRole : implicitRole(target);
+        const selectors = selectorCandidatesFor(target);
+        if (selectors.length === 0) return null;
+        const rect = target.getBoundingClientRect();
+        const view = target.ownerDocument.defaultView ?? window;
+        const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+        const name = accessibleName(source) || accessibleName(target) || directText;
+        return {
+          role: symbolControl && role === "generic" ? "clickable" : role,
+          name,
+          tag: target.tagName.toLowerCase(),
+          selector: selectors[0],
+          alternative_selectors: selectors.slice(1, 5),
+          frame: context.frame,
+          ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
+          ...(context.frameSelectors.length > 1 ? { frame_selectors: context.frameSelectors } : {}),
+          disabled: (target as HTMLInputElement).disabled === true || target.getAttribute("aria-disabled") === "true",
+          checked:
+            role === "checkbox" || role === "radio" || role === "switch"
+              ? (target as HTMLInputElement).checked === true || target.getAttribute("aria-checked") === "true"
+              : null,
+          in_viewport: inViewport,
+          x: Math.round(context.offsetX + rect.left + rect.width / 2),
+          y: Math.round(context.offsetY + rect.top + rect.height / 2),
+          _priority:
+            (inViewport ? 100 : 0) +
+            ({ button: 80, link: 70, textbox: 75, searchbox: 75, combobox: 75, checkbox: 65, radio: 65, clickable: 60, focusable: 40 }[role] ?? 20) +
+            (name ? 10 : 0)
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  );
+  const snapshotSeen = new Set<string>();
+  const snapshotElements = snapshotCandidates
+    .sort((left, right) => right._priority - left._priority)
+    .filter((item) => {
+      const key = `${item.frame}|${item.selector}`;
+      if (snapshotSeen.has(key)) return false;
+      snapshotSeen.add(key);
+      return true;
+    })
+    .slice(0, 100)
+    .map(({ _priority, ...item }, index) => ({ ref: `@e${index + 1}`, ...item }));
+  const snapshotId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
   function elementsAcrossContexts(selector: string) {
     return allContexts.flatMap((context) => Array.from(context.doc.querySelectorAll(selector)));
   }
@@ -788,6 +1032,12 @@ function browserObservePageRunner(input?: {
       ? "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
       : null,
         composer,
+        snapshot: {
+          id: snapshotId,
+          url: location.href,
+          count: snapshotElements.length,
+          elements: snapshotElements
+        },
         target_context,
         removable_items: tokenLikeRemovableItems(allContexts),
         scope_selector: scopeSelector || null,
@@ -806,6 +1056,7 @@ function browserObservePageRunner(input?: {
       recovery_hint: result.recovery_hint,
       verification_hint: result.verification_hint,
       composer: result.composer,
+      snapshot: result.snapshot,
       target_context: result.target_context,
       removable_items: result.removable_items,
       truncated: true,
@@ -1053,13 +1304,13 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
       function isVisible(element: Element) {
         const rect = element.getBoundingClientRect();
-        const style = window.getComputedStyle(element);
+        const style = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
       }
       function scrollableAncestors(element: Element) {
         const ancestors: Element[] = [];
         for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-          const style = window.getComputedStyle(parent);
+          const style = (parent.ownerDocument.defaultView ?? window).getComputedStyle(parent);
           const overflowY = style.overflowY.toLowerCase();
           if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollHeight > parent.clientHeight) {
             ancestors.push(parent);
@@ -1080,37 +1331,77 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
       function nearestFixedOverlay(element: Element) {
         for (let parent: Element | null = element; parent; parent = parent.parentElement) {
-          if (window.getComputedStyle(parent).position === "fixed") return parent;
+          if ((parent.ownerDocument.defaultView ?? window).getComputedStyle(parent).position === "fixed") return parent;
         }
         return null;
       }
       function frameContext() {
-        const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
-        if (!frameSelector) return { doc: document, offsetX: 0, offsetY: 0 };
-        const frame = document.querySelector(frameSelector);
-        if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
-          return { error: `Frame was not found: ${frameSelector}` };
+        const frameSelectors = Array.isArray(rawStep.frame_selectors)
+          ? rawStep.frame_selectors.filter((value): value is string => typeof value === "string" && Boolean(value))
+          : typeof rawStep.frame_selector === "string" && rawStep.frame_selector
+            ? [rawStep.frame_selector]
+            : [];
+        let doc = document;
+        let offsetX = 0;
+        let offsetY = 0;
+        for (const frameSelector of frameSelectors) {
+          const frame = doc.querySelector(frameSelector) as HTMLIFrameElement | null;
+          if (!frame || !["iframe", "frame"].includes(frame.tagName.toLowerCase()) || !frame.contentDocument) {
+            return { error: `Frame was not found: ${frameSelector}` };
+          }
+          const rect = frame.getBoundingClientRect();
+          offsetX += rect.left;
+          offsetY += rect.top;
+          doc = frame.contentDocument;
         }
-        const rect = frame.getBoundingClientRect();
-        return { doc: frame.contentDocument, offsetX: rect.left, offsetY: rect.top };
+        return { doc, offsetX, offsetY };
       }
       const ctx = frameContext();
       if ("error" in ctx) return { ok: false, error_message: ctx.error };
 
-      const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
+      const selectors = [
+        typeof rawStep.selector === "string" ? rawStep.selector : "",
+        ...(Array.isArray(rawStep.alternative_selectors)
+          ? rawStep.alternative_selectors.filter((value): value is string => typeof value === "string")
+          : [])
+      ].filter(Boolean);
       const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
       let element: Element | null = null;
-      if (selector) {
-        const selected = ctx.doc.querySelector(selector);
-        element = selected && isVisible(selected) ? selected : null;
-      } else if (text) {
-        const all = [...ctx.doc.querySelectorAll("button,a,input,textarea,[role='button'],span,div")].filter(isVisible);
+      let ambiguous = false;
+      for (const selector of selectors) {
+        let matches: Element[] = [];
+        try {
+          matches = Array.from(ctx.doc.querySelectorAll(selector));
+        } catch {
+          continue;
+        }
+        if (matches.length === 1) {
+          element = matches[0];
+          break;
+        }
+        const visibleMatches = matches.filter(isVisible);
+        if (visibleMatches.length === 1) {
+          element = visibleMatches[0];
+          break;
+        }
+        if (matches.length > 1) ambiguous = true;
+      }
+      if (!element && text) {
+        const all = [...ctx.doc.querySelectorAll("button,a,input,textarea,select,[role='button'],[role='option'],[tabindex],span,div")].filter(isVisible);
         element =
           all.find((candidate) => textOf(candidate).toLowerCase() === text) ??
           all.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
           null;
       }
-      if (!element) return { ok: false, error_message: "UI target was not found." };
+      if (!element || !isVisible(element)) {
+        return {
+          ok: false,
+          error_message: ambiguous
+            ? "Browser element reference became ambiguous. Run browser_observe again."
+            : "Browser element reference is stale, missing, or hidden. Run browser_observe again.",
+          result: { stale_ref: Boolean(rawStep.ref), ref: rawStep.ref ?? null, selectors }
+        };
+      }
       if (
         rawStep.type === "fill_field" &&
         element instanceof HTMLElement &&
@@ -1409,7 +1700,7 @@ async function replaceFocusedText(target: chrome.Debuggee, value: string) {
 
 function usesTrustedInput(step: Record<string, unknown>) {
   const type = String(step.type ?? "");
-  return type === "click" || type === "fill_field" || type === "press_key" || type === "remove_item";
+  return type === "click" || type === "fill_field" || type === "press_key" || type === "remove_item" || type === "hover";
 }
 
 async function locateRemoveAffordance(tabId: number, step: Record<string, unknown>): Promise<LocatedUiTarget> {
@@ -1426,14 +1717,25 @@ async function locateRemoveAffordance(tabId: number, step: Record<string, unknow
         return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
       }
       function frameContext() {
-        const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
-        if (!frameSelector) return { doc: document, offsetX: 0, offsetY: 0 };
-        const frame = document.querySelector(frameSelector);
-        if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
-          return { error: `Frame was not found: ${frameSelector}` };
+        const frameSelectors = Array.isArray(rawStep.frame_selectors)
+          ? rawStep.frame_selectors.filter((value): value is string => typeof value === "string" && Boolean(value))
+          : typeof rawStep.frame_selector === "string" && rawStep.frame_selector
+            ? [rawStep.frame_selector]
+            : [];
+        let doc = document;
+        let offsetX = 0;
+        let offsetY = 0;
+        for (const frameSelector of frameSelectors) {
+          const frame = doc.querySelector(frameSelector) as HTMLIFrameElement | null;
+          if (!frame || !["iframe", "frame"].includes(frame.tagName.toLowerCase()) || !frame.contentDocument) {
+            return { error: `Frame was not found: ${frameSelector}` };
+          }
+          const rect = frame.getBoundingClientRect();
+          offsetX += rect.left;
+          offsetY += rect.top;
+          doc = frame.contentDocument;
         }
-        const rect = frame.getBoundingClientRect();
-        return { doc: frame.contentDocument, offsetX: rect.left, offsetY: rect.top };
+        return { doc, offsetX, offsetY };
       }
       function distanceBetween(a: DOMRect, b: DOMRect) {
         const ax = a.left + a.width / 2;
@@ -1446,7 +1748,12 @@ async function locateRemoveAffordance(tabId: number, step: Record<string, unknow
       const ctx = frameContext();
       if ("error" in ctx) return { ok: false, error_message: ctx.error };
       const doc = ctx.doc;
-      const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
+      const selectors = [
+        typeof rawStep.selector === "string" ? rawStep.selector : "",
+        ...(Array.isArray(rawStep.alternative_selectors)
+          ? rawStep.alternative_selectors.filter((value): value is string => typeof value === "string")
+          : [])
+      ].filter(Boolean);
       const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
       const tokenSelector = [
         "li.selectedEmail",
@@ -1487,17 +1794,31 @@ async function locateRemoveAffordance(tabId: number, step: Record<string, unknow
       ].join(",");
 
       let item: Element | null = null;
-      if (selector) {
-        const selected = doc.querySelector(selector);
-        item = selected && isVisible(selected) ? selected : null;
-      } else if (text) {
+      for (const selector of selectors) {
+        let matches: Element[] = [];
+        try {
+          matches = Array.from(doc.querySelectorAll(selector));
+        } catch {
+          continue;
+        }
+        if (matches.length === 1 && isVisible(matches[0])) {
+          item = matches[0];
+          break;
+        }
+        const visible = matches.filter(isVisible);
+        if (visible.length === 1) {
+          item = visible[0];
+          break;
+        }
+      }
+      if (!item && text) {
         const candidates = Array.from(doc.querySelectorAll(tokenSelector)).filter(isVisible);
         item =
           candidates.find((candidate) => textOf(candidate).toLowerCase() === text) ??
           candidates.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
           null;
       }
-      if (!item) return { ok: false, error_message: "Removable UI item was not found after hover." };
+      if (!item) return { ok: false, error_message: "Removable UI item reference is stale. Run browser_observe again." };
 
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const itemRect = item.getBoundingClientRect();
@@ -1632,6 +1953,19 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
           trusted: true,
           action: "remove",
           coordinates: { x: remove.x, y: remove.y }
+        }
+      };
+    }
+    if (type === "hover") {
+      await hoverTrusted(target, located.x, located.y);
+      return {
+        ok: true,
+        result: {
+          observed: located.observed,
+          input_method: "cdp",
+          trusted: true,
+          action: "hover",
+          coordinates: { x: located.x, y: located.y }
         }
       };
     }
@@ -2535,6 +2869,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       if (!result || typeof result !== "object" || typeof (result as { ok?: unknown }).ok !== "boolean") {
         return { ok: false, error_message: "browser_observe returned no result." };
       }
+      if (result.ok) await cacheBrowserSnapshot(tabId, result.result);
       return result;
     } catch (error) {
       return {
@@ -2583,21 +2918,29 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     if (crmError) return crmError;
     const composerMark = await composerMutationMark(tabId, job);
     const action = String(job.args.action ?? "");
+    const resolved = await resolveBrowserSnapshotRef(tabId, job.args);
+    if (!resolved.ok) return resolved.response;
+    const target = resolved.target;
+    const targetArgs = {
+      ref: target.ref,
+      snapshot_id: target.snapshot_id,
+      selector: target.selector,
+      alternative_selectors: target.alternative_selectors,
+      text: target.text,
+      frame_selector: target.frame_selector,
+      frame_selectors: target.frame_selectors
+    };
     if (action === "click") {
       const result = await executeUiStep(tabId, {
         type: "click",
-        selector: job.args.selector,
-        text: job.args.text,
-        frame_selector: job.args.frame_selector
+        ...targetArgs
       });
       return withComposerGateResult(result, composerMark);
     }
     if (action === "type") {
       const result = await executeUiStep(tabId, {
         type: "fill_field",
-        selector: job.args.selector,
-        text: job.args.text,
-        frame_selector: job.args.frame_selector,
+        ...targetArgs,
         value: job.args.value,
         press_enter: job.args.press_enter
       });
@@ -2608,22 +2951,34 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
         type: "press_key",
         key: job.args.key,
         repeat: job.args.repeat,
-        selector: job.args.selector,
-        text: job.args.text,
-        frame_selector: job.args.frame_selector
+        ...targetArgs
       });
       return withComposerGateResult(result, composerMark);
     }
     if (action === "remove") {
       const result = await executeUiStep(tabId, {
         type: "remove_item",
-        selector: job.args.selector,
-        text: job.args.text,
-        frame_selector: job.args.frame_selector
+        ...targetArgs
       });
       return withComposerGateResult(result, composerMark);
     }
-    return { ok: false, error_message: "browser_input action must be click, type, remove, or key." };
+    if (action === "hover" || action === "focus") {
+      const result = await executeUiStep(tabId, { type: action, ...targetArgs });
+      return withComposerGateResult(result, composerMark);
+    }
+    if (action === "clear") {
+      const result = await executeUiStep(tabId, { type: "fill_field", ...targetArgs, value: "" });
+      return withComposerGateResult(result, composerMark);
+    }
+    if (action === "select") {
+      const result = await executeUiStep(tabId, { type: "select_field", ...targetArgs, value: job.args.value });
+      return withComposerGateResult(result, composerMark);
+    }
+    if (action === "check" || action === "uncheck") {
+      const result = await executeUiStep(tabId, { type: "set_checked", ...targetArgs, checked: action === "check" });
+      return withComposerGateResult(result, composerMark);
+    }
+    return { ok: false, error_message: "Unsupported browser_input action." };
   }
   if (job.tool_name === "zoho_api") {
     const crmError = await assertCrmTab(tabId);
