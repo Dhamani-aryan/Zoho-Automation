@@ -319,6 +319,22 @@ test("browser primitives validate navigation and input shapes", () => {
     }).name,
     "browser_input"
   );
+  assert.equal(
+    validateBrowserToolCall({
+      id: "input",
+      name: "browser_input",
+      args: { action: "remove", text: "Test Test" }
+    }).name,
+    "browser_input"
+  );
+  assert.equal(
+    validateBrowserToolCall({
+      id: "input",
+      name: "browser_input",
+      args: { action: "key", selector: "#ceToAddr_1", key: "Backspace" }
+    }).name,
+    "browser_input"
+  );
   assert.throws(
     () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click" } }),
     /requires selector or text/

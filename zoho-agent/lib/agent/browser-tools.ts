@@ -45,11 +45,20 @@ const browserInputSchema = z.union([
     press_enter: z.boolean().optional()
   }),
   z.object({
+    action: z.literal("remove"),
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema
+  }),
+  z.object({
     action: z.literal("key"),
+    selector: optionalSelectorSchema,
+    text: optionalSelectorSchema,
+    frame_selector: optionalSelectorSchema,
     key: z.string().trim().min(1).max(40)
   })
 ]).superRefine((args, ctx) => {
-  if ((args.action === "click" || args.action === "type") && !args.selector && !args.text) {
+  if ((args.action === "click" || args.action === "type" || args.action === "remove") && !args.selector && !args.text) {
     ctx.addIssue({ code: "custom", message: `browser_input ${args.action} requires selector or text.` });
   }
 });
@@ -104,7 +113,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_input",
     tier: 2,
     description:
-      "Dispatch trusted CDP input to the dedicated Zoho tab. For click/type, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For key, dispatch one key such as Enter, Tab, or Escape.",
+      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance for token/chip/tag/pill-style UI. For key, optionally provide selector/text to focus a target first, then dispatch one key such as Backspace, Enter, Tab, or Escape.",
     parameters: {
       oneOf: [
         {
@@ -134,9 +143,23 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
         {
           type: "object",
           additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: { const: "remove" },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" }
+          }
+        },
+        {
+          type: "object",
+          additionalProperties: false,
           required: ["action", "key"],
           properties: {
             action: { const: "key" },
+            selector: { type: "string" },
+            text: { type: "string" },
+            frame_selector: { type: "string" },
             key: { type: "string" }
           }
         }

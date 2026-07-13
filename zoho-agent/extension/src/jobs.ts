@@ -582,18 +582,19 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
   const recoveryHint = location.pathname.includes("/tab/Home")
     ? "Zoho Home is a recoverable navigation state. If the task or recent conversation contains a known record URL/id, use ui_step open_url to navigate there, wait for the expected record, and continue. Stop only when the target identity is unknown or ambiguous."
     : null;
-  const result = {
-    url: location.href,
-    title: document.title,
-    recovery_hint: recoveryHint,
+      const result = {
+        url: location.href,
+        title: document.title,
+        recovery_hint: recoveryHint,
     verification_hint: composerDetected
       ? "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
       : null,
-    composer,
-    scope_selector: scopeSelector || null,
-    frames_observed: allContexts.map((context) => context.frame),
-    warnings: scoped.warnings,
-    headings,
+        composer,
+        removable_items: tokenLikeRemovableItems(allContexts),
+        scope_selector: scopeSelector || null,
+        frames_observed: allContexts.map((context) => context.frame),
+        warnings: scoped.warnings,
+        headings,
     controls
   };
   const json = JSON.stringify(result);
@@ -610,6 +611,73 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
       preview: json.slice(0, LIMIT)
     }
   };
+
+  function tokenLikeRemovableItems(contexts: ObserveContext[]) {
+    const seen = new Set<string>();
+    const items: Array<{
+      text: string;
+      selector: string;
+      remove_selector: string;
+      frame: string;
+      x: number;
+      y: number;
+    }> = [];
+    const containerSelector = [
+      "li.selectedEmail",
+      "[role='option']",
+      "[role='listitem']",
+      "[class*='chip']",
+      "[class*='Chip']",
+      "[class*='tag']",
+      "[class*='Tag']",
+      "[class*='pill']",
+      "[class*='Pill']",
+      "[class*='token']",
+      "[class*='Token']"
+    ].join(",");
+    const removeSelector = [
+      "button[aria-label*='remove' i]",
+      "button[aria-label*='close' i]",
+      "button[aria-label*='delete' i]",
+      "[role='button'][aria-label*='remove' i]",
+      "[role='button'][aria-label*='close' i]",
+      "[role='button'][aria-label*='delete' i]",
+      "[title*='remove' i]",
+      "[title*='close' i]",
+      "[title*='delete' i]",
+      ".closeIconB",
+      ".close",
+      ".remove",
+      ".delete",
+      "[class*='close' i]",
+      "[class*='remove' i]",
+      "[class*='delete' i]"
+    ].join(",");
+    for (const context of contexts) {
+      for (const element of Array.from(context.root.querySelectorAll?.(containerSelector) ?? [])) {
+        if (!isVisible(element)) continue;
+        const remove = element.querySelector(removeSelector);
+        if (!(remove instanceof Element) || !isVisible(remove)) continue;
+        const text = textOf(element);
+        if (!text) continue;
+        const selector = selectorFor(element);
+        const removeSelectorForElement = selectorFor(remove);
+        const key = `${context.frame}:${selector}:${removeSelectorForElement}:${text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const rect = remove.getBoundingClientRect();
+        items.push({
+          text,
+          selector,
+          remove_selector: removeSelectorForElement,
+          frame: context.frame,
+          x: Math.round(context.offsetX + rect.left + rect.width / 2),
+          y: Math.round(context.offsetY + rect.top + rect.height / 2)
+        });
+      }
+    }
+    return items.slice(0, 40);
+  }
 }
 
 async function crmTabForJob(job: ToolJob) {
@@ -1082,6 +1150,11 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
     if (enterGuard) return enterGuard;
     await withDebugger(tabId, async (target) => {
+      if (typeof step.selector === "string" || typeof step.text === "string") {
+        const located = await locateUiTarget(tabId, step);
+        if (!located.ok) throw new Error(located.error_message);
+        await dispatchTrustedClick(target, located.x, located.y);
+      }
       await dispatchTrustedKey(target, key);
     });
     return { ok: true, result: { observed: `trusted key ${key}`, input_method: "cdp", trusted: true } };
@@ -1148,6 +1221,100 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
 
   if (type === "screenshot") {
     return { ok: true, result: await captureEvidence() };
+  }
+
+  if (type === "remove_item") {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: (rawStep: Record<string, unknown>) => {
+        function textOf(element: Element) {
+          return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+        }
+        function isVisible(element: Element) {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        }
+        function frameContext() {
+          const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
+          if (!frameSelector) return { doc: document };
+          const frame = document.querySelector(frameSelector);
+          if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
+            return { error: `Frame was not found: ${frameSelector}` };
+          }
+          return { doc: frame.contentDocument };
+        }
+        const ctx = frameContext();
+        if ("error" in ctx) return { ok: false, error_message: ctx.error };
+
+        const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
+        const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
+        const tokenSelector = [
+          "li.selectedEmail",
+          "[role='option']",
+          "[role='listitem']",
+          "[class*='chip']",
+          "[class*='Chip']",
+          "[class*='tag']",
+          "[class*='Tag']",
+          "[class*='pill']",
+          "[class*='Pill']",
+          "[class*='token']",
+          "[class*='Token']",
+          "button",
+          "[role='button']",
+          "span",
+          "div"
+        ].join(",");
+        const removeSelector = [
+          "button[aria-label*='remove' i]",
+          "button[aria-label*='close' i]",
+          "button[aria-label*='delete' i]",
+          "[role='button'][aria-label*='remove' i]",
+          "[role='button'][aria-label*='close' i]",
+          "[role='button'][aria-label*='delete' i]",
+          "[title*='remove' i]",
+          "[title*='close' i]",
+          "[title*='delete' i]",
+          ".closeIconB",
+          ".close",
+          ".remove",
+          ".delete",
+          "[class*='close' i]",
+          "[class*='remove' i]",
+          "[class*='delete' i]"
+        ].join(",");
+        let target: Element | null = null;
+        if (selector) {
+          const selected = ctx.doc.querySelector(selector);
+          target = selected && isVisible(selected) ? selected : null;
+        } else if (text) {
+          const candidates = Array.from(ctx.doc.querySelectorAll(tokenSelector)).filter(isVisible);
+          target =
+            candidates.find((candidate) => textOf(candidate).toLowerCase() === text) ??
+            candidates.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
+            null;
+        }
+        if (!target) return { ok: false, error_message: "Removable UI item was not found." };
+
+        const remove =
+          target.matches(removeSelector)
+            ? target
+            : target.querySelector(removeSelector) ??
+              target.closest(tokenSelector)?.querySelector(removeSelector) ??
+              null;
+        if (!(remove instanceof HTMLElement) || !isVisible(remove)) {
+          return { ok: false, error_message: "Remove/close control was not found for the matched UI item." };
+        }
+        const before = textOf(target);
+        remove.click();
+        return { ok: true, result: { removed: before, action: "remove", selector: selector || null, text: text || null } };
+      },
+      args: [step]
+    });
+    const result = results?.[0]?.result as PageResult | undefined;
+    return result ?? { ok: false, error_message: "Remove action returned no result." };
   }
 
   return null;
@@ -1887,10 +2054,25 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       return withComposerGateResult(result, composerMark);
     }
     if (action === "key") {
-      const result = await executeUiStep(tabId, { type: "press_key", key: job.args.key });
+      const result = await executeUiStep(tabId, {
+        type: "press_key",
+        key: job.args.key,
+        selector: job.args.selector,
+        text: job.args.text,
+        frame_selector: job.args.frame_selector
+      });
       return withComposerGateResult(result, composerMark);
     }
-    return { ok: false, error_message: "browser_input action must be click, type, or key." };
+    if (action === "remove") {
+      const result = await executeUiStep(tabId, {
+        type: "remove_item",
+        selector: job.args.selector,
+        text: job.args.text,
+        frame_selector: job.args.frame_selector
+      });
+      return withComposerGateResult(result, composerMark);
+    }
+    return { ok: false, error_message: "browser_input action must be click, type, remove, or key." };
   }
   if (job.tool_name === "zoho_api") {
     const crmError = await assertCrmTab(tabId);
