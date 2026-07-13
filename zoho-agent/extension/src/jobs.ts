@@ -1076,6 +1076,7 @@ function browserObservePageRunner(input?: {
       text: string;
       selector: string;
       remove_selector: string;
+      reveal_on_hover: boolean;
       frame: string;
       x: number;
       y: number;
@@ -1115,7 +1116,10 @@ function browserObservePageRunner(input?: {
       for (const element of Array.from(context.root.querySelectorAll?.(containerSelector) ?? [])) {
         if (!isVisible(element)) continue;
         const remove = element.querySelector(removeSelector);
-        if (!(remove instanceof Element) || !isVisible(remove)) continue;
+        // Some remove controls only become visible while their item is hovered.
+        // Keep them observable so remove_item can hover, re-locate, and click.
+        if (!(remove instanceof Element)) continue;
+        const removeVisible = isVisible(remove);
         const text = textOf(element);
         if (!text) continue;
         const selector = selectorFor(element);
@@ -1128,6 +1132,7 @@ function browserObservePageRunner(input?: {
           text,
           selector,
           remove_selector: removeSelectorForElement,
+          reveal_on_hover: !removeVisible,
           frame: context.frame,
           x: Math.round(context.offsetX + rect.left + rect.width / 2),
           y: Math.round(context.offsetY + rect.top + rect.height / 2)

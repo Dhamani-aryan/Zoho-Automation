@@ -134,7 +134,7 @@ export function decideBrowserAction(
       allowed: false,
       reason: "identical_no_change_retry",
       guidance:
-        "The identical action already produced no observable UI change. Re-plan from the current elements and choose a different affordance or interaction method."
+        "The identical action already produced no observable UI change. Re-plan from the current elements and choose a different affordance or interaction method. If removing a chip, tag, pill, or token by clicking its body did nothing, use browser_input action \"remove\" on that item because its cancel control may be hover-revealed, or focus the field and press Backspace/Delete."
     };
   }
   return { allowed: true, signature, beforeFingerprint: state.observationFingerprint };

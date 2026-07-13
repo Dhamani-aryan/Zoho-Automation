@@ -452,13 +452,27 @@ test("browser observations expose compact refs while preserving composer state",
     title: "Deal",
     composer: { to_chips: ["Test Test"], cc_chips: [], subject: "" },
     snapshot: { id: "snap-1", count: elements.length, elements },
+    removable_items: [
+      {
+        text: "Test Test",
+        selector: ".chip",
+        remove_selector: ".chip .close",
+        reveal_on_hover: true,
+        frame: "top"
+      }
+    ],
     preview: "x".repeat(20_000)
-  }) as { composer: unknown; snapshot: { count: number; elements: Array<Record<string, unknown>> } };
+  }) as {
+    composer: unknown;
+    snapshot: { count: number; elements: Array<Record<string, unknown>> };
+    removable_items: Array<Record<string, unknown>>;
+  };
   assert.deepEqual(compact.composer, { to_chips: ["Test Test"], cc_chips: [], subject: "" });
   assert.equal(compact.snapshot.count, 60);
   assert.equal(compact.snapshot.elements.length, 30);
   assert.equal(compact.snapshot.elements[0].name, "x");
   assert.equal("selector" in compact.snapshot.elements[0], false);
+  assert.equal(compact.removable_items[0].reveal_on_hover, true);
   assert.ok(JSON.stringify(compact).length < 8_000);
 });
 
@@ -514,7 +528,10 @@ test("UI agility requires visible observation, verification, and a different tac
     args: { action: "click", ref: "@e3" }
   });
   assert.equal(identical.allowed, false);
-  if (!identical.allowed) assert.equal(identical.reason, "identical_no_change_retry");
+  if (!identical.allowed) {
+    assert.equal(identical.reason, "identical_no_change_retry");
+    assert.match(identical.guidance, /action "remove"/);
+  }
   assert.equal(
     decideBrowserAction(state, {
       id: "backspace",
