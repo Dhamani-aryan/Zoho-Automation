@@ -1,4 +1,5 @@
-import { claimJob, reportJobDone, reportJobFailed, streamJob, type JobClaimResponse, type ToolJob } from "./api";
+import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
+import { claimJob, realtimeConfig, reportJobDone, reportJobFailed, streamJob, type JobClaimResponse, type ToolJob } from "./api";
 import { zohoPageRunner, type PageResult } from "./page-runner";
 import { zohoApiPageRunner } from "./page-runner-api";
 import { zohoUiPageRunner } from "./page-runner-ui";
@@ -17,9 +18,10 @@ const WRITE_TOOLS = new Set([
   "schedule_zoho_email"
 ]);
 
-const ACTIVE_POLL_MS = 1500;
-const IDLE_POLL_MS = 15000;
+const ACTIVE_POLL_MS = 30000;
+const IDLE_POLL_MS = 60000;
 const IDLE_BACKOFF_AFTER_MS = 5 * 60 * 1000;
+const REALTIME_RECONNECT_MS = 5000;
 const STREAM_RECONNECT_MS = 1000;
 const STREAM_TIMEOUT_MS = 70000;
 const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org890324941/tab/Potentials/custom-view/6834250000000087545/list";
@@ -31,9 +33,13 @@ const AGENT_WINDOW_KEYS = {
 
 let inFlight = false;
 let streamInFlight = false;
+let realtimeStarting = false;
 let idleSince = Date.now();
 let timer: number | undefined;
 let streamTimer: number | undefined;
+let realtimeTimer: number | undefined;
+let realtimeClient: SupabaseClient | null = null;
+let realtimeChannel: RealtimeChannel | null = null;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1950,6 +1956,22 @@ async function pollOnce() {
   }
 }
 
+async function claimAndRunRealtimeJob() {
+  if (inFlight) return;
+  const settings = await loadSettings();
+  if (!settings.enabled) return;
+
+  inFlight = true;
+  try {
+    const claimed = await claimJob(settings);
+    await runClaimedJob(settings, claimed);
+  } catch (error) {
+    await saveLastJobStatus(error instanceof Error ? `Realtime job pickup failed: ${error.message}` : "Realtime job pickup failed.");
+  } finally {
+    inFlight = false;
+  }
+}
+
 async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>, claimed: JobClaimResponse) {
   if (!claimed.job) {
     idleSince = idleSince || Date.now();
@@ -2009,6 +2031,64 @@ function scheduleStreamNext(delayMs = STREAM_RECONNECT_MS) {
   streamTimer = setTimeout(streamLoop, delayMs) as unknown as number;
 }
 
+function scheduleRealtimeReconnect(delayMs = REALTIME_RECONNECT_MS) {
+  if (realtimeTimer !== undefined) clearTimeout(realtimeTimer);
+  realtimeTimer = setTimeout(() => {
+    realtimeTimer = undefined;
+    void connectRealtimeJobs();
+  }, delayMs) as unknown as number;
+}
+
+async function disconnectRealtimeJobs() {
+  if (realtimeChannel && realtimeClient) {
+    await realtimeClient.removeChannel(realtimeChannel);
+  }
+  realtimeChannel = null;
+  realtimeClient = null;
+}
+
+async function connectRealtimeJobs() {
+  if (realtimeStarting || realtimeChannel) return;
+  realtimeStarting = true;
+  try {
+    const settings = await loadSettings();
+    if (!settings.enabled) {
+      scheduleRealtimeReconnect(IDLE_POLL_MS);
+      return;
+    }
+
+    const config = await realtimeConfig(settings);
+    const client = createClient(config.supabase_url, config.supabase_anon_key, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    const channel = client
+      .channel(config.channel, { config: { broadcast: { self: false } } })
+      .on("broadcast", { event: "job_inserted" }, (event) => {
+        const payload = event.payload as { user_id?: unknown; job_id?: unknown };
+        if (payload.user_id !== config.user_id || typeof payload.job_id !== "string") return;
+        void claimAndRunRealtimeJob();
+      });
+
+    realtimeClient = client;
+    realtimeChannel = channel;
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        void saveLastJobStatus("Realtime job channel connected.");
+        return;
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        void saveLastJobStatus(`Realtime job channel ${status.toLowerCase()}; using fallback polling/stream.`);
+        void disconnectRealtimeJobs().finally(() => scheduleRealtimeReconnect());
+      }
+    });
+  } catch (error) {
+    await saveLastJobStatus(error instanceof Error ? `Realtime job channel unavailable: ${error.message}` : "Realtime job channel unavailable.");
+    scheduleRealtimeReconnect();
+  } finally {
+    realtimeStarting = false;
+  }
+}
+
 async function streamLoop() {
   if (streamInFlight) return;
   const settings = await loadSettings();
@@ -2045,6 +2125,10 @@ async function streamLoop() {
 export function startJobStream() {
   if (streamTimer !== undefined) return;
   scheduleStreamNext(0);
+}
+
+export function startRealtimeJobs() {
+  void connectRealtimeJobs();
 }
 
 export function startJobPolling() {

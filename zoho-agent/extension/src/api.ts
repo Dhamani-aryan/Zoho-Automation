@@ -36,6 +36,13 @@ export type JobClaimResponse = {
   };
 };
 
+export type RealtimeConfigResponse = {
+  supabase_url: string;
+  supabase_anon_key: string;
+  channel: string;
+  user_id: string;
+};
+
 export async function appFetch<T>(
   settings: ExtensionSettings,
   path: string,
@@ -111,6 +118,10 @@ export function reportSkipped(settings: ExtensionSettings, itemId: string) {
 
 export function claimJob(settings: ExtensionSettings) {
   return appFetch<JobClaimResponse>(settings, "/api/ext/jobs/claim", { method: "POST" }, 15000);
+}
+
+export function realtimeConfig(settings: ExtensionSettings) {
+  return appFetch<RealtimeConfigResponse>(settings, "/api/ext/realtime", { method: "GET" }, 15000);
 }
 
 export async function streamJob(settings: ExtensionSettings, signal?: AbortSignal): Promise<JobClaimResponse> {
