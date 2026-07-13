@@ -1192,6 +1192,10 @@ async function dispatchTrustedKey(target: chrome.Debuggee, key: string) {
   await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
 }
 
+async function hoverTrusted(target: chrome.Debuggee, x: number, y: number) {
+  await debuggerApi().sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+}
+
 async function replaceFocusedText(target: chrome.Debuggee, value: string) {
   await debuggerApi().sendCommand(target, "Input.dispatchKeyEvent", {
     type: "rawKeyDown",
@@ -1214,7 +1218,181 @@ async function replaceFocusedText(target: chrome.Debuggee, value: string) {
 
 function usesTrustedInput(step: Record<string, unknown>) {
   const type = String(step.type ?? "");
-  return type === "click" || type === "fill_field" || type === "press_key";
+  return type === "click" || type === "fill_field" || type === "press_key" || type === "remove_item";
+}
+
+async function locateRemoveAffordance(tabId: number, step: Record<string, unknown>): Promise<LocatedUiTarget> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (rawStep: Record<string, unknown>) => {
+      function textOf(element: Element) {
+        return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+      }
+      function isVisible(element: Element) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      function frameContext() {
+        const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
+        if (!frameSelector) return { doc: document, offsetX: 0, offsetY: 0 };
+        const frame = document.querySelector(frameSelector);
+        if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
+          return { error: `Frame was not found: ${frameSelector}` };
+        }
+        const rect = frame.getBoundingClientRect();
+        return { doc: frame.contentDocument, offsetX: rect.left, offsetY: rect.top };
+      }
+      function distanceBetween(a: DOMRect, b: DOMRect) {
+        const ax = a.left + a.width / 2;
+        const ay = a.top + a.height / 2;
+        const bx = b.left + b.width / 2;
+        const by = b.top + b.height / 2;
+        return Math.hypot(ax - bx, ay - by);
+      }
+
+      const ctx = frameContext();
+      if ("error" in ctx) return { ok: false, error_message: ctx.error };
+      const doc = ctx.doc;
+      const selector = typeof rawStep.selector === "string" ? rawStep.selector : "";
+      const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
+      const tokenSelector = [
+        "li.selectedEmail",
+        "[role='option']",
+        "[role='listitem']",
+        "[class*='chip']",
+        "[class*='Chip']",
+        "[class*='tag']",
+        "[class*='Tag']",
+        "[class*='pill']",
+        "[class*='Pill']",
+        "[class*='token']",
+        "[class*='Token']",
+        "button",
+        "[role='button']",
+        "span",
+        "div"
+      ].join(",");
+      const removeSelector = [
+        "button[aria-label*='remove' i]",
+        "button[aria-label*='close' i]",
+        "button[aria-label*='delete' i]",
+        "[role='button'][aria-label*='remove' i]",
+        "[role='button'][aria-label*='close' i]",
+        "[role='button'][aria-label*='delete' i]",
+        "[title*='remove' i]",
+        "[title*='close' i]",
+        "[title*='delete' i]",
+        ".closeIconB",
+        ".close",
+        ".remove",
+        ".delete",
+        "[class*='close' i]",
+        "[class*='remove' i]",
+        "[class*='delete' i]",
+        "[aria-label='×']",
+        "[aria-label='x']"
+      ].join(",");
+
+      let item: Element | null = null;
+      if (selector) {
+        const selected = doc.querySelector(selector);
+        item = selected && isVisible(selected) ? selected : null;
+      } else if (text) {
+        const candidates = Array.from(doc.querySelectorAll(tokenSelector)).filter(isVisible);
+        item =
+          candidates.find((candidate) => textOf(candidate).toLowerCase() === text) ??
+          candidates.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
+          null;
+      }
+      if (!item) return { ok: false, error_message: "Removable UI item was not found after hover." };
+
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const itemRect = item.getBoundingClientRect();
+      const scope =
+        item.closest(
+          "[role='dialog'],[aria-modal='true'],.lyteModal,.lytePopup,.modal,.zc-modal,.crm-popup,.popup-model-content,[class*='compose'],[class*='Compose'],[id*='compose'],[id*='Compose'],ul,ol"
+        ) ?? doc;
+      const relatives = [
+        item,
+        item.nextElementSibling,
+        item.previousElementSibling,
+        item.parentElement,
+        item.parentElement?.nextElementSibling,
+        item.parentElement?.previousElementSibling,
+        item.parentElement?.parentElement
+      ].filter(Boolean) as Element[];
+      const localCandidates = relatives.flatMap((relative) => [
+        ...(relative.matches(removeSelector) ? [relative] : []),
+        ...Array.from(relative.querySelectorAll(removeSelector))
+      ]);
+      const scopedCandidates = Array.from(scope.querySelectorAll(removeSelector));
+      const candidates = [...new Set([...localCandidates, ...scopedCandidates])]
+        .map((candidate) => ({ candidate, rect: candidate.getBoundingClientRect() }))
+        .filter(({ candidate, rect }) => {
+          const style = window.getComputedStyle(candidate);
+          const hasBox = rect.width > 0 && rect.height > 0;
+          if (!hasBox || style.visibility === "hidden" || style.display === "none") return false;
+          const verticallyOverlaps = rect.bottom >= itemRect.top - 12 && rect.top <= itemRect.bottom + 12;
+          const nearRightEdge = rect.left >= itemRect.left - 16 && rect.left <= itemRect.right + 48;
+          const insideOrAdjacent = rect.right >= itemRect.left && rect.left <= itemRect.right + 48;
+          return verticallyOverlaps && (nearRightEdge || insideOrAdjacent);
+        })
+        .sort((left, right) => {
+          const rightEdgeBiasLeft = Math.abs(left.rect.left - itemRect.right);
+          const rightEdgeBiasRight = Math.abs(right.rect.left - itemRect.right);
+          return rightEdgeBiasLeft - rightEdgeBiasRight || distanceBetween(itemRect, left.rect) - distanceBetween(itemRect, right.rect);
+        });
+      const remove = candidates[0];
+      if (!remove) {
+        return {
+          ok: false,
+          error_message: "Remove/close control was not found for the matched UI item after trusted hover.",
+          result: {
+            matched_text: textOf(item),
+            matched_tag: item.tagName.toLowerCase(),
+            matched_class: item.getAttribute("class") ?? "",
+            matched_rect: {
+              left: itemRect.left,
+              top: itemRect.top,
+              right: itemRect.right,
+              bottom: itemRect.bottom,
+              width: itemRect.width,
+              height: itemRect.height
+            },
+            nearby_remove_candidates: scopedCandidates.slice(0, 30).map((candidate) => ({
+              tag: candidate.tagName.toLowerCase(),
+              text: textOf(candidate),
+              class: candidate.getAttribute("class") ?? "",
+              aria_label: candidate.getAttribute("aria-label") ?? "",
+              title: candidate.getAttribute("title") ?? "",
+              visible: isVisible(candidate),
+              rect: (() => {
+                const rect = candidate.getBoundingClientRect();
+                return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+              })()
+            }))
+          }
+        };
+      }
+      const view = window;
+      const left = ctx.offsetX + remove.rect.left;
+      const top = ctx.offsetY + remove.rect.top;
+      const x = Math.round(Math.min(Math.max(left + remove.rect.width / 2, 1), view.innerWidth - 1));
+      const y = Math.round(Math.min(Math.max(top + remove.rect.height / 2, 1), view.innerHeight - 1));
+      return {
+        ok: true,
+        x,
+        y,
+        observed: textOf(item),
+        tag_name: remove.candidate.tagName.toLowerCase()
+      };
+    },
+    args: [step]
+  });
+  const located = results?.[0]?.result as LocatedUiTarget | undefined;
+  return located ?? { ok: false, error_message: "Remove affordance locator returned no result." };
 }
 
 async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
@@ -1244,6 +1422,22 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     await ensureLargeViewport(target);
     const located = await locateUiTarget(tabId, step);
     if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result };
+    if (type === "remove_item") {
+      await hoverTrusted(target, located.x, located.y);
+      const remove = await locateRemoveAffordance(tabId, step);
+      if (!remove.ok) return { ok: false, error_message: remove.error_message, result: remove.result };
+      await dispatchTrustedClick(target, remove.x, remove.y);
+      return {
+        ok: true,
+        result: {
+          observed: remove.observed,
+          input_method: "cdp",
+          trusted: true,
+          action: "remove",
+          coordinates: { x: remove.x, y: remove.y }
+        }
+      };
+    }
     if (type === "click") {
       const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
       if (sendGuard) return sendGuard;
@@ -1478,13 +1672,16 @@ async function runBackgroundUiStep(tabId: number, step: Record<string, unknown>)
 
 async function executeUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
   try {
-    const backgroundUiResult = await runBackgroundUiStep(tabId, step);
-    if (backgroundUiResult) return backgroundUiResult;
+    const trusted = usesTrustedInput(step);
+    if (!trusted) {
+      const backgroundUiResult = await runBackgroundUiStep(tabId, step);
+      if (backgroundUiResult) return backgroundUiResult;
+    }
 
     const crmError = await assertCrmTab(tabId);
     if (crmError) return crmError;
 
-    if (usesTrustedInput(step)) {
+    if (trusted) {
       try {
         return await runTrustedUiStep(tabId, step);
       } catch (error) {
