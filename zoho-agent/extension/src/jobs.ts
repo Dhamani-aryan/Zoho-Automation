@@ -124,7 +124,16 @@ async function usableStoredTab(requireDedicated: boolean) {
 }
 
 async function createAgentWindow(url: string) {
-  const created = await chrome.windows.create({ url, focused: false, type: "normal" });
+  const createData = {
+    url,
+    focused: false,
+    type: "normal",
+    width: 1440,
+    height: 2000,
+    left: 0,
+    top: 0
+  } as unknown as Parameters<typeof chrome.windows.create>[0];
+  const created = await chrome.windows.create(createData);
   const tab = created.tabs?.find((item) => typeof item.id === "number") ?? null;
   const tabId = tab?.id ?? null;
   await saveAgentTarget(created.id ?? null, tabId, true);
@@ -831,7 +840,7 @@ async function captureEvidence(tabId?: number) {
 
 type LocatedUiTarget =
   | { ok: true; x: number; y: number; observed: string; tag_name: string }
-  | { ok: false; error_message: string };
+  | { ok: false; error_message: string; result?: unknown };
 
 async function locateUiTarget(tabId: number, step: Record<string, unknown>): Promise<LocatedUiTarget> {
   const results = await chrome.scripting.executeScript({
@@ -855,6 +864,34 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      function scrollableAncestors(element: Element) {
+        const ancestors: Element[] = [];
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = window.getComputedStyle(parent);
+          const overflowY = style.overflowY.toLowerCase();
+          if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollHeight > parent.clientHeight) {
+            ancestors.push(parent);
+          }
+        }
+        return ancestors;
+      }
+      function scrollElementIntoAncestors(element: Element) {
+        for (const ancestor of scrollableAncestors(element)) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const rect = element.getBoundingClientRect();
+          if (rect.top < ancestorRect.top) {
+            ancestor.scrollTop -= ancestorRect.top - rect.top + 12;
+          } else if (rect.bottom > ancestorRect.bottom) {
+            ancestor.scrollTop += rect.bottom - ancestorRect.bottom + 12;
+          }
+        }
+      }
+      function nearestFixedOverlay(element: Element) {
+        for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+          if (window.getComputedStyle(parent).position === "fixed") return parent;
+        }
+        return null;
       }
       function frameContext() {
         const frameSelector = typeof rawStep.frame_selector === "string" ? rawStep.frame_selector : "";
@@ -896,17 +933,39 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
 
       element.scrollIntoView({ block: "center", inline: "center" });
+      scrollElementIntoAncestors(element);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const rect = element.getBoundingClientRect();
-      const x = Math.round(ctx.offsetX + rect.left + rect.width / 2);
-      const y = Math.round(ctx.offsetY + rect.top + rect.height / 2);
-      const view = ctx.doc.defaultView ?? window;
-      if (x < 0 || y < 0 || x > view.innerWidth || y > view.innerHeight) {
+      const view = window;
+      const left = ctx.offsetX + rect.left;
+      const right = ctx.offsetX + rect.right;
+      const top = ctx.offsetY + rect.top;
+      const bottom = ctx.offsetY + rect.bottom;
+      const intersects = bottom > 0 && top < view.innerHeight && right > 0 && left < view.innerWidth;
+      if (!intersects) {
+        const fixedOverlay = nearestFixedOverlay(element);
         return {
           ok: false,
-          error_message: `UI target was found but is outside the clickable viewport after scrolling (${x}, ${y}).`
+          error_message: "UI target was found but is outside the clickable viewport after scrolling.",
+          result: {
+            rect: {
+              left,
+              right,
+              top,
+              bottom,
+              width: rect.width,
+              height: rect.height
+            },
+            innerWidth: view.innerWidth,
+            innerHeight: view.innerHeight,
+            fixed_overlay: Boolean(fixedOverlay),
+            fixed_overlay_tag: fixedOverlay?.tagName.toLowerCase() ?? null,
+            fixed_overlay_class: fixedOverlay?.getAttribute("class") ?? null
+          }
         };
       }
+      const x = Math.round(Math.min(Math.max(left + rect.width / 2, 1), view.innerWidth - 1));
+      const y = Math.round(Math.min(Math.max(top + rect.height / 2, 1), view.innerHeight - 1));
       return {
         ok: true,
         x,
@@ -921,6 +980,12 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
   return located ?? { ok: false, error_message: "UI locator returned no result." };
 }
 
+const EMULATED_VIEWPORT = { width: 1440, height: 2200, deviceScaleFactor: 1, mobile: false };
+
+async function ensureLargeViewport(target: chrome.Debuggee) {
+  await debuggerApi().sendCommand(target, "Emulation.setDeviceMetricsOverride", EMULATED_VIEWPORT);
+}
+
 async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => Promise<T>) {
   const target = { tabId };
   let attached = false;
@@ -930,6 +995,7 @@ async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => 
     return await run(target);
   } finally {
     if (attached) {
+      await debuggerApi().sendCommand(target, "Emulation.clearDeviceMetricsOverride").catch(() => undefined);
       await debuggerApi().detach(target).catch(() => undefined);
     }
   }
@@ -1158,26 +1224,30 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     if (isModifierEnterKey(key)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
     }
-    const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
-    if (enterGuard) return enterGuard;
-    await withDebugger(tabId, async (target) => {
+    const guarded = await withDebugger(tabId, async (target) => {
+      await ensureLargeViewport(target);
       if (typeof step.selector === "string" || typeof step.text === "string") {
         const located = await locateUiTarget(tabId, step);
-        if (!located.ok) throw new Error(located.error_message);
+        if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result } satisfies PageResult;
         await dispatchTrustedClick(target, located.x, located.y);
       }
+      const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
+      if (enterGuard) return enterGuard;
       await dispatchTrustedKey(target, key);
+      return null;
     });
+    if (guarded) return guarded;
     return { ok: true, result: { observed: `trusted key ${key}`, input_method: "cdp", trusted: true } };
   }
 
-  const located = await locateUiTarget(tabId, step);
-  if (!located.ok) throw new Error(located.error_message);
-  if (type === "click") {
-    const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
-    if (sendGuard) return sendGuard;
-  }
   return withDebugger(tabId, async (target) => {
+    await ensureLargeViewport(target);
+    const located = await locateUiTarget(tabId, step);
+    if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result };
+    if (type === "click") {
+      const sendGuard = await assertSendGuardAllowsClick(tabId, located.x, located.y);
+      if (sendGuard) return sendGuard;
+    }
     await dispatchTrustedClick(target, located.x, located.y);
     if (type === "fill_field") {
       await replaceFocusedText(target, String(step.value ?? ""));
