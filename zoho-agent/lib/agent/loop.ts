@@ -1787,9 +1787,26 @@ async function runBrowserEvalTool({
 }
 
 function instructionsForTurn(teachMode: boolean, approvalsEnabled: boolean, guideContext: string) {
+  const modeInstructions = teachMode
+    ? `
+
+TEACH MODE TURN RULES:
+- Re-observe the live Zoho page before acting. Ground the user's latest instruction to one real element by visible text, label, role, aria-label, or current DOM landmark.
+- Perform exactly ONE user-instructed action with the general tools only: zoho_api for data-expressible work, or browser_navigate/browser_observe/browser_input/browser_eval/browser_screenshot for live UI work. Do not use ui_step, save_ui_workflow, run_ui_workflow, or fixed replay click lists.
+- After that one action, verify/read back what changed, report what happened plainly, and wait for the next instruction.
+- If the target is missing or ambiguous, do not guess the closest element. State the relevant visible options or missing evidence and ask one focused question.
+- Keep the teach transcript in the session messages. When the user says "remember this", "make a skill", "save this workflow", or otherwise gives a save signal, distill the transcript into save_skill_guide with intent, method_api and/or method_ui, gotchas, verification, stop_conditions, and params for every varying identity/content/date/value slot.
+- A distilled guide stores method, gotchas, and verification only. It must not include the specific records, Zoho ids, emails, dates, subjects, body text, or other run data from the teach run; those become params. UI selectors are hints to confirm live, never a stale fixed click list. Use one guide-level confirmation, not per-field gates.`
+    : `
+
+REPEAT / EXPLORE TURN RULES:
+- If a routed or listed skill guide matches the request, call read_skill_guide before execution. Resolve this run's records in one db_search_records/db_query call per module where possible, use mirror zoho_url/ids as candidates, then confirm live with zoho_api GET before any write.
+- Execute guide methods adaptively against the live page/API. Confirm selector hints against the current DOM before UI actions; never replay a fixed click list from memory.
+- For batches, do the first record as a sample when useful, then continue under the tool budget and Stop control, verifying each write by read-back.
+- If no guide matches, EXPLORE from first principles on one safe sample when possible, then save or update a method-only skill guide with params for everything that varies.`;
   return `${AGENT_INSTRUCTIONS}
 
-Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. Approval cards are no longer part of normal Zoho CRM execution; zoho_api writes and browser tools run directly, with guardrails and honest read-back reporting.${guideContext}`;
+Current session state: teach_mode is ${teachMode ? "ON" : "OFF"}. Approval cards are no longer part of normal Zoho CRM execution; zoho_api writes and browser tools run directly, with guardrails and honest read-back reporting.${modeInstructions}${guideContext}`;
 }
 
 async function ensureTeachMode(service: SupabaseClient, user: AuthorizedUser, sessionId: string) {
