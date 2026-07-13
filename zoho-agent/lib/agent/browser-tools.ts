@@ -14,7 +14,9 @@ const browserEvalSchema = z.object({
 });
 
 const browserObserveSchema = z.object({
-  scope_selector: optionalSelectorSchema
+  scope_selector: optionalSelectorSchema,
+  target_selector: optionalSelectorSchema,
+  target_text: optionalSelectorSchema
 });
 
 const browserNavigateSchema = z.object({
@@ -55,7 +57,8 @@ const browserInputSchema = z.union([
     selector: optionalSelectorSchema,
     text: optionalSelectorSchema,
     frame_selector: optionalSelectorSchema,
-    key: z.string().trim().min(1).max(40)
+    key: z.string().trim().min(1).max(40),
+    repeat: z.number().int().min(1).max(20).optional()
   })
 ]).superRefine((args, ctx) => {
   if ((args.action === "click" || args.action === "type" || args.action === "remove") && !args.selector && !args.text) {
@@ -72,7 +75,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_observe",
     tier: 1,
     description:
-      "Read the current crm.zoho.com page state: URL, title, visible headings, and visible interactive controls. Read-only and ungated.",
+      "Read the current crm.zoho.com page state. Before manipulating a specific visible item, pass target_selector or target_text to inspect that item, its visible descendants, siblings, nearby hit targets, and pseudo-element content. Read-only and ungated.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -80,6 +83,14 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
         scope_selector: {
           type: "string",
           description: "Optional CSS selector for a dialog, overlay, iframe, or region to observe instead of the full page."
+        },
+        target_selector: {
+          type: "string",
+          description: "Optional CSS selector for an exact element to inspect before interacting with it."
+        },
+        target_text: {
+          type: "string",
+          description: "Optional visible text used to find the smallest matching element and inspect its local controls before interacting."
         }
       }
     }
@@ -113,7 +124,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_input",
     tier: 2,
     description:
-      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance for token/chip/tag/pill-style UI; use this for user requests like remove/cancel/delete a chip, tag, recipient, pill, or selected item instead of clicking the item itself. For key, optionally provide selector/text to focus a target first, then dispatch one key such as Backspace, Enter, Tab, or Escape.",
+      "Dispatch trusted input to the dedicated Zoho tab. For click/type/remove, provide selector or visible text; coordinates are derived from the element rect at action time. For type, the target is clicked, text is inserted, and optional Enter can be pressed. For remove, the extension clicks the target's nearest remove/close/delete affordance. For key, optionally provide selector/text to focus a target first, then dispatch a key such as Backspace, Enter, Tab, or Escape; repeat can send it 1-20 times. Inspect a specific item with browser_observe before manipulating it and verify afterward.",
     parameters: {
       oneOf: [
         {
@@ -160,7 +171,13 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
             selector: { type: "string" },
             text: { type: "string" },
             frame_selector: { type: "string" },
-            key: { type: "string" }
+            key: { type: "string" },
+            repeat: {
+              type: "integer",
+              minimum: 1,
+              maximum: 20,
+              description: "Number of trusted key presses to dispatch after focusing the target. Defaults to 1."
+            }
           }
         }
       ]

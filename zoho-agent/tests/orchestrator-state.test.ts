@@ -331,9 +331,26 @@ test("browser primitives validate navigation and input shapes", () => {
     validateBrowserToolCall({
       id: "input",
       name: "browser_input",
-      args: { action: "key", selector: "#ceToAddr_1", key: "Backspace" }
+      args: { action: "key", selector: "#ceToAddr_1", key: "Backspace", repeat: 3 }
     }).name,
     "browser_input"
+  );
+  assert.equal(
+    validateBrowserToolCall({
+      id: "observe",
+      name: "browser_observe",
+      args: { target_text: "Test Test" }
+    }).name,
+    "browser_observe"
+  );
+  assert.throws(
+    () =>
+      validateBrowserToolCall({
+        id: "input",
+        name: "browser_input",
+        args: { action: "key", selector: "#ceToAddr_1", key: "Backspace", repeat: 21 }
+      }),
+    /expected number to be <=20/
   );
   assert.throws(
     () => validateBrowserToolCall({ id: "input", name: "browser_input", args: { action: "click" } }),

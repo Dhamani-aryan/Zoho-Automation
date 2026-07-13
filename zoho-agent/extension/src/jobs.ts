@@ -370,9 +370,13 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
   }
 }
 
-function browserObservePageRunner(input?: { args?: { scope_selector?: string } }) {
+function browserObservePageRunner(input?: {
+  args?: { scope_selector?: string; target_selector?: string; target_text?: string };
+}) {
   const LIMIT = 16 * 1024;
   const scopeSelector = typeof input?.args?.scope_selector === "string" ? input.args.scope_selector.trim() : "";
+  const targetSelector = typeof input?.args?.target_selector === "string" ? input.args.target_selector.trim() : "";
+  const targetText = typeof input?.args?.target_text === "string" ? input.args.target_text.trim() : "";
 
   type ObserveContext = {
     doc: Document;
@@ -412,13 +416,42 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
   function selectorFor(element: Element) {
     const el = element as HTMLElement;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    const name = el.getAttribute("name");
-    if (name) return `${element.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
-    const aria = el.getAttribute("aria-label");
-    if (aria) return `${element.tagName.toLowerCase()}[aria-label="${CSS.escape(aria)}"]`;
-    const role = el.getAttribute("role");
-    if (role) return `${element.tagName.toLowerCase()}[role="${CSS.escape(role)}"]`;
-    return element.tagName.toLowerCase();
+    const doc = element.ownerDocument;
+    const tag = element.tagName.toLowerCase();
+    for (const attribute of ["data-testid", "data-test", "data-qa", "name", "aria-label", "title", "role"]) {
+      const value = el.getAttribute(attribute);
+      if (!value) continue;
+      const candidate = `${tag}[${attribute}="${CSS.escape(value)}"]`;
+      try {
+        if (doc.querySelectorAll(candidate).length === 1) return candidate;
+      } catch {
+        // Fall through to a structural selector.
+      }
+    }
+    const parts: string[] = [];
+    let current: Element | null = element;
+    while (current && current !== doc.documentElement && parts.length < 5) {
+      const currentTag = current.tagName.toLowerCase();
+      const classes = Array.from(current.classList)
+        .filter((name) => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(name))
+        .slice(0, 2);
+      let part = currentTag + classes.map((name) => `.${CSS.escape(name)}`).join("");
+      const parentElement: Element | null = current.parentElement;
+      if (parentElement) {
+        const currentTagName = current.tagName;
+        const sameTag = Array.from(parentElement.children).filter((child: Element) => child.tagName === currentTagName);
+        if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(current) + 1})`;
+      }
+      parts.unshift(part);
+      const candidate = parts.join(" > ");
+      try {
+        if (doc.querySelectorAll(candidate).length === 1) return candidate;
+      } catch {
+        // Keep adding ancestry.
+      }
+      current = parentElement;
+    }
+    return parts.join(" > ") || tag;
   }
 
   function dialogSelectorFor(element: Element) {
@@ -500,6 +533,162 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
   if (scopeSelector && scoped.contexts.length === 0) {
     return { ok: false, error_message: scoped.warnings.join("; ") || `No visible matches for ${scopeSelector}.` };
   }
+
+  function inspectDescriptor(element: Element, context: ObserveContext, relation: string) {
+    const el = element as HTMLElement;
+    const rect = element.getBoundingClientRect();
+    const view = element.ownerDocument.defaultView ?? window;
+    const style = view.getComputedStyle(element);
+    const pseudoText = ["::before", "::after"]
+      .map((pseudo) => view.getComputedStyle(element, pseudo).content)
+      .filter((content) => content && content !== "none" && content !== "normal" && content !== '""')
+      .map((content) => content.replace(/^['"]|['"]$/g, ""))
+      .join(" ")
+      .slice(0, 80);
+    const directText = Array.from(element.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent ?? "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    const actionText = [
+      directText,
+      pseudoText,
+      el.getAttribute("aria-label") ?? "",
+      el.getAttribute("title") ?? "",
+      el.getAttribute("class") ?? ""
+    ]
+      .join(" ")
+      .toLowerCase();
+    const semanticClickable =
+      element.matches("button,a,input,[role='button'],[role='menuitem'],[tabindex]") ||
+      typeof (el as HTMLElement & { onclick?: unknown }).onclick === "function" ||
+      style.cursor === "pointer";
+    const symbolAffordance = /(^|\s)(x|\u00d7|\u2715|\u2716|close|remove|dismiss|clear|delete)(\s|$)/i.test(actionText);
+    return {
+      relation,
+      tag: element.tagName.toLowerCase(),
+      text: textOf(element),
+      direct_text: directText,
+      selector: selectorFor(element),
+      role: el.getAttribute("role") ?? "",
+      aria_label: el.getAttribute("aria-label") ?? "",
+      title: el.getAttribute("title") ?? "",
+      pseudo_text: pseudoText,
+      cursor: style.cursor,
+      tabindex: el.getAttribute("tabindex"),
+      clickable: semanticClickable,
+      likely_actionable: semanticClickable || symbolAffordance,
+      frame: context.frame,
+      ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
+      rect: {
+        x: Math.round(context.offsetX + rect.left),
+        y: Math.round(context.offsetY + rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    };
+  }
+
+  function targetInspection(contexts: ObserveContext[]) {
+    if (!targetSelector && !targetText) return null;
+    const matches: Array<{ element: Element; context: ObserveContext }> = [];
+    for (const context of contexts) {
+      let candidates: Element[] = [];
+      if (targetSelector) {
+        try {
+          candidates = Array.from(context.root.querySelectorAll?.(targetSelector) ?? []);
+          if (context.root instanceof Element && context.root.matches(targetSelector)) candidates.unshift(context.root);
+        } catch {
+          return { found: false, error_message: `Invalid target_selector: ${targetSelector}` };
+        }
+      } else {
+        const wanted = targetText.toLowerCase();
+        candidates = Array.from(context.root.querySelectorAll?.("*") ?? [])
+          .filter(isVisible)
+          .filter((element) => {
+            const ownText = textOf(element).toLowerCase();
+            const accessible = [
+              element.getAttribute("aria-label"),
+              element.getAttribute("title"),
+              element.getAttribute("placeholder")
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            return ownText === wanted || accessible.includes(wanted);
+          })
+          .sort((left, right) => {
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            return leftRect.width * leftRect.height - rightRect.width * rightRect.height;
+          });
+      }
+      for (const element of candidates.filter(isVisible)) matches.push({ element, context });
+    }
+    const match = matches[0];
+    if (!match) {
+      return {
+        found: false,
+        error_message: targetSelector
+          ? `No visible element matched target_selector: ${targetSelector}`
+          : `No visible element exactly matched target_text: ${targetText}`
+      };
+    }
+
+    const { element: target, context } = match;
+    const candidates: Array<{ element: Element; relation: string }> = [];
+    for (const descendant of Array.from(target.querySelectorAll("*"))) {
+      if (isVisible(descendant)) candidates.push({ element: descendant, relation: "descendant" });
+    }
+    for (const sibling of [target.previousElementSibling, target.nextElementSibling]) {
+      if (sibling && isVisible(sibling)) candidates.push({ element: sibling, relation: "sibling" });
+    }
+    const parent = target.parentElement;
+    if (parent) {
+      for (const element of Array.from(parent.querySelectorAll("*"))) {
+        if (element !== target && !target.contains(element) && isVisible(element)) {
+          candidates.push({ element, relation: "nearby" });
+        }
+      }
+    }
+    const rect = target.getBoundingClientRect();
+    const samplePoints = [
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.right - Math.min(8, rect.width / 4), rect.top + rect.height / 2],
+      [rect.left + Math.min(8, rect.width / 4), rect.top + rect.height / 2]
+    ];
+    for (const [x, y] of samplePoints) {
+      for (const hit of context.doc.elementsFromPoint(x, y)) {
+        if (isVisible(hit)) candidates.push({ element: hit, relation: "hit_target" });
+      }
+    }
+    const seen = new Set<Element>();
+    const local_controls = candidates
+      .filter(({ element }) => {
+        if (seen.has(element)) return false;
+        seen.add(element);
+        return true;
+      })
+      .map(({ element, relation }) => inspectDescriptor(element, context, relation))
+      .sort(
+        (left, right) =>
+          Number(right.likely_actionable) - Number(left.likely_actionable) ||
+          Number(right.clickable) - Number(left.clickable)
+      )
+      .slice(0, 60);
+    return {
+      found: true,
+      requested_by: targetSelector ? { selector: targetSelector } : { text: targetText },
+      target: inspectDescriptor(target, context, "target"),
+      local_controls,
+      guidance:
+        "Choose a visible clickable descendant or nearby control from this fresh evidence. After acting, observe the target again to verify the requested state."
+    };
+  }
+
+  const target_context = targetInspection(scoped.contexts);
 
   const headings = scoped.contexts
     .flatMap((context) =>
@@ -599,6 +788,7 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
       ? "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
       : null,
         composer,
+        target_context,
         removable_items: tokenLikeRemovableItems(allContexts),
         scope_selector: scopeSelector || null,
         frames_observed: allContexts.map((context) => context.frame),
@@ -616,6 +806,7 @@ function browserObservePageRunner(input?: { args?: { scope_selector?: string } }
       recovery_hint: result.recovery_hint,
       verification_hint: result.verification_hint,
       composer: result.composer,
+      target_context: result.target_context,
       removable_items: result.removable_items,
       truncated: true,
       preview: json.slice(0, LIMIT)
@@ -1399,6 +1590,7 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
   const type = String(step.type ?? "");
   if (type === "press_key") {
     const key = String(step.key ?? "");
+    const repeat = Math.min(20, Math.max(1, typeof step.repeat === "number" && Number.isInteger(step.repeat) ? step.repeat : 1));
     if (isModifierEnterKey(key)) {
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
     }
@@ -1409,13 +1601,18 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
         if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result } satisfies PageResult;
         await dispatchTrustedClick(target, located.x, located.y);
       }
-      const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
-      if (enterGuard) return enterGuard;
-      await dispatchTrustedKey(target, key);
+      for (let index = 0; index < repeat; index += 1) {
+        const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, key);
+        if (enterGuard) return enterGuard;
+        await dispatchTrustedKey(target, key);
+      }
       return null;
     });
     if (guarded) return guarded;
-    return { ok: true, result: { observed: `trusted key ${key}`, input_method: "cdp", trusted: true } };
+    return {
+      ok: true,
+      result: { observed: `trusted key ${key}`, repeat, input_method: "cdp", trusted: true }
+    };
   }
 
   return withDebugger(tabId, async (target) => {
@@ -2410,6 +2607,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       const result = await executeUiStep(tabId, {
         type: "press_key",
         key: job.args.key,
+        repeat: job.args.repeat,
         selector: job.args.selector,
         text: job.args.text,
         frame_selector: job.args.frame_selector
