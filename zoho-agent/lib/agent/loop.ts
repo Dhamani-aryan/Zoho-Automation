@@ -981,16 +981,28 @@ export async function runAgentTurn({
     .eq("id", sessionId)
     .is("title", null);
 
+  // Load the MOST RECENT window of the session. This was previously
+  // ascending+limit(80), which returns the OLDEST 80 rows - once a
+  // tool-heavy session grew past 80 messages the model never received the
+  // newest user instruction and would confidently re-answer an old goal
+  // (e.g. "Done - I added the subject and body" to a scheduling request).
+  // responsesInputFromMessages tolerates a window that starts mid-turn:
+  // orphaned tool rows degrade to plain text.
   const { data: rows, error: loadError } = await supabase
     .from("agent_messages")
     .select("role,content,tool_name,tool_args,tool_result")
     .eq("session_id", sessionId)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(80);
   if (loadError) throw loadError;
 
-  const messageRows = (rows ?? []) as AgentMessageRow[];
+  const messageRows = ((rows ?? []) as AgentMessageRow[]).reverse();
   const transcript = messageRowsToPrompt(messageRows);
+  // The current user instruction must always be in the prompt, no matter how
+  // the window was trimmed.
+  if (!transcript.some((message) => message.role === "user" && message.content === content)) {
+    transcript.push({ role: "user", content });
+  }
   const allUserContents = messageRows
     .filter((row) => row.role === "user" && row.content?.trim())
     .map((row) => row.content as string);
