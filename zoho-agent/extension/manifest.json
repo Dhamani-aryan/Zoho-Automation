@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Zoho Workflow Agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Claims approved Zoho workflow runs from the local Zoho Agent app.",
   "permissions": ["alarms", "storage", "tabs", "scripting", "activeTab", "windows", "debugger"],
   "host_permissions": [

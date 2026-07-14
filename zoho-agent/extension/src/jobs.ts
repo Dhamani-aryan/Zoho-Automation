@@ -3723,6 +3723,72 @@ async function claimAndRunRealtimeJob() {
 const EXECUTE_WATCHDOG_MS = 75 * 1000;
 const REPORT_RETRY_DELAYS_MS = [0, 2000, 5000];
 
+// MV3 suspends the service worker ~30 seconds after the last extension API
+// event; bare timers and long in-job awaits do not reset that clock. A
+// suspension mid-job silently destroys the running job (and its watchdog),
+// which the backend then surfaces as "picked this job up but never reported
+// a result". Two defenses:
+// - keepalive: ping a trivial extension API every 15s while a job runs;
+// - orphan recovery: persist the in-flight job id and, if a fresh worker
+//   lifetime finds one, report that job failed immediately instead of
+//   letting the backend wait out its full timeout.
+const INFLIGHT_JOB_KEY = "inflight_agent_job";
+let jobKeepaliveTimer: ReturnType<typeof setInterval> | undefined;
+
+function startJobKeepalive() {
+  if (jobKeepaliveTimer !== undefined) return;
+  jobKeepaliveTimer = setInterval(() => {
+    chrome.storage.local.get({ [INFLIGHT_JOB_KEY]: null }, () => undefined);
+  }, 15 * 1000);
+}
+
+function stopJobKeepalive() {
+  if (jobKeepaliveTimer === undefined) return;
+  clearInterval(jobKeepaliveTimer);
+  jobKeepaliveTimer = undefined;
+}
+
+function setInflightJob(jobId: string | null): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [INFLIGHT_JOB_KEY]: jobId }, resolve);
+  });
+}
+
+function readInflightJob(): Promise<string | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [INFLIGHT_JOB_KEY]: null }, (items) => {
+      const value = items[INFLIGHT_JOB_KEY];
+      resolve(typeof value === "string" && value ? value : null);
+    });
+  });
+}
+
+// Snapshot the persisted in-flight id at module evaluation (before any new
+// claim can run in this worker lifetime) so recovery never races a new job.
+const inflightJobAtStartup = readInflightJob();
+
+async function failOrphanedInflightJob() {
+  try {
+    const orphanId = await inflightJobAtStartup;
+    if (!orphanId) return;
+    await setInflightJob(null);
+    const settings = await loadSettings();
+    if (!settings.enabled || !settings.token.trim()) return;
+    // The backend rejects reports for jobs that already reached a terminal
+    // state, so this is safe even when the stale id was already resolved.
+    await reportJobFailed(
+      settings,
+      orphanId,
+      "The extension service worker restarted while this job was running, so it did not complete. Ask again."
+    ).catch(() => undefined);
+    await saveLastJobStatus(`Reported orphaned job ${orphanId} as failed after a service-worker restart.`);
+  } catch {
+    // Best-effort recovery only.
+  }
+}
+
+void failOrphanedInflightJob();
+
 async function reportWithRetry(run: () => Promise<unknown>) {
   let lastError: unknown = null;
   for (const delay of REPORT_RETRY_DELAYS_MS) {
@@ -3746,57 +3812,64 @@ async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>,
 
   idleSince = 0;
   const job = claimed.job;
-  await saveLastJobStatus(`Claimed ${job.tool_name} (${job.id}).`);
-
-  let response: PageResult;
+  await setInflightJob(job.id);
+  startJobKeepalive();
   try {
-    // Tab check AFTER claim: a missing CRM tab now reports an actionable
-    // failure within seconds instead of leaving the job queued until the
-    // backend's 90s wait expires.
-    const tab = await crmTabForJob(job);
-    if (!tab?.id) {
+    await saveLastJobStatus(`Claimed ${job.tool_name} (${job.id}).`);
+
+    let response: PageResult;
+    try {
+      // Tab check AFTER claim: a missing CRM tab now reports an actionable
+      // failure within seconds instead of leaving the job queued until the
+      // backend's 90s wait expires.
+      const tab = await crmTabForJob(job);
+      if (!tab?.id) {
+        response = {
+          ok: false,
+          error_message:
+            "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again."
+        };
+      } else {
+        await saveLastJobStatus(`Running ${job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
+        response = await Promise.race([
+          executeInTab(tab.id, job),
+          sleep(EXECUTE_WATCHDOG_MS).then(
+            (): PageResult => ({
+              ok: false,
+              error_message: `${job.tool_name} did not finish within ${Math.round(
+                EXECUTE_WATCHDOG_MS / 1000
+              )}s inside the extension. The Zoho tab may be stuck; refresh the crm.zoho.com tab and try again.`
+            })
+          )
+        ]);
+      }
+    } catch (error) {
       response = {
         ok: false,
-        error_message:
-          "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again."
+        error_message: `Extension job crashed: ${error instanceof Error ? error.message : "unknown error"}.`
       };
-    } else {
-      await saveLastJobStatus(`Running ${job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
-      response = await Promise.race([
-        executeInTab(tab.id, job),
-        sleep(EXECUTE_WATCHDOG_MS).then(
-          (): PageResult => ({
-            ok: false,
-            error_message: `${job.tool_name} did not finish within ${Math.round(
-              EXECUTE_WATCHDOG_MS / 1000
-            )}s inside the extension. The Zoho tab may be stuck; refresh the crm.zoho.com tab and try again.`
-          })
-        )
-      ]);
     }
-  } catch (error) {
-    response = {
-      ok: false,
-      error_message: `Extension job crashed: ${error instanceof Error ? error.message : "unknown error"}.`
-    };
-  }
 
-  const delivered = response.ok
-    ? await reportWithRetry(() => reportJobDone(settings, job.id, response.result ?? null))
-    : await reportWithRetry(() =>
-        reportJobFailed(settings, job.id, response.error_message ?? "Zoho job failed.", response.error_code, response.result)
+    const delivered = response.ok
+      ? await reportWithRetry(() => reportJobDone(settings, job.id, response.result ?? null))
+      : await reportWithRetry(() =>
+          reportJobFailed(settings, job.id, response.error_message ?? "Zoho job failed.", response.error_code, response.result)
+        );
+
+    if (response.ok) {
+      await saveLastJobStatus(
+        delivered
+          ? `Completed ${job.tool_name} (${job.id}).`
+          : `Completed ${job.tool_name} (${job.id}) but could not deliver the result to the backend.`
       );
-
-  if (response.ok) {
-    await saveLastJobStatus(
-      delivered
-        ? `Completed ${job.tool_name} (${job.id}).`
-        : `Completed ${job.tool_name} (${job.id}) but could not deliver the result to the backend.`
-    );
-  } else {
-    await saveLastJobStatus(
-      `Failed ${job.tool_name}: ${response.error_message ?? "unknown error"}${delivered ? "" : " (report delivery also failed)"}`
-    );
+    } else {
+      await saveLastJobStatus(
+        `Failed ${job.tool_name}: ${response.error_message ?? "unknown error"}${delivered ? "" : " (report delivery also failed)"}`
+      );
+    }
+  } finally {
+    stopJobKeepalive();
+    await setInflightJob(null);
   }
 }
 
