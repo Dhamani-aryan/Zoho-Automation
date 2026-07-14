@@ -99,7 +99,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_observe",
     tier: 1,
     description:
-      "Capture the current crm.zoho.com page as a ranked interactive snapshot. Returns stable @eN refs with roles, accessible names, primary/fallback selectors, frame scope, state, and geometry. Use those refs with browser_input. Pass target_selector or target_text for extra local descendants, siblings, hit targets, and pseudo-element content. Read-only and ungated.",
+      "Capture the current crm.zoho.com page as a ranked interactive snapshot. Returns stable @eN refs with roles, accessible names, primary/fallback selectors, frame scope, state, and geometry. Composer chrome (recipient inputs, chips, Cc/Bcc reveal links) is boosted in ranking, and chip remove controls that only render on hover are included as refs flagged hidden_until_hover=true (browser_input hovers the chip automatically for those). Use those refs with browser_input. Pass target_selector or target_text for extra local descendants, siblings, hit targets, and pseudo-element content. Read-only and ungated.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -148,7 +148,7 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     name: "browser_input",
     tier: 2,
     description:
-      "Act on the current Zoho page using a fresh browser_observe snapshot. Prefer an @eN ref; the extension resolves its primary and fallback selectors and rejects stale refs. Supports click, type, key, hover, focus, clear, select, check, uncheck, and semantic remove. Trusted CDP is used for pointer/keyboard input. key repeat sends 1-20 presses. Observe again afterward to verify state.",
+      "Act on the current Zoho page using a fresh browser_observe snapshot. Prefer an @eN ref; the extension resolves its primary and fallback selectors and rejects stale refs. Supports click, type, key, hover, focus, clear, select, check, uncheck, and semantic remove. Trusted CDP is used for pointer/keyboard input. type returns real read-back: observed is the element's actual post-input value plus verified; typing into Zoho recipient To/Cc fields auto-commits the chip with Enter (press_enter defaults to true there) and returns committed_to_chips/committed_cc_chips with email attributes - check verified and the chips instead of assuming success. Refs flagged hidden_until_hover are chip remove controls; click/remove on them hovers the chip first. key repeat sends 1-20 presses. Observe again afterward to verify state.",
     parameters: {
       oneOf: [
         {
@@ -174,7 +174,11 @@ export const BROWSER_TOOL_DEFINITIONS: AgentToolDefinition[] = [
             text: { type: "string" },
             frame_selector: { type: "string" },
             value: { type: "string" },
-            press_enter: { type: "boolean" }
+            press_enter: {
+              type: "boolean",
+              description:
+                "Press trusted Enter after typing. Defaults to true for Zoho recipient (To/Cc) chip fields so the chip commits; set false there to leave the text uncommitted. Defaults to false everywhere else."
+            }
           }
         },
         {

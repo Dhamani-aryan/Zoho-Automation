@@ -58,6 +58,10 @@ import {
 } from "@/lib/agent/ui-agility";
 
 const TOOL_RESULT_CHAR_LIMIT = 8000;
+// browser_observe returns the compact page snapshot the model must act on;
+// truncating it at the generic limit silently drops the element refs and
+// removable_items evidence, so it gets a larger budget.
+const OBSERVE_RESULT_CHAR_LIMIT = 16000;
 
 export type AgentStreamEvent =
   | { type: "assistant_delta"; text: string }
@@ -149,7 +153,8 @@ Workflows and guides:
 - When the user attaches or references a CRM work Markdown file, infer the requested operations from its sections: email fields mean schedule the email, New tasks means create those tasks, and Tasks to complete or Closed tasks means complete those exact tasks. An attachment-only message, "Process this", or "Do this" is a complete instruction; do not ask the user to restate the actions. Parse all rules, body, CC, subject, task sections, and contact sections. Resolve missing contact email and all Zoho Contact/Account/Deal/task ids and links yourself using Supabase mirror search first and live Zoho when current identity matters. Use contact email as the strongest supplied key, then contact name + account/company + deal name. Do not ask the user for links, email addresses that CRM can resolve, tool choices, selectors, or a walkthrough. Stop only for true identity ambiguity, missing required body/subject, or a missing schedule date/time the file/request does not specify.
 - For every structured email scheduling request, parse the complete input first. Resolve Contact -> Account -> Deal with db_* and zoho_api, duplicate-check requested Tasks against the exact Deal before any POST, create/complete only missing/open Tasks with zoho_api POST/PUT plus API read-back behavior, adopt already-open/already-completed requested Tasks as verified when they match exactly, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
 - Email composer recipient reconciliation is desired-state work, not a fixed removal recipe. Read committed To/Cc identities and inputs, compare them case-insensitively with the requested address sets, and preserve values that are already correct. For any mismatch, reason from the current snapshot and local target context to choose the most appropriate visible affordance or keyboard interaction. Verify the committed identities after every action. After Enter, wait until no recipient is unresolved (for example Loading, missing email identity, or pending state) before judging success. Remove duplicates adaptively and stop only when committed recipients and leftover inputs exactly match the requested state. A blank requested CC means no CC.
-- To remove or cancel a recipient chip, call browser_input with action "remove" targeting the chip by its email/text (or its @eN ref). Do not click the chip body and do not search only for a visible X/close ref: browser_observe.removable_items can list a hover-hidden cancel control with reveal_on_hover=true, and the remove action hovers before resolving and clicking that control. After removal, re-observe and confirm by email identity that the chip is absent. If no control is found after hover, focus the recipient field and try Backspace/Delete once, then verify.
+- To remove or cancel a recipient chip, call browser_input with action "remove" targeting the chip by its email/text (or its @eN ref). Do not click the chip body and do not search only for a visible X/close ref: browser_observe.removable_items can list a hover-hidden cancel control with reveal_on_hover=true, and the remove action hovers before resolving and clicking that control. browser_observe also surfaces hover-hidden chip remove controls as refs flagged hidden_until_hover=true; click or remove on such a ref automatically hovers the chip first. After removal, re-observe and confirm by email identity that the chip is absent. If no control is found after hover, focus the recipient field and try Backspace/Delete once, then verify.
+- browser_input type returns real read-back: observed is the element's actual post-input value, verified tells whether it matches the request, and recipient fields also return committed_to_chips/committed_cc_chips with email attributes. Typing into a To/Cc recipient field auto-commits the chip with Enter (press_enter defaults to true there; pass false to leave text uncommitted). Never treat a type result with verified=false as success; observe, correct, and re-verify instead.
 - Compose trigger method: page-level "Send Email" or "Compose Email" controls open the composer; they are not send-now actions. After clicking a compose trigger, re-observe with a short bounded wait for the composer to mount before declaring that it failed. Detect the mounted composer through recipient chip/input chrome plus #ecw_signature, including same-origin iframes and overlay/dialog containers.
 - Composer gotchas: autocomplete can hijack Enter. After every chip Enter, assert that the committed chip email attribute equals the intended address exactly; if the wrong suggestion committed, remove that chip, dismiss the dropdown with Escape, and retry. A red or invalid chip is failure evidence, never success. Wait out Loading chips before judging. Cc and Bcc inputs exist only after their reveal controls are clicked. The composer may autosave a Draft once touched; ignore Drafts as evidence and verify Scheduled instead. Body inserted above #ecw_signature should match the signature font, Verdana around 13.3px, and preserve the blank-line gap before the signature.
 - General visible-item recovery: browser_observe returns Chrome Controller-style ranked @eN refs with roles, names, frame scope, and selector fallbacks. Prefer refs over hand-written selectors. For chips, tags, pills, or tokens whose remove control is hover-revealed, use browser_input action "remove" instead of repeatedly clicking the item body. If a click or removal fails or returns stale_ref, do not repeat the identical action: re-observe, choose the newly evidenced descendant or nearby control, then try semantic remove, hover, click, or focused repeated Backspace/Delete as appropriate. Use browser_eval only when the normal snapshot/input surface cannot expose the control. Never claim that an item was clicked or removed unless follow-up observation proves the requested state.
@@ -184,13 +189,13 @@ function stringifyForModel(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
-function truncateToolResult(value: unknown) {
+function truncateToolResult(value: unknown, limit = TOOL_RESULT_CHAR_LIMIT) {
   const text = stringifyForModel(value);
-  if (text.length <= TOOL_RESULT_CHAR_LIMIT) return value;
+  if (text.length <= limit) return value;
   return {
     truncated: true,
     original_char_count: text.length,
-    preview: text.slice(0, TOOL_RESULT_CHAR_LIMIT)
+    preview: text.slice(0, limit)
   };
 }
 
@@ -1226,7 +1231,10 @@ export async function runAgentTurn({
         uiRecoveryRequired = true;
       }
 
-      const truncated = truncateToolResult(result);
+      const truncated = truncateToolResult(
+        result,
+        call.name === "browser_observe" ? OBSERVE_RESULT_CHAR_LIMIT : TOOL_RESULT_CHAR_LIMIT
+      );
       await supabase.from("agent_messages").insert({
         session_id: sessionId,
         role: "tool",

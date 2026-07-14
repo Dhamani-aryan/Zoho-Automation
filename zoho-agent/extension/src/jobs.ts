@@ -131,6 +131,10 @@ async function resolveBrowserSnapshotRef(
       alternative_selectors: element.alternative_selectors ?? [],
       ...(element.frame_selector ? { frame_selector: element.frame_selector } : {}),
       ...(element.frame_selectors ? { frame_selectors: element.frame_selectors } : {}),
+      ...(element.hidden_until_hover === true ? { hidden_until_hover: true } : {}),
+      ...(typeof element.container_selector === "string" && element.container_selector
+        ? { container_selector: element.container_selector }
+        : {}),
       snapshot_id: snapshot.id,
       ref
     }
@@ -304,11 +308,11 @@ async function browserEvalPageRunner(job: { args: Record<string, unknown> }) {
       return false;
     }
     function rootHasComposerRecipients(root: Element) {
-      return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+      return Boolean(root.querySelector("[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
     }
     function isInsideComposerSurface(element: Element) {
       const directComposerElement = element.closest(
-        "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+        "[id^='ceSubject_'],[id^='ceToAddr_'],[id^='ceCCAddr_'],#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
       );
       if (directComposerElement) return true;
       const composerRootSelector =
@@ -813,7 +817,7 @@ function browserObservePageRunner(input?: {
           const dialogSelector = dialogSelectorFor(element);
           const value = valueOf(element);
           const composerEvidence = element.matches(
-            "#ceToAddr_1,#ceCCAddr_1,#ceSubject_1,#editorDiv,#ecw_signature,[id^='ceToAddrDetails'] li.selectedEmail,[id^='ceCCAddrDetails'] li.selectedEmail"
+            "[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceSubject_'],#editorDiv,#ecw_signature,[id^='ceToAddrDetails'] li.selectedEmail,[id^='ceCCAddrDetails'] li.selectedEmail"
           );
           return {
             tag: element.tagName.toLowerCase(),
@@ -948,10 +952,13 @@ function browserObservePageRunner(input?: {
           .trim();
         const symbolControl = /^(x|\u00d7|\u2715|\u2716)$/i.test(directText) ||
           /(^|[-_])(close|remove|dismiss|clear|delete)([-_]|$)/i.test(source.getAttribute("class") ?? "");
-        if (sourceRole === "generic" && !symbolControl) return null;
+        // Cc/Bcc reveal links are plain spans/divs; keep them even when no
+        // implicit role or pointer cursor marks them as interactive.
+        const revealControl = /^(cc|bcc)$/i.test(directText);
+        if (sourceRole === "generic" && !symbolControl && !revealControl) return null;
         const target = actionableElementFor(source, sourceRole);
         const role = implicitRole(target) === "generic" ? sourceRole : implicitRole(target);
-        const snapshotRole = symbolControl && role === "generic" ? "clickable" : role;
+        const snapshotRole = (symbolControl || revealControl) && role === "generic" ? "clickable" : role;
         const selectors = selectorCandidatesFor(target);
         if (selectors.length === 0) return null;
         const rect = target.getBoundingClientRect();
@@ -961,6 +968,16 @@ function browserObservePageRunner(input?: {
         const activeSurface = Boolean(
           source.closest("dialog,[role='dialog'],[aria-modal='true'],[class*='modal' i],[class*='popup' i],[class*='compose' i]")
         );
+        // Composer chrome (recipient inputs, chips, subject, Cc/Bcc reveal
+        // links) must outrank the composer toolbar buttons so they survive
+        // the compact snapshot cap.
+        const composerChromeSelector =
+          "[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceSubject_'],[id^='ceToAddrDetails'] li.selectedEmail,[id^='ceCCAddrDetails'] li.selectedEmail";
+        const composerChrome =
+          source.matches(composerChromeSelector) ||
+          target.matches(composerChromeSelector) ||
+          Boolean(source.closest("[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']")) ||
+          (revealControl && activeSurface);
         return {
           role: snapshotRole,
           name,
@@ -981,14 +998,60 @@ function browserObservePageRunner(input?: {
           _priority:
             (inViewport ? 100 : 0) +
             (activeSurface ? 100 : 0) +
+            (composerChrome ? 150 : 0) +
             ({ button: 80, link: 70, textbox: 75, searchbox: 75, combobox: 75, checkbox: 65, radio: 65, clickable: 60, focusable: 40 }[snapshotRole] ?? 20) +
             (name ? 10 : 0)
         };
       })
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
   );
+  // Chip/token remove controls that are hidden until hover never pass the
+  // isVisible filter above, so the model would otherwise get no ref for them.
+  // Surface them explicitly with hidden_until_hover=true plus the visible
+  // chip container; browser_input routes such refs through the hover-first
+  // remove flow.
+  const hiddenRemoveCandidates = scoped.contexts.flatMap((context) =>
+    Array.from(
+      context.root.querySelectorAll?.(
+        "li.selectedEmail,[role='option'],[role='listitem'],[class*='chip' i],[class*='tag' i],[class*='pill' i],[class*='token' i]"
+      ) ?? []
+    )
+      .filter(isVisible)
+      .map((item) => {
+        const remove = item.querySelector(
+          "[aria-label*='remove' i],[aria-label*='close' i],[aria-label*='delete' i],[title*='remove' i],[title*='close' i],[title*='delete' i],.closeIconB,[class*='close' i],[class*='remove' i],[class*='delete' i]"
+        );
+        if (!(remove instanceof Element) || isVisible(remove)) return null;
+        const selectors = selectorCandidatesFor(remove);
+        if (selectors.length === 0) return null;
+        const itemText = textOf(item);
+        if (!itemText) return null;
+        const rect = item.getBoundingClientRect();
+        const view = item.ownerDocument.defaultView ?? window;
+        const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+        return {
+          role: "button",
+          name: `Remove ${itemText}`.slice(0, 180),
+          tag: remove.tagName.toLowerCase(),
+          selector: selectors[0],
+          alternative_selectors: selectors.slice(1, 5),
+          frame: context.frame,
+          ...(context.frameSelector ? { frame_selector: context.frameSelector } : {}),
+          ...(context.frameSelectors.length > 1 ? { frame_selectors: context.frameSelectors } : {}),
+          disabled: false,
+          checked: null,
+          hidden_until_hover: true,
+          container_selector: selectorFor(item),
+          in_viewport: inViewport,
+          x: Math.round(context.offsetX + rect.right - Math.min(10, rect.width / 4)),
+          y: Math.round(context.offsetY + rect.top + rect.height / 2),
+          _priority: (inViewport ? 100 : 0) + 100 + 150 + 80
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  );
   const snapshotSeen = new Set<string>();
-  const snapshotElements = snapshotCandidates
+  const snapshotElements = [...snapshotCandidates, ...hiddenRemoveCandidates]
     .sort((left, right) => right._priority - left._priority)
     .filter((item) => {
       const key = `${item.frame}|${item.selector}`;
@@ -1004,13 +1067,29 @@ function browserObservePageRunner(input?: {
     return allContexts.flatMap((context) => Array.from(context.doc.querySelectorAll(selector)));
   }
 
-  const subject = elementsAcrossContexts("#ceSubject_1")[0] ?? null;
-  const toInput = elementsAcrossContexts("#ceToAddr_1")[0] ?? null;
-  const ccInput = elementsAcrossContexts("#ceCCAddr_1")[0] ?? null;
-  const editor = elementsAcrossContexts("#editorDiv")[0] ?? null;
-  const signature = elementsAcrossContexts("#ecw_signature")[0] ?? null;
-  const toChips = elementsAcrossContexts('[id^="ceToAddrDetails"] li.selectedEmail').map(textOf).filter(Boolean);
-  const ccChips = elementsAcrossContexts('[id^="ceCCAddrDetails"] li.selectedEmail').map(textOf).filter(Boolean);
+  // Zoho increments composer id suffixes (ceSubject_1, ceSubject_2, ...) when
+  // composers are reopened. Prefer the last visible instance (the most
+  // recently mounted composer) and never assume the _1 instance is current.
+  function pickComposerElement(selector: string) {
+    const matches = elementsAcrossContexts(selector);
+    const visible = matches.filter(isVisible);
+    if (visible.length > 0) return visible[visible.length - 1];
+    return matches.length > 0 ? matches[matches.length - 1] : null;
+  }
+
+  function composerChipTexts(selector: string) {
+    const matches = elementsAcrossContexts(selector);
+    const visible = matches.filter(isVisible);
+    return (visible.length > 0 ? visible : matches).map(textOf).filter(Boolean);
+  }
+
+  const subject = pickComposerElement("[id^='ceSubject_']");
+  const toInput = pickComposerElement("[id^='ceToAddr_']");
+  const ccInput = pickComposerElement("[id^='ceCCAddr_']");
+  const editor = pickComposerElement("#editorDiv");
+  const signature = pickComposerElement("#ecw_signature");
+  const toChips = composerChipTexts('[id^="ceToAddrDetails"] li.selectedEmail');
+  const ccChips = composerChipTexts('[id^="ceCCAddrDetails"] li.selectedEmail');
   const composerDetected = Boolean(subject || toInput || editor || signature || toChips.length || ccChips.length);
   const composer = composerDetected
     ? {
@@ -1212,7 +1291,7 @@ async function composerDetectedInTab(tabId: number) {
         return false;
       }
       function rootHasComposerRecipients(root: ParentNode) {
-        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+        return Boolean(root.querySelector("[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
       }
       function hasComposer(doc: Document) {
         if (doc.querySelector("#ecw_signature,#editorDiv")) return true;
@@ -1292,7 +1371,15 @@ async function captureEvidence(tabId?: number) {
 }
 
 type LocatedUiTarget =
-  | { ok: true; x: number; y: number; observed: string; tag_name: string }
+  | {
+      ok: true;
+      x: number;
+      y: number;
+      observed: string;
+      tag_name: string;
+      is_recipient_field?: boolean;
+      recipient_kind?: "to" | "cc" | null;
+    }
   | { ok: false; error_message: string; result?: unknown };
 
 async function locateUiTarget(tabId: number, step: Record<string, unknown>): Promise<LocatedUiTarget> {
@@ -1459,12 +1546,21 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
       const x = Math.round(Math.min(Math.max(left + rect.width / 2, 1), view.innerWidth - 1));
       const y = Math.round(Math.min(Math.max(top + rect.height / 2, 1), view.innerHeight - 1));
+      // Zoho recipient chip fields ([id^='ceToAddr_'] / [id^='ceCCAddr_'])
+      // only commit text into a chip on a key event, so callers must know
+      // when they are typing into one.
+      const ccField =
+        element.matches("[id^='ceCCAddr_']") || Boolean(element.closest("[id^='ceCCAddrDetails']"));
+      const toField =
+        element.matches("[id^='ceToAddr_']") || Boolean(element.closest("[id^='ceToAddrDetails']"));
       return {
         ok: true,
         x,
         y,
         observed: valueOf(element),
-        tag_name: element.tagName.toLowerCase()
+        tag_name: element.tagName.toLowerCase(),
+        is_recipient_field: ccField || toField,
+        recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null
       };
     },
     args: [step]
@@ -1473,12 +1569,12 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
   return located ?? { ok: false, error_message: "UI locator returned no result." };
 }
 
-const EMULATED_VIEWPORT = { width: 1440, height: 2200, deviceScaleFactor: 1, mobile: false };
-
-async function ensureLargeViewport(target: chrome.Debuggee) {
-  await debuggerApi().sendCommand(target, "Emulation.setDeviceMetricsOverride", EMULATED_VIEWPORT);
-}
-
+// NOTE: trusted input intentionally runs against the tab's real viewport.
+// A per-action Emulation.setDeviceMetricsOverride used to force a 1440x2200
+// layout for every click, which reflowed the page between coordinate
+// measurement and CDP dispatch and made small targets (recipient chips,
+// chip remove icons, Cc/Bcc links) miss. Coordinates are now measured in the
+// same layout the events are dispatched into.
 async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => Promise<T>) {
   const target = { tabId };
   let attached = false;
@@ -1488,7 +1584,6 @@ async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => 
     return await run(target);
   } finally {
     if (attached) {
-      await debuggerApi().sendCommand(target, "Emulation.clearDeviceMetricsOverride").catch(() => undefined);
       await debuggerApi().detach(target).catch(() => undefined);
     }
   }
@@ -1541,11 +1636,11 @@ async function assertSendGuardAllowsClick(tabId: number, x: number, y: number): 
         return false;
       }
       function rootHasComposerRecipients(root: Element) {
-        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+        return Boolean(root.querySelector("[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
       }
       function isInsideComposerSurface(element: Element) {
         const directComposerElement = element.closest(
-          "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+          "[id^='ceSubject_'],[id^='ceToAddr_'],[id^='ceCCAddr_'],#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
         );
         if (directComposerElement) return true;
         const composerRootSelector =
@@ -1618,11 +1713,11 @@ async function assertSendGuardAllowsFocusedEnter(tabId: number, key: string): Pr
         return false;
       }
       function rootHasComposerRecipients(root: Element) {
-        return Boolean(root.querySelector("#ceToAddr_1,#ceCCAddr_1,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
+        return Boolean(root.querySelector("[id^='ceToAddr_'],[id^='ceCCAddr_'],[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"));
       }
       function isInsideComposerSurface(element: Element) {
         const directComposerElement = element.closest(
-          "#ceSubject_1,#ceToAddr_1,#ceCCAddr_1,#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
+          "[id^='ceSubject_'],[id^='ceToAddr_'],[id^='ceCCAddr_'],#editorDiv,#ecw_signature,#z_editor,[id^='ceToAddrDetails'],[id^='ceCCAddrDetails']"
         );
         if (directComposerElement) return true;
         const composerRootSelector =
@@ -1918,6 +2013,126 @@ async function locateRemoveAffordance(tabId: number, step: Record<string, unknow
   return located ?? { ok: false, error_message: "Remove affordance locator returned no result." };
 }
 
+type FilledFieldReadBack = {
+  found: boolean;
+  value: string | null;
+  to_chips: Array<{ text: string; email: string | null }>;
+  cc_chips: Array<{ text: string; email: string | null }>;
+  to_input: string | null;
+  cc_input: string | null;
+};
+
+// Read the actual post-input state of a filled field: the element's real
+// value plus the committed recipient chips. This is the evidence returned to
+// the model instead of echoing the requested value back as "observed".
+async function readFilledFieldState(tabId: number, step: Record<string, unknown>): Promise<FilledFieldReadBack | null> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (rawStep: Record<string, unknown>) => {
+      function isVisible(element: Element) {
+        const rect = element.getBoundingClientRect();
+        const style = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      function valueOf(element: Element) {
+        if (
+          element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement
+        ) {
+          return element.value;
+        }
+        if (element instanceof HTMLElement && element.isContentEditable) {
+          return (element.innerText || element.textContent || "").replace(/\r/g, "").trim();
+        }
+        return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+      }
+      function frameContext() {
+        const frameSelectors = Array.isArray(rawStep.frame_selectors)
+          ? rawStep.frame_selectors.filter((value): value is string => typeof value === "string" && Boolean(value))
+          : typeof rawStep.frame_selector === "string" && rawStep.frame_selector
+            ? [rawStep.frame_selector]
+            : [];
+        let doc = document;
+        for (const frameSelector of frameSelectors) {
+          const frame = doc.querySelector(frameSelector) as HTMLIFrameElement | null;
+          if (!frame || !frame.contentDocument) return document;
+          doc = frame.contentDocument;
+        }
+        return doc;
+      }
+      function composerDocs() {
+        const docs: Document[] = [document];
+        for (const iframe of document.querySelectorAll("iframe")) {
+          try {
+            if (iframe instanceof HTMLIFrameElement && iframe.contentDocument) docs.push(iframe.contentDocument);
+          } catch {
+            // Cross-origin frames are not the Zoho composer surface.
+          }
+        }
+        return docs;
+      }
+      function acrossDocs(selector: string) {
+        return composerDocs().flatMap((doc) => [...doc.querySelectorAll(selector)]);
+      }
+      function chipData(selector: string) {
+        const matches = acrossDocs(selector);
+        const visible = matches.filter(isVisible);
+        return (visible.length > 0 ? visible : matches).map((element) => ({
+          text: (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 160),
+          email:
+            (element.getAttribute("email") || element.getAttribute("title") || "").trim().toLowerCase() || null
+        }));
+      }
+      function inputValue(selector: string) {
+        const matches = acrossDocs(selector);
+        const visible = matches.filter(isVisible);
+        const input = visible[visible.length - 1] ?? matches[matches.length - 1] ?? null;
+        return input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement ? input.value : null;
+      }
+
+      const doc = frameContext();
+      const selectors = [
+        typeof rawStep.selector === "string" ? rawStep.selector : "",
+        ...(Array.isArray(rawStep.alternative_selectors)
+          ? rawStep.alternative_selectors.filter((value): value is string => typeof value === "string")
+          : [])
+      ].filter(Boolean);
+      let element: Element | null = null;
+      for (const selector of selectors) {
+        let matches: Element[] = [];
+        try {
+          matches = Array.from(doc.querySelectorAll(selector));
+        } catch {
+          continue;
+        }
+        const visible = matches.filter(isVisible);
+        element = visible[0] ?? matches[0] ?? null;
+        if (element) break;
+      }
+      if (!element && doc.activeElement instanceof Element && doc.activeElement !== doc.body) {
+        element = doc.activeElement;
+      }
+      return {
+        found: Boolean(element),
+        value: element ? valueOf(element) : null,
+        to_chips: chipData('[id^="ceToAddrDetails"] li.selectedEmail'),
+        cc_chips: chipData('[id^="ceCCAddrDetails"] li.selectedEmail'),
+        to_input: inputValue("[id^='ceToAddr_']"),
+        cc_input: inputValue("[id^='ceCCAddr_']")
+      };
+    },
+    args: [step]
+  });
+  const readback = results?.[0]?.result as FilledFieldReadBack | undefined;
+  return readback ?? null;
+}
+
+function chipMatchesRequested(chip: { text: string; email: string | null }, requestedLower: string) {
+  return (chip.email ?? "").includes(requestedLower) || chip.text.toLowerCase().includes(requestedLower);
+}
+
 async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
   const type = String(step.type ?? "");
   if (type === "press_key") {
@@ -1927,7 +2142,6 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
       return { ok: false, error_message: SEND_NOW_BLOCKED_MESSAGE, result: { send_now_blocked: true } };
     }
     const guarded = await withDebugger(tabId, async (target) => {
-      await ensureLargeViewport(target);
       if (typeof step.selector === "string" || typeof step.text === "string") {
         const located = await locateUiTarget(tabId, step);
         if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result } satisfies PageResult;
@@ -1948,7 +2162,6 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
   }
 
   return withDebugger(tabId, async (target) => {
-    await ensureLargeViewport(target);
     const located = await locateUiTarget(tabId, step);
     if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result };
     if (type === "remove_item") {
@@ -1986,16 +2199,67 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     }
     await dispatchTrustedClick(target, located.x, located.y);
     if (type === "fill_field") {
-      await replaceFocusedText(target, String(step.value ?? ""));
-      if (step.press_enter === true) {
+      const requested = String(step.value ?? "");
+      const requestedLower = requested.trim().toLowerCase();
+      await replaceFocusedText(target, requested);
+      const isRecipient = located.is_recipient_field === true;
+      // Recipient chip fields commit only on a key event; Input.insertText
+      // alone never tokenizes. Default press_enter to true for them unless
+      // the caller explicitly opted out.
+      const shouldEnter =
+        step.press_enter === true || (isRecipient && step.press_enter !== false && requestedLower !== "");
+      if (shouldEnter) {
         const enterGuard = await assertSendGuardAllowsFocusedEnter(tabId, "Enter");
         if (enterGuard) return enterGuard;
         await dispatchTrustedKey(target, "Enter");
       }
+      let readback = await readFilledFieldState(tabId, step);
+      if (isRecipient && requestedLower) {
+        // Wait for the chip to commit (autocomplete resolution can lag).
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+          const chips = [...(readback?.to_chips ?? []), ...(readback?.cc_chips ?? [])];
+          const committed = chips.some((chip) => chipMatchesRequested(chip, requestedLower));
+          const loading = chips.some((chip) => /loading/i.test(chip.text));
+          if (committed && !loading) break;
+          await sleep(250);
+          readback = await readFilledFieldState(tabId, step);
+        }
+      }
+      const actual = readback?.found ? readback.value ?? "" : null;
+      const relevantChips = isRecipient
+        ? located.recipient_kind === "cc"
+          ? readback?.cc_chips ?? []
+          : located.recipient_kind === "to"
+            ? readback?.to_chips ?? []
+            : [...(readback?.to_chips ?? []), ...(readback?.cc_chips ?? [])]
+        : [];
+      const verified = isRecipient && requestedLower !== ""
+        ? relevantChips.some((chip) => chipMatchesRequested(chip, requestedLower))
+        : actual !== null && actual.trim() === requested.trim();
       return {
         ok: true,
         result: {
-          observed: String(step.value ?? ""),
+          observed: actual,
+          requested_value: requested,
+          verified,
+          ...(isRecipient
+            ? {
+                recipient_field: located.recipient_kind ?? true,
+                chip_committed: verified,
+                press_enter_applied: shouldEnter,
+                committed_to_chips: readback?.to_chips ?? [],
+                committed_cc_chips: readback?.cc_chips ?? [],
+                to_input: readback?.to_input ?? null,
+                cc_input: readback?.cc_input ?? null
+              }
+            : {}),
+          ...(verified
+            ? {}
+            : {
+                warning:
+                  "Read-back did not confirm the requested value. Do not assume the field is set; observe the current state and correct it before proceeding."
+              }),
           input_method: "cdp",
           trusted: true,
           coordinates: { x: located.x, y: located.y }
@@ -2485,8 +2749,7 @@ async function clearComposerAddresses(tabId: number) {
           if (close instanceof HTMLElement) close.click();
         }
       }
-      for (const id of ["ceToAddr_1", "ceCCAddr_1"]) {
-        const input = document.getElementById(id);
+      for (const input of document.querySelectorAll("[id^='ceToAddr_'],[id^='ceCCAddr_']")) {
         if (input instanceof HTMLInputElement) input.value = "";
       }
       return { cleared: true };
@@ -2500,7 +2763,11 @@ async function revealCcInput(tabId: number) {
     target: { tabId },
     world: "MAIN",
     func: () => {
-      const input = document.getElementById("ceCCAddr_1");
+      function ccInput() {
+        const matches = [...document.querySelectorAll("[id^='ceCCAddr_']")];
+        return matches.find((element) => element.getBoundingClientRect().width > 0) ?? matches[matches.length - 1] ?? null;
+      }
+      const input = ccInput();
       if (input instanceof HTMLElement && input.getBoundingClientRect().width > 0) return { visible: true };
       const candidates = [...document.querySelectorAll("a,button,span,div")].filter((element) => {
         const rect = element.getBoundingClientRect();
@@ -2508,7 +2775,7 @@ async function revealCcInput(tabId: number) {
       });
       const candidate = candidates.find((element) => element.closest('[role="dialog"],.lyteModal,.modal')) ?? candidates[0];
       if (candidate instanceof HTMLElement) candidate.click();
-      const next = document.getElementById("ceCCAddr_1");
+      const next = ccInput();
       return { visible: next instanceof HTMLElement && next.getBoundingClientRect().width > 0 };
     }
   });
@@ -2520,7 +2787,11 @@ async function setComposerContent(tabId: number, args: EmailJobArgs) {
     target: { tabId },
     world: "MAIN",
     func: (subject: string, body: string) => {
-      const subjectInput = document.getElementById("ceSubject_1");
+      const subjectMatches = [...document.querySelectorAll("[id^='ceSubject_']")];
+      const subjectInput =
+        subjectMatches.find((element) => element.getBoundingClientRect().width > 0) ??
+        subjectMatches[subjectMatches.length - 1] ??
+        null;
       const frame = document.getElementById("z_editor");
       if (!(subjectInput instanceof HTMLInputElement)) throw new Error("Composer subject field is missing.");
       if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) throw new Error("Composer body frame is missing.");
@@ -2599,12 +2870,18 @@ async function readComposerVerification(tabId: number) {
       const frameDocument = frame instanceof HTMLIFrameElement ? frame.contentDocument : null;
       const editor = frameDocument?.getElementById("editorDiv") ?? null;
       const signature = frameDocument?.getElementById("ecw_signature") ?? null;
+      function fieldValue(selector: string) {
+        const matches = [...document.querySelectorAll(selector)] as HTMLInputElement[];
+        const visible = matches.filter((element) => element.getBoundingClientRect().width > 0);
+        const input = visible[visible.length - 1] ?? matches[matches.length - 1] ?? null;
+        return input?.value ?? "";
+      }
       return {
         to: chipEmails('[id^="ceToAddrDetails"] li.selectedEmail'),
         cc: chipEmails('[id^="ceCCAddrDetails"] li.selectedEmail'),
-        to_input: (document.getElementById("ceToAddr_1") as HTMLInputElement | null)?.value ?? "",
-        cc_input: (document.getElementById("ceCCAddr_1") as HTMLInputElement | null)?.value ?? "",
-        subject: (document.getElementById("ceSubject_1") as HTMLInputElement | null)?.value ?? "",
+        to_input: fieldValue("[id^='ceToAddr_']"),
+        cc_input: fieldValue("[id^='ceCCAddr_']"),
+        subject: fieldValue("[id^='ceSubject_']"),
         body_text: editor?.innerText ?? "",
         signature_present: Boolean(signature && editor?.contains(signature))
       };
@@ -2660,7 +2937,7 @@ async function configureAndSubmitSchedule(tabId: number, date: string, time: Ret
         time: `${hour}:${minute} ${ampm}`,
         timezone: expectedTimezone,
         popup_still_open: Boolean(popup && !popup.className.includes("hide")),
-        composer_open: Boolean(document.getElementById("ceSubject_1")),
+        composer_open: Boolean(document.querySelector("[id^='ceSubject_']")),
         success_text: [...document.querySelectorAll("body *")]
           .map((element) => (element.textContent ?? "").trim())
           .find((text) => /mail has been scheduled successfully/i.test(text)) ?? ""
@@ -2749,12 +3026,12 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
   phaseStarted = Date.now();
   let compose = await executeUiStep(tabId, { type: "click", selector: 'button[aria-label="Send Email"]' });
   let composerReady = compose.ok
-    ? await executeUiStep(tabId, { type: "wait_for", selector: "#ceToAddr_1", timeout_ms: 10000 })
+    ? await executeUiStep(tabId, { type: "wait_for", selector: "[id^='ceToAddr_']", timeout_ms: 10000 })
     : compose;
   if (!composerReady.ok) {
     compose = await executeUiStep(tabId, { type: "click", text: "Compose Email" });
     composerReady = compose.ok
-      ? await executeUiStep(tabId, { type: "wait_for", selector: "#ceToAddr_1", timeout_ms: 10000 })
+      ? await executeUiStep(tabId, { type: "wait_for", selector: "[id^='ceToAddr_']", timeout_ms: 10000 })
       : compose;
   }
   if (!composerReady.ok) return fail("COMPOSER_OPEN_FAILED", composerReady.error_message ?? "Composer did not open.");
@@ -2762,7 +3039,7 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
 
   const toFill = await executeUiStep(tabId, {
     type: "fill_field",
-    selector: "#ceToAddr_1",
+    selector: "[id^='ceToAddr_']",
     value: args.to,
     press_enter: true
   });
@@ -2775,7 +3052,7 @@ async function runScheduleZohoEmail(tabId: number, job: ToolJob): Promise<PageRe
     for (const cc of args.cc) {
       const ccFill = await executeUiStep(tabId, {
         type: "fill_field",
-        selector: "#ceCCAddr_1",
+        selector: "[id^='ceCCAddr_']",
         value: cc,
         press_enter: true
       });
@@ -2944,11 +3221,20 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       frame_selector: target.frame_selector,
       frame_selectors: target.frame_selectors
     };
+    // Snapshot refs flagged hidden_until_hover point at chip remove controls
+    // that only render while their container is hovered. Route them through
+    // the hover-first remove flow against the visible container instead of
+    // clicking an invisible element.
+    const hiddenUntilHover = target.hidden_until_hover === true;
+    const containerSelector = typeof target.container_selector === "string" ? target.container_selector : "";
+    const hoverFirstArgs =
+      hiddenUntilHover && containerSelector
+        ? { ...targetArgs, selector: containerSelector, alternative_selectors: [] }
+        : null;
     if (action === "click") {
-      const result = await executeUiStep(tabId, {
-        type: "click",
-        ...targetArgs
-      });
+      const result = hoverFirstArgs
+        ? await executeUiStep(tabId, { type: "remove_item", ...hoverFirstArgs })
+        : await executeUiStep(tabId, { type: "click", ...targetArgs });
       return withComposerGateResult(result, composerMark);
     }
     if (action === "type") {
@@ -2972,7 +3258,7 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
     if (action === "remove") {
       const result = await executeUiStep(tabId, {
         type: "remove_item",
-        ...targetArgs
+        ...(hoverFirstArgs ?? targetArgs)
       });
       return withComposerGateResult(result, composerMark);
     }
