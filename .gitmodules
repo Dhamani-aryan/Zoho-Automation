@@ -1,0 +1,3 @@
+[submodule "chrome-controller"]
+	path = chrome-controller
+	url = https://github.com/ank1015/chrome-controller.git

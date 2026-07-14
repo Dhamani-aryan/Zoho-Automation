@@ -492,6 +492,25 @@ function browserObservePageRunner(input?: {
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
 
+  // Zoho pages routinely host DOM injected by unrelated browser extensions
+  // (Apollo, Grammarly, LastPass, Loom, etc). Those nodes are frequently
+  // nameless clickables that pollute the snapshot and can outrank real Zoho
+  // controls, so they must never be surfaced as refs/controls.
+  const THIRD_PARTY_INJECTED_PATTERN =
+    /apollo|grammarly|lastpass|loom|honey|zoominfo|hubspot-extension|linkedin-extension|extension-root/i;
+  const ZOHO_TAG_PREFIX_PATTERN = /^(lyte|crm|zc)-/i;
+  function isThirdPartyInjected(element: Element): boolean {
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const id = node.getAttribute("id") ?? "";
+      const className = node.getAttribute("class") ?? "";
+      if (THIRD_PARTY_INJECTED_PATTERN.test(id) || THIRD_PARTY_INJECTED_PATTERN.test(className)) return true;
+      const tag = node.tagName.toLowerCase();
+      if (tag.includes("-") && !ZOHO_TAG_PREFIX_PATTERN.test(tag)) return true;
+      if (node === node.ownerDocument.documentElement) break;
+    }
+    return false;
+  }
+
   function textOf(element: Element) {
     return (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
   }
@@ -812,6 +831,7 @@ function browserObservePageRunner(input?: {
         ) ?? []
       )
         .filter(isVisible)
+        .filter((element) => !isThirdPartyInjected(element))
         .map((element) => {
           const el = element as HTMLElement;
           const rect = element.getBoundingClientRect();
@@ -944,6 +964,7 @@ function browserObservePageRunner(input?: {
     Array.from(context.root.querySelectorAll?.("*") ?? [])
       .filter(isVisible)
       .map((source) => {
+        if (isThirdPartyInjected(source)) return null;
         const sourceRole = implicitRole(source);
         const directText = Array.from(source.childNodes)
           .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -1019,6 +1040,7 @@ function browserObservePageRunner(input?: {
     )
       .filter(isVisible)
       .map((item) => {
+        if (isThirdPartyInjected(item)) return null;
         const remove = item.querySelector(
           "[aria-label*='remove' i],[aria-label*='close' i],[aria-label*='delete' i],[title*='remove' i],[title*='close' i],[title*='delete' i],.closeIconB,[class*='close' i],[class*='remove' i],[class*='delete' i]"
         );
@@ -1228,6 +1250,7 @@ function browserObservePageRunner(input?: {
     for (const context of contexts) {
       for (const element of Array.from(context.root.querySelectorAll?.(containerSelector) ?? [])) {
         if (!isVisible(element)) continue;
+        if (isThirdPartyInjected(element)) continue;
         const remove = element.querySelector(removeSelector);
         // Some remove controls only become visible while their item is hovered.
         // Keep them observable so remove_item can hover, re-locate, and click.
