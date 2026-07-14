@@ -1455,6 +1455,7 @@ type LocatedUiTarget =
       y: number;
       observed: string;
       tag_name: string;
+      located_selector: string;
       is_recipient_field?: boolean;
       recipient_kind?: "to" | "cc" | null;
       is_schedule_time_field?: boolean;
@@ -1538,6 +1539,47 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       }
       const ctx = frameContext();
       if ("error" in ctx) return { ok: false, error_message: ctx.error };
+
+      function selectorFor(target: Element) {
+        const el = target as HTMLElement;
+        if (el.id) return `#${CSS.escape(el.id)}`;
+        const doc = target.ownerDocument;
+        const tag = target.tagName.toLowerCase();
+        for (const attribute of ["data-testid", "data-test", "data-qa", "name", "aria-label", "title", "role"]) {
+          const value = el.getAttribute(attribute);
+          if (!value) continue;
+          const candidate = `${tag}[${attribute}="${CSS.escape(value)}"]`;
+          try {
+            if (doc.querySelectorAll(candidate).length === 1) return candidate;
+          } catch {
+            // Fall through to a structural selector.
+          }
+        }
+        const parts: string[] = [];
+        let current: Element | null = target;
+        while (current && current !== doc.documentElement && parts.length < 5) {
+          const currentTag = current.tagName.toLowerCase();
+          const classes = Array.from(current.classList)
+            .filter((name) => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(name))
+            .slice(0, 2);
+          let part = currentTag + classes.map((name) => `.${CSS.escape(name)}`).join("");
+          const parentElement: Element | null = current.parentElement;
+          if (parentElement) {
+            const currentTagName = current.tagName;
+            const sameTag = Array.from(parentElement.children).filter((child: Element) => child.tagName === currentTagName);
+            if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(current) + 1})`;
+          }
+          parts.unshift(part);
+          const candidate = parts.join(" > ");
+          try {
+            if (doc.querySelectorAll(candidate).length === 1) return candidate;
+          } catch {
+            // Keep adding ancestry.
+          }
+          current = parentElement;
+        }
+        return parts.join(" > ") || tag;
+      }
 
       const selectors = [
         typeof rawStep.selector === "string" ? rawStep.selector : "",
@@ -1757,6 +1799,7 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         y,
         observed: valueOf(element),
         tag_name: element.tagName.toLowerCase(),
+        located_selector: selectorFor(element),
         is_recipient_field: ccField || toField,
         recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null,
         is_schedule_time_field: scheduleTimeField,
@@ -2395,6 +2438,124 @@ async function readFilledFieldState(tabId: number, step: Record<string, unknown>
   return readback ?? null;
 }
 
+type FocusCheckResult =
+  | { ok: true; focused: true }
+  | { ok: true; focused: false; actual: string }
+  | { ok: false; error_message: string };
+
+// Ctrl+A + Input.insertText acts on whatever element currently has focus, not
+// necessarily the element the click was aimed at (Zoho's composer autofocuses
+// the body editor, so a missed click can silently destroy its content -
+// including the signature). Verify focus actually landed on the located
+// element (or a descendant of it, e.g. a contenteditable child) before any
+// typing is allowed; refocus once if not, then give up rather than guess.
+async function verifyFocusBeforeTyping(
+  tabId: number,
+  step: Record<string, unknown>,
+  locatedSelector?: string
+): Promise<FocusCheckResult> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (rawStep: Record<string, unknown>, rawLocatedSelector: string) => {
+      function isVisible(element: Element) {
+        const rect = element.getBoundingClientRect();
+        const style = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      function frameContext() {
+        const frameSelectors = Array.isArray(rawStep.frame_selectors)
+          ? rawStep.frame_selectors.filter((value): value is string => typeof value === "string" && Boolean(value))
+          : typeof rawStep.frame_selector === "string" && rawStep.frame_selector
+            ? [rawStep.frame_selector]
+            : [];
+        let doc = document;
+        for (const frameSelector of frameSelectors) {
+          const frame = doc.querySelector(frameSelector) as HTMLIFrameElement | null;
+          if (!frame || !frame.contentDocument) return document;
+          doc = frame.contentDocument;
+        }
+        return doc;
+      }
+      // The truly focused node can be nested arbitrarily deep through shadow
+      // roots and same-origin iframes; document.activeElement only reports
+      // the shallowest host in that chain.
+      function deepActiveElement(): Element | null {
+        let active: Element | null = document.activeElement;
+        while (active) {
+          if (active.shadowRoot?.activeElement) {
+            active = active.shadowRoot.activeElement;
+            continue;
+          }
+          if (active instanceof HTMLIFrameElement) {
+            try {
+              const inner = active.contentDocument?.activeElement ?? null;
+              if (inner) {
+                active = inner;
+                continue;
+              }
+            } catch {
+              // Cross-origin frame; cannot inspect its activeElement.
+            }
+          }
+          break;
+        }
+        return active;
+      }
+      function describe(element: Element | null) {
+        if (!element) return "nothing (document.body/no focus)";
+        const tag = element.tagName.toLowerCase();
+        const id = (element as HTMLElement).id ? `#${(element as HTMLElement).id}` : "";
+        const className =
+          typeof element.className === "string" && element.className.trim()
+            ? `.${element.className.trim().split(/\s+/).join(".")}`
+            : "";
+        return `${tag}${id}${className}`;
+      }
+
+      const doc = frameContext();
+      const selectors = [
+        typeof rawLocatedSelector === "string" ? rawLocatedSelector : "",
+        typeof rawStep.selector === "string" ? rawStep.selector : "",
+        ...(Array.isArray(rawStep.alternative_selectors)
+          ? rawStep.alternative_selectors.filter((value): value is string => typeof value === "string")
+          : [])
+      ].filter(Boolean);
+      let element: Element | null = null;
+      for (const selector of selectors) {
+        let matches: Element[] = [];
+        try {
+          matches = Array.from(doc.querySelectorAll(selector));
+        } catch {
+          continue;
+        }
+        const visible = matches.filter(isVisible);
+        element = visible[0] ?? matches[0] ?? null;
+        if (element) break;
+      }
+      if (!element) return { ok: false as const, error_message: "Focus check could not resolve the located element." };
+
+      const isFocused = () => {
+        const active = deepActiveElement();
+        return active !== null && (active === element || (element as Element).contains(active));
+      };
+      if (isFocused()) return { ok: true as const, focused: true as const };
+
+      (element as HTMLElement).focus?.();
+      if (isFocused()) return { ok: true as const, focused: true as const };
+
+      return { ok: true as const, focused: false as const, actual: describe(deepActiveElement()) };
+    },
+    args: [step, locatedSelector ?? ""]
+  });
+  return (
+    (results?.[0]?.result as FocusCheckResult | undefined) ?? {
+      ok: false,
+      error_message: "Focus check returned no result."
+    }
+  );
+}
+
 // Mirrors the leading/trailing-blank-line trim replaceEditorBodyPreservingSignature
 // applies to the requested body before rendering it, so the verified check
 // compares like with like instead of raw string equality.
@@ -2784,6 +2945,23 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
         // No #ecw_signature to preserve - fall through to the generic flow.
       }
 
+      // Ctrl+A + Input.insertText types into whatever has focus, not
+      // necessarily the clicked target - a missed click (e.g. Zoho's
+      // composer autofocusing the body editor) would otherwise destroy
+      // whatever element actually has focus, signature included. Verify
+      // focus landed on the located element before typing anything.
+      const focusCheck = await verifyFocusBeforeTyping(tabId, step, located.located_selector);
+      if (!focusCheck.ok) {
+        return { ok: false, error_message: focusCheck.error_message };
+      }
+      if (!focusCheck.focused) {
+        const selectorLabel = typeof step.selector === "string" && step.selector ? step.selector : "the located element";
+        return {
+          ok: false,
+          error_message: `Could not focus ${selectorLabel} before typing; the click landed elsewhere (focus was on ${focusCheck.actual}). Nothing was typed. Re-observe and retry.`
+        };
+      }
+
       await replaceFocusedText(target, requested);
       const isRecipient = located.is_recipient_field === true;
       // Recipient chip fields commit only on a key event; Input.insertText
@@ -2826,6 +3004,7 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
           observed: actual,
           requested_value: requested,
           verified,
+          focus_verified: true,
           ...(isRecipient
             ? {
                 recipient_field: located.recipient_kind ?? true,
@@ -4299,3 +4478,4 @@ export function startJobPolling() {
 export function pollAgentJobOnce() {
   return pollOnce();
 }
+
