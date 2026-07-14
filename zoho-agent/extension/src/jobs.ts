@@ -3360,6 +3360,31 @@ async function claimAndRunRealtimeJob() {
   }
 }
 
+// A claimed job must ALWAYS report a terminal result: if the extension
+// claims a job and then crashes, hangs, or cannot deliver the report, the
+// backend waits out its full timeout and surfaces "picked this job up but
+// never reported a result". Guard all three failure modes:
+// - watchdog: bound executeInTab below the backend's 90s job timeout;
+// - crash: catch every throw between claim and report;
+// - delivery: retry the report POST (the Next.js server may be restarting).
+const EXECUTE_WATCHDOG_MS = 75 * 1000;
+const REPORT_RETRY_DELAYS_MS = [0, 2000, 5000];
+
+async function reportWithRetry(run: () => Promise<unknown>) {
+  let lastError: unknown = null;
+  for (const delay of REPORT_RETRY_DELAYS_MS) {
+    if (delay) await sleep(delay);
+    try {
+      await run();
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  console.warn("[agent-jobs] Report delivery failed after retries.", lastError);
+  return false;
+}
+
 async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>, claimed: JobClaimResponse) {
   if (!claimed.job) {
     idleSince = idleSince || Date.now();
@@ -3367,35 +3392,58 @@ async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>,
   }
 
   idleSince = 0;
-  await saveLastJobStatus(`Claimed ${claimed.job.tool_name} (${claimed.job.id}).`);
+  const job = claimed.job;
+  await saveLastJobStatus(`Claimed ${job.tool_name} (${job.id}).`);
 
-  // Tab check AFTER claim: a missing CRM tab now reports an actionable
-  // failure within seconds instead of leaving the job queued until the
-  // backend's 90s wait expires.
-  const tab = await crmTabForJob(claimed.job);
-  if (!tab?.id) {
-    const message =
-      "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again.";
-    await reportJobFailed(settings, claimed.job.id, message);
-    await saveLastJobStatus(`Failed ${claimed.job.tool_name}: no crm.zoho.com agent window.`);
-    return;
+  let response: PageResult;
+  try {
+    // Tab check AFTER claim: a missing CRM tab now reports an actionable
+    // failure within seconds instead of leaving the job queued until the
+    // backend's 90s wait expires.
+    const tab = await crmTabForJob(job);
+    if (!tab?.id) {
+      response = {
+        ok: false,
+        error_message:
+          "Could not open a dedicated crm.zoho.com window in this Chrome profile. Open Zoho CRM in a tab and ask again."
+      };
+    } else {
+      await saveLastJobStatus(`Running ${job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
+      response = await Promise.race([
+        executeInTab(tab.id, job),
+        sleep(EXECUTE_WATCHDOG_MS).then(
+          (): PageResult => ({
+            ok: false,
+            error_message: `${job.tool_name} did not finish within ${Math.round(
+              EXECUTE_WATCHDOG_MS / 1000
+            )}s inside the extension. The Zoho tab may be stuck; refresh the crm.zoho.com tab and try again.`
+          })
+        )
+      ]);
+    }
+  } catch (error) {
+    response = {
+      ok: false,
+      error_message: `Extension job crashed: ${error instanceof Error ? error.message : "unknown error"}.`
+    };
   }
 
-  await saveLastJobStatus(`Running ${claimed.job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
-  const response = await executeInTab(tab.id, claimed.job);
+  const delivered = response.ok
+    ? await reportWithRetry(() => reportJobDone(settings, job.id, response.result ?? null))
+    : await reportWithRetry(() =>
+        reportJobFailed(settings, job.id, response.error_message ?? "Zoho job failed.", response.error_code, response.result)
+      );
 
   if (response.ok) {
-    await reportJobDone(settings, claimed.job.id, response.result ?? null);
-    await saveLastJobStatus(`Completed ${claimed.job.tool_name} (${claimed.job.id}).`);
-  } else {
-    await reportJobFailed(
-      settings,
-      claimed.job.id,
-      response.error_message ?? "Zoho job failed.",
-      response.error_code,
-      response.result
+    await saveLastJobStatus(
+      delivered
+        ? `Completed ${job.tool_name} (${job.id}).`
+        : `Completed ${job.tool_name} (${job.id}) but could not deliver the result to the backend.`
     );
-    await saveLastJobStatus(`Failed ${claimed.job.tool_name}: ${response.error_message ?? "unknown error"}`);
+  } else {
+    await saveLastJobStatus(
+      `Failed ${job.tool_name}: ${response.error_message ?? "unknown error"}${delivered ? "" : " (report delivery also failed)"}`
+    );
   }
 }
 
