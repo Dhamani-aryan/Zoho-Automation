@@ -1113,11 +1113,17 @@ function browserObservePageRunner(input?: {
     elementsAcrossContexts("#etSchedulePopId").find(
       (element) => isVisible(element) && !(element.getAttribute("class") ?? "").includes("hide")
     ) ?? null;
+  // The popover may render without the #etSchedulePopId wrapper in some CRM
+  // builds; fall back to its distinctive visible time field.
+  const scheduleTimeFieldEl = elementsAcrossContexts("#schTimeMail").find(isVisible) ?? null;
+  const scheduleContext = scheduleRoot ?? (scheduleTimeFieldEl ? scheduleTimeFieldEl.ownerDocument : null);
   function scheduleFieldValue(selector: string) {
-    const field = scheduleRoot?.querySelector(selector) ?? null;
+    const scope: ParentNode = scheduleRoot ?? scheduleContext ?? document;
+    const field = scope.querySelector(selector) ?? null;
     return field instanceof HTMLInputElement || field instanceof HTMLSelectElement ? field.value : null;
   }
-  const schedulePopup = scheduleRoot
+  const schedulePopupOpen = Boolean(scheduleRoot || scheduleTimeFieldEl);
+  const schedulePopup = schedulePopupOpen
     ? {
         open: true,
         date: scheduleFieldValue("#startDate"),
@@ -1408,6 +1414,7 @@ type LocatedUiTarget =
       recipient_kind?: "to" | "cc" | null;
       is_schedule_time_field?: boolean;
       is_schedule_date_field?: boolean;
+      is_schedule_trigger?: boolean;
     }
   | { ok: false; error_message: string; result?: unknown };
 
@@ -1588,6 +1595,22 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
       const inSchedulePopup = Boolean(element.closest("#etSchedulePopId"));
       const scheduleTimeField = inSchedulePopup && element.matches("#schTimeMail");
       const scheduleDateField = inSchedulePopup && element.matches("#startDate");
+      // The composer's bottom-bar "Schedule" control opens the schedule
+      // popover; it is NOT the "Schedule"/"Schedule & Close" buttons inside
+      // the popup. Clicking it should be followed by a bounded wait for the
+      // popup to mount, so the click result reflects reality instead of
+      // racing an immediate observe.
+      const clickableLabel = [
+        (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+        element.getAttribute("aria-label") ?? "",
+        element.getAttribute("title") ?? ""
+      ]
+        .map((value) => value.toLowerCase())
+        .filter(Boolean);
+      const scheduleTrigger =
+        !inSchedulePopup &&
+        !element.closest("#etSchedulePopId") &&
+        clickableLabel.some((label) => label === "schedule" || label === "schedule email");
       return {
         ok: true,
         x,
@@ -1597,7 +1620,8 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         is_recipient_field: ccField || toField,
         recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null,
         is_schedule_time_field: scheduleTimeField,
-        is_schedule_date_field: scheduleDateField
+        is_schedule_date_field: scheduleDateField,
+        is_schedule_trigger: scheduleTrigger
       };
     },
     args: [step]
@@ -2327,6 +2351,57 @@ async function commitScheduleDate(tabId: number, requested: string): Promise<Pag
   };
 }
 
+async function readSchedulePopupState(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      function isVisible(element: Element) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }
+      // Detect the popup by its container OR by its distinctive fields, and
+      // require it to be actually visible (not just present with a hide class).
+      const root =
+        [...document.querySelectorAll("#etSchedulePopId")].find(
+          (element) => isVisible(element) && !(element.getAttribute("class") ?? "").includes("hide")
+        ) ?? null;
+      const timeField = document.querySelector("#schTimeMail");
+      const dateField = document.querySelector("#startDate");
+      const open = Boolean(root) || (timeField instanceof HTMLElement && isVisible(timeField));
+      if (!open) return { open: false };
+      function value(selector: string) {
+        const field = (root ?? document).querySelector(selector);
+        return field instanceof HTMLInputElement || field instanceof HTMLSelectElement ? field.value : null;
+      }
+      return {
+        open: true,
+        date: value("#startDate") ?? (dateField instanceof HTMLInputElement ? dateField.value : null),
+        time: value("#schTimeMail") ?? (timeField instanceof HTMLInputElement ? timeField.value : null),
+        hour: value("input[name='startDatehour']"),
+        minute: value("#startDateminute"),
+        ampm: value("#startDateampm"),
+        timezone: value("#timeZone")
+      };
+    }
+  });
+  return results?.[0]?.result as
+    | { open: false }
+    | { open: true; date: string | null; time: string | null; hour: string | null; minute: string | null; ampm: string | null; timezone: string | null }
+    | undefined;
+}
+
+async function waitForSchedulePopup(tabId: number, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  let state = await readSchedulePopupState(tabId);
+  while (!(state && state.open) && Date.now() < deadline) {
+    await sleep(200);
+    state = await readSchedulePopupState(tabId);
+  }
+  return state ?? { open: false };
+}
+
 async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
   const type = String(step.type ?? "");
   if (type === "press_key") {
@@ -2398,6 +2473,31 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
       if (sendGuard) return sendGuard;
     }
     await dispatchTrustedClick(target, located.x, located.y);
+    if (type === "click" && located.is_schedule_trigger === true) {
+      // The schedule popover mounts asynchronously; wait for it like the
+      // proven schedule_zoho_email flow instead of returning a bare
+      // needs_verification that races an immediate observe.
+      const popup = await waitForSchedulePopup(tabId, 4000);
+      return {
+        ok: true,
+        result: {
+          observed: located.observed,
+          input_method: "cdp",
+          trusted: true,
+          action: "open_schedule_popup",
+          schedule_popup_opened: popup.open === true,
+          schedule_popup: popup.open === true ? popup : null,
+          verified: popup.open === true,
+          coordinates: { x: located.x, y: located.y },
+          ...(popup.open === true
+            ? {}
+            : {
+                warning:
+                  "Clicked the Schedule control but the schedule popup did not mount within 4s. Re-observe; if it is still closed, click the composer's Schedule control again. Do not click elsewhere - the popup dismisses on outside clicks."
+              })
+        }
+      };
+    }
     if (type === "fill_field") {
       const requested = String(step.value ?? "");
       const requestedLower = requested.trim().toLowerCase();
