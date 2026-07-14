@@ -1,8 +1,9 @@
 "use client";
 
 import {
-  ChevronDown,
   ChevronRight,
+  CheckCircle2,
+  CircleDashed,
   FileText,
   GraduationCap,
   Loader2,
@@ -10,10 +11,11 @@ import {
   Plus,
   RotateCcw,
   Send,
+  ShieldCheck,
   Square,
   Trash2,
-  Wrench,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -133,6 +135,70 @@ function shortJson(value: unknown) {
   return text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringArg(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function truncateLabel(value: string, max = 64) {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function toolLabelFor(name: string, args: unknown) {
+  const arg = asRecord(args);
+  const action = stringArg(arg.action);
+  const selector = stringArg(arg.selector);
+  const query = stringArg(arg.query);
+  const moduleName = stringArg(arg.module);
+  const path = stringArg(arg.path);
+  const subject = stringArg(arg.subject);
+  const toEmail = stringArg(arg.to_email);
+  const batchReference = stringArg(arg.batch_reference);
+
+  if (name === "browser_input" && action) {
+    const target = stringArg(arg.label) || selector || stringArg(arg.target) || stringArg(arg.value);
+    return `browser_input · ${action}${target ? ` → ${truncateLabel(target)}` : ""}`;
+  }
+  if (name === "browser_observe") return "browser_observe · inspect page";
+  if (name === "read_workspace_file" && path) return `read_workspace_file · ${truncateLabel(path)}`;
+  if (name === "db_search_records" && query) return `db_search_records · ${truncateLabel(query)}`;
+  if (name === "db_get_record" && moduleName) return `db_get_record · ${moduleName}`;
+  if (name === "db_query" && query) return `db_query · ${truncateLabel(query)}`;
+  if (name === "zoho_api" && moduleName) return `zoho_api · ${moduleName}`;
+  if (name === "schedule_zoho_email" && (toEmail || subject)) {
+    return `schedule_zoho_email · ${truncateLabel(toEmail || subject)}`;
+  }
+  if (name === "schedule_zoho_email_batch" && batchReference) {
+    return `schedule_zoho_email_batch · ${truncateLabel(batchReference)}`;
+  }
+  return name;
+}
+
+function collectVerificationEvidence(result: unknown) {
+  const evidence: string[] = [];
+  const walk = (value: unknown, depth = 0) => {
+    if (depth > 4 || value == null) return;
+    if (Array.isArray(value)) {
+      value.slice(0, 12).forEach((item) => walk(item, depth + 1));
+      return;
+    }
+    const object = asRecord(value);
+    if (Object.keys(object).length === 0) return;
+    if (object.verified === true) evidence.push("Verified read-back matched the request.");
+    if (object.signature_present === true) evidence.push("Composer signature is present.");
+    if (object.signature_after_body === true) evidence.push("Signature remains after the body.");
+    if (object.schedule_confirmation) evidence.push("Schedule confirmation was observed.");
+    if (object.scheduled_row_found === true) evidence.push("Scheduled email row was found.");
+    if (object.receipt) evidence.push("Receipt captured.");
+    for (const child of Object.values(object)) walk(child, depth + 1);
+  };
+  walk(result);
+  return Array.from(new Set(evidence)).slice(0, 4);
+}
+
 function titleFor(session: AgentSession) {
   return session.title || "New agent chat";
 }
@@ -175,44 +241,82 @@ function linkifyContent(text: string, linkClass: string): ReactNode[] {
   return nodes.length > 0 ? nodes : [text];
 }
 
-// Collapsible tool-trace row (ChatGPT-style): shows "Working / Worked / Failed"
-// with the raw tool output hidden behind a click.
+// Collapsible execution timeline row. The default view is operational and
+// readable; raw args/results stay behind details for debugging.
 function ToolTrace({
   item
 }: {
   item: { name: string; tier?: number | null; status?: string; result?: unknown; args: unknown };
 }) {
-  const [open, setOpen] = useState(false);
   const status = item.status ?? "";
   const running = status === "" || status === "called" || status === "queued" || status === "running";
   const failed = status === "failed";
-  const label = failed ? "Failed" : running ? "Working" : "Worked";
-  const Chevron = open ? ChevronDown : ChevronRight;
+  const label = failed ? "Failed" : running ? "Running" : "Succeeded";
+  const evidence = collectVerificationEvidence(item.result);
+  const StatusIcon = failed ? XCircle : running ? Loader2 : CheckCircle2;
 
   return (
-    <div className="border border-line bg-surface">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-line"
-        aria-expanded={open}
-      >
-        <Chevron className="h-3.5 w-3.5 shrink-0 text-muted" />
-        {running ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted" />
-        ) : (
-          <Wrench className="h-3.5 w-3.5 shrink-0 text-muted" />
-        )}
-        <span className={failed ? "text-danger" : running ? "text-muted" : "text-success"}>{label}</span>
-        <span className="font-normal text-muted">
-          Tier {item.tier ?? 0} tool: {item.name}
-        </span>
-      </button>
-      {open ? (
-        <div className="border-t border-line">
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap px-3 py-2 text-xs text-ink">
-            {shortJson(item.result ?? item.args)}
-          </pre>
+    <div className="rounded-lg border border-line bg-surface">
+      <div className="flex items-start gap-3 px-3 py-3">
+        <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line bg-canvas">
+          <StatusIcon
+            className={`h-3.5 w-3.5 ${
+              failed ? "text-danger" : running ? "animate-spin text-running" : "text-success"
+            }`}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <span className={failed ? "font-semibold text-danger" : running ? "font-semibold text-running" : "font-semibold text-success"}>
+              {label}
+            </span>
+            <span className="truncate text-ink">{toolLabelFor(item.name, item.args)}</span>
+            <span className="text-xs text-muted">Tier {item.tier ?? 0}</span>
+          </div>
+          <details className="mt-2 text-xs text-muted">
+            <summary className="inline-flex cursor-pointer items-center gap-1 hover:text-ink">
+              <ChevronRight className="h-3 w-3" />
+              View details
+            </summary>
+            <div className="mt-2 grid gap-2 lg:grid-cols-2">
+              <div>
+                <div className="mb-1 font-semibold text-muted">Args</div>
+                <pre className="max-h-64 overflow-auto rounded-md border border-line bg-canvas p-3 text-xs text-ink">
+                  {shortJson(item.args)}
+                </pre>
+              </div>
+              <div>
+                <div className="mb-1 font-semibold text-muted">Result</div>
+                <pre className="max-h-64 overflow-auto rounded-md border border-line bg-canvas p-3 text-xs text-ink">
+                  {shortJson(item.result)}
+                </pre>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+      {evidence.length > 0 ? (
+        <div className="border-t border-line bg-canvas px-3 py-2">
+          <div className="flex items-start gap-3 text-xs text-muted">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+            <div>
+              <div className="font-semibold text-ink">Verification evidence</div>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {evidence.map((item) => (
+                  <span key={item} className="rounded-md border border-success/30 bg-success/10 px-2 py-1 text-success">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : running ? (
+        <div className="border-t border-line bg-canvas px-3 py-2 text-xs text-muted">
+          <div className="flex items-center gap-2">
+            <CircleDashed className="h-3.5 w-3.5 text-running" />
+            Waiting for result...
+          </div>
         </div>
       ) : null}
     </div>
