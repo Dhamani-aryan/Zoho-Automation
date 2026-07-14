@@ -920,6 +920,22 @@ function browserObservePageRunner(input?: {
       .slice(0, 180) ?? "";
   }
 
+  // Composer micro-targets (subject/recipient inputs, body editor, signature)
+  // are structurally identical to dozens of other divs/inputs on the page;
+  // their DOM-derived accessible name is usually empty or misleading. Give
+  // them fixed, semantic snapshot names so the model can pick the right
+  // target by name instead of guessing from role/selector alone.
+  function composerSemanticNameFor(element: Element): string | null {
+    if (element.matches("[id^='ceSubject_']")) return "Email subject";
+    if (element.matches("[id^='ceToAddr_']")) return "To recipients input";
+    if (element.matches("[id^='ceCCAddr_']")) return "Cc recipients input";
+    if (element.matches("#editorDiv")) {
+      return "Email body (rich text; contains your signature - typing here replaces body text only, signature is preserved)";
+    }
+    if (element.matches("#ecw_signature")) return "Email signature (do not edit)";
+    return null;
+  }
+
   function selectorCandidatesFor(element: Element) {
     const doc = element.ownerDocument;
     const tag = element.tagName.toLowerCase();
@@ -986,7 +1002,12 @@ function browserObservePageRunner(input?: {
         const rect = target.getBoundingClientRect();
         const view = target.ownerDocument.defaultView ?? window;
         const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
-        const name = accessibleName(source) || accessibleName(target) || directText;
+        const name =
+          composerSemanticNameFor(target) ||
+          composerSemanticNameFor(source) ||
+          accessibleName(source) ||
+          accessibleName(target) ||
+          directText;
         const activeSurface = Boolean(
           source.closest("dialog,[role='dialog'],[aria-modal='true'],[class*='modal' i],[class*='popup' i],[class*='compose' i]")
         );
@@ -1439,6 +1460,7 @@ type LocatedUiTarget =
       is_schedule_time_field?: boolean;
       is_schedule_date_field?: boolean;
       is_schedule_trigger?: boolean;
+      is_body_editor?: boolean;
     }
   | { ok: false; error_message: string; result?: unknown };
 
@@ -1724,6 +1746,11 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         !inSchedulePopup &&
         !element.closest("#etSchedulePopId") &&
         clickableLabel.some((label) => label === "schedule" || label === "schedule email");
+      // The rich-text body editor must never be filled with the generic
+      // focus + select-all + insertText flow - that would blow away
+      // #ecw_signature. Flag it so callers route to the signature-anchored
+      // replacement helper instead.
+      const bodyEditor = element.id === "editorDiv" || Boolean(element.querySelector("#ecw_signature"));
       return {
         ok: true,
         x,
@@ -1734,7 +1761,8 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null,
         is_schedule_time_field: scheduleTimeField,
         is_schedule_date_field: scheduleDateField,
-        is_schedule_trigger: scheduleTrigger
+        is_schedule_trigger: scheduleTrigger,
+        is_body_editor: bodyEditor
       };
     },
     args: [step]
@@ -2247,6 +2275,8 @@ type FilledFieldReadBack = {
   cc_chips: Array<{ text: string; email: string | null }>;
   to_input: string | null;
   cc_input: string | null;
+  subject: string | null;
+  signature_present: boolean;
 };
 
 // Read the actual post-input state of a filled field: the element's real
@@ -2318,6 +2348,13 @@ async function readFilledFieldState(tabId: number, step: Record<string, unknown>
         const input = visible[visible.length - 1] ?? matches[matches.length - 1] ?? null;
         return input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement ? input.value : null;
       }
+      function editorSignaturePresent() {
+        const frame = document.getElementById("z_editor");
+        const frameDoc = frame instanceof HTMLIFrameElement ? frame.contentDocument : null;
+        const editor = frameDoc?.getElementById("editorDiv") ?? null;
+        const signature = frameDoc?.getElementById("ecw_signature") ?? null;
+        return Boolean(signature && editor?.contains(signature));
+      }
 
       const doc = frameContext();
       const selectors = [
@@ -2347,13 +2384,50 @@ async function readFilledFieldState(tabId: number, step: Record<string, unknown>
         to_chips: chipData('[id^="ceToAddrDetails"] li.selectedEmail'),
         cc_chips: chipData('[id^="ceCCAddrDetails"] li.selectedEmail'),
         to_input: inputValue("[id^='ceToAddr_']"),
-        cc_input: inputValue("[id^='ceCCAddr_']")
+        cc_input: inputValue("[id^='ceCCAddr_']"),
+        subject: inputValue("[id^='ceSubject_']"),
+        signature_present: editorSignaturePresent()
       };
     },
     args: [step]
   });
   const readback = results?.[0]?.result as FilledFieldReadBack | undefined;
   return readback ?? null;
+}
+
+// Mirrors the leading/trailing-blank-line trim replaceEditorBodyPreservingSignature
+// applies to the requested body before rendering it, so the verified check
+// compares like with like instead of raw string equality.
+function normalizeBodyLines(value: string) {
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  while (lines[0]?.trim() === "") lines.shift();
+  while (lines.at(-1)?.trim() === "") lines.pop();
+  return lines.join("\n");
+}
+
+// Intent-relevant read-back: a subject-intent action that actually landed in
+// the body (or vice versa) must be visibly wrong in the same tool result,
+// not just in a follow-up browser_observe. Attach this whenever any composer
+// signal is present, regardless of which field the step targeted.
+function composerReadbackFrom(readback: FilledFieldReadBack | null): { composer?: Record<string, unknown> } {
+  if (!readback) return {};
+  const composerDetected = Boolean(
+    readback.subject ||
+      readback.signature_present ||
+      readback.to_chips.length ||
+      readback.cc_chips.length ||
+      readback.to_input ||
+      readback.cc_input
+  );
+  if (!composerDetected) return {};
+  return {
+    composer: {
+      subject: readback.subject ?? null,
+      to_chips: readback.to_chips,
+      cc_chips: readback.cc_chips,
+      signature_present: readback.signature_present
+    }
+  };
 }
 
 function chipMatchesRequested(chip: { text: string; email: string | null }, requestedLower: string) {
@@ -2667,6 +2741,49 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
     if (type === "fill_field") {
       const requested = String(step.value ?? "");
       const requestedLower = requested.trim().toLowerCase();
+
+      // The rich-text body editor must never go through the generic
+      // Ctrl+A/insertText flow - that clobbers #ecw_signature. Route it
+      // through the same signature-anchored replacement the deterministic
+      // schedule_zoho_email flow uses, and only fall back to the generic
+      // flow below when the composer has no signature to preserve.
+      if (located.is_body_editor === true) {
+        const bodyResult = await replaceEditorBodyPreservingSignature(tabId, requested);
+        if (!bodyResult.ok) {
+          return { ok: false, error_message: bodyResult.error_message };
+        }
+        if (bodyResult.replaced) {
+          const readback = await readFilledFieldState(tabId, step);
+          // The inserted container carries two trailing blank spacer lines
+          // ahead of the signature (matching the deterministic runner), so
+          // compare against the same leading/trailing-blank-line-trimmed
+          // form the insert algorithm itself normalizes to, not raw equality.
+          const verified = bodyResult.body_text.trim() === normalizeBodyLines(requested);
+          return {
+            ok: true,
+            result: {
+              observed: bodyResult.body_text,
+              requested_value: requested,
+              verified,
+              body_text: bodyResult.body_text,
+              signature_present: bodyResult.signature_present,
+              signature_after_body: bodyResult.signature_after_body,
+              ...(verified
+                ? {}
+                : {
+                    warning:
+                      "Read-back did not confirm the requested body text. Do not assume the field is set; observe the current state and correct it before proceeding."
+                  }),
+              ...composerReadbackFrom(readback),
+              input_method: "dom",
+              trusted: true,
+              coordinates: { x: located.x, y: located.y }
+            }
+          };
+        }
+        // No #ecw_signature to preserve - fall through to the generic flow.
+      }
+
       await replaceFocusedText(target, requested);
       const isRecipient = located.is_recipient_field === true;
       // Recipient chip fields commit only on a key event; Input.insertText
@@ -2726,6 +2843,7 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
                 warning:
                   "Read-back did not confirm the requested value. Do not assume the field is set; observe the current state and correct it before proceeding."
               }),
+          ...composerReadbackFrom(readback),
           input_method: "cdp",
           trusted: true,
           coordinates: { x: located.x, y: located.y }
@@ -3248,40 +3366,55 @@ async function revealCcInput(tabId: number) {
   return results?.[0]?.result as { visible?: boolean } | undefined;
 }
 
-async function setComposerContent(tabId: number, args: EmailJobArgs) {
+// Shared signature-anchored body replacement. Locates #ecw_signature inside
+// the composer's #editorDiv, walks up to its anchor child of the editor,
+// removes only the nodes before that anchor, then inserts a freshly built
+// styled div-per-line container ahead of it. Used by both the deterministic
+// schedule_zoho_email flow (setComposerContent below) and browser_input's
+// fill_field path on the body editor so the algorithm exists exactly once.
+type SignatureAnchoredReplaceResult =
+  | {
+      ok: true;
+      replaced: true;
+      body_text: string;
+      first_body_line: string;
+      signature_present: boolean;
+      signature_after_body: boolean;
+    }
+  | { ok: true; replaced: false }
+  | { ok: false; error_message: string };
+
+async function replaceEditorBodyPreservingSignature(
+  tabId: number,
+  body: string
+): Promise<SignatureAnchoredReplaceResult> {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: (subject: string, body: string) => {
-      const subjectMatches = [...document.querySelectorAll("[id^='ceSubject_']")];
-      const subjectInput =
-        subjectMatches.find((element) => element.getBoundingClientRect().width > 0) ??
-        subjectMatches[subjectMatches.length - 1] ??
-        null;
+    func: (bodyText: string) => {
       const frame = document.getElementById("z_editor");
-      if (!(subjectInput instanceof HTMLInputElement)) throw new Error("Composer subject field is missing.");
-      if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) throw new Error("Composer body frame is missing.");
+      if (!(frame instanceof HTMLIFrameElement) || !frame.contentDocument) {
+        return { ok: false as const, error_message: "Composer body frame is missing." };
+      }
       const frameDocument = frame.contentDocument;
       const editor = frameDocument.getElementById("editorDiv");
+      if (!editor) return { ok: false as const, error_message: "Composer body editor is missing." };
       const signature = frameDocument.getElementById("ecw_signature");
-      if (!editor || !signature || !editor.contains(signature)) throw new Error("Composer signature is missing.");
-
-      subjectInput.focus();
-      subjectInput.value = subject;
-      subjectInput.dispatchEvent(new Event("input", { bubbles: true }));
-      subjectInput.dispatchEvent(new Event("change", { bubbles: true }));
+      if (!signature || !editor.contains(signature)) return { ok: true as const, replaced: false as const };
 
       let signatureAnchor = signature;
       while (signatureAnchor.parentElement && signatureAnchor.parentElement !== editor) {
         signatureAnchor = signatureAnchor.parentElement;
       }
-      if (signatureAnchor.parentElement !== editor) throw new Error("Signature anchor is outside the editor.");
+      if (signatureAnchor.parentElement !== editor) {
+        return { ok: false as const, error_message: "Signature anchor is outside the editor." };
+      }
       for (const node of [...editor.childNodes]) {
         if (node === signatureAnchor) break;
         node.remove();
       }
 
-      const lines = body.replace(/\r\n/g, "\n").split("\n");
+      const lines = bodyText.replace(/\r\n/g, "\n").split("\n");
       while (lines[0]?.trim() === "") lines.shift();
       while (lines.at(-1)?.trim() === "") lines.pop();
       const container = frameDocument.createElement("div");
@@ -3302,24 +3435,64 @@ async function setComposerContent(tabId: number, args: EmailJobArgs) {
       editor.insertBefore(container, signatureAnchor);
       editor.dispatchEvent(new Event("input", { bubbles: true }));
       return {
-        subject: subjectInput.value,
+        ok: true as const,
+        replaced: true as const,
         body_text: container.innerText,
         first_body_line: lines.find((line) => line.trim()) ?? "",
         signature_present: signature.isConnected && editor.contains(signature),
         signature_after_body: Boolean(container.compareDocumentPosition(signature) & Node.DOCUMENT_POSITION_FOLLOWING)
       };
     },
-    args: [args.subject, args.body]
+    args: [body]
   });
-  return results?.[0]?.result as
-    | {
-        subject: string;
-        body_text: string;
-        first_body_line: string;
-        signature_present: boolean;
-        signature_after_body: boolean;
+  return (
+    (results?.[0]?.result as SignatureAnchoredReplaceResult | undefined) ?? {
+      ok: false,
+      error_message: "Body replacement returned no result."
+    }
+  );
+}
+
+async function setComposerContent(tabId: number, args: EmailJobArgs) {
+  const subjectResults = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (subject: string) => {
+      const subjectMatches = [...document.querySelectorAll("[id^='ceSubject_']")];
+      const subjectInput =
+        subjectMatches.find((element) => element.getBoundingClientRect().width > 0) ??
+        subjectMatches[subjectMatches.length - 1] ??
+        null;
+      if (!(subjectInput instanceof HTMLInputElement)) {
+        return { ok: false as const, error_message: "Composer subject field is missing." };
       }
+      subjectInput.focus();
+      subjectInput.value = subject;
+      subjectInput.dispatchEvent(new Event("input", { bubbles: true }));
+      subjectInput.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true as const, subject: subjectInput.value };
+    },
+    args: [args.subject]
+  });
+  const subjectResult = subjectResults?.[0]?.result as
+    | { ok: true; subject: string }
+    | { ok: false; error_message: string }
     | undefined;
+  if (!subjectResult || !subjectResult.ok) {
+    throw new Error(subjectResult?.error_message ?? "Composer subject field is missing.");
+  }
+
+  const bodyResult = await replaceEditorBodyPreservingSignature(tabId, args.body);
+  if (!bodyResult.ok) throw new Error(bodyResult.error_message);
+  if (!bodyResult.replaced) throw new Error("Composer signature is missing.");
+
+  return {
+    subject: subjectResult.subject,
+    body_text: bodyResult.body_text,
+    first_body_line: bodyResult.first_body_line,
+    signature_present: bodyResult.signature_present,
+    signature_after_body: bodyResult.signature_after_body
+  };
 }
 
 async function readComposerVerification(tabId: number) {
