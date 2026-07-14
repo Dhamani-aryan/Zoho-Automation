@@ -38,3 +38,4 @@ export default async function RunDetailPage({ params }: RunDetailPageProps) {
     </AppShell>
   );
 }
+

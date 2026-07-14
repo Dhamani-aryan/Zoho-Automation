@@ -38,7 +38,7 @@ export function LoginForm() {
       <label className="block">
         <span className="text-sm font-medium">Email</span>
         <input
-          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-white px-3 text-sm"
+          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
@@ -49,7 +49,7 @@ export function LoginForm() {
       <label className="block">
         <span className="text-sm font-medium">Password</span>
         <input
-          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-white px-3 text-sm"
+          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
@@ -58,7 +58,7 @@ export function LoginForm() {
         />
       </label>
       {message ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div className="rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
           {message}
         </div>
       ) : null}
@@ -73,3 +73,4 @@ export function LoginForm() {
     </form>
   );
 }
+

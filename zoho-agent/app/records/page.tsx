@@ -41,8 +41,8 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
               href={`/records?module=${key}`}
               className={`rounded-md border px-3 py-2 text-sm ${
                 key === moduleKey
-                  ? "border-accent bg-emerald-50 text-accent"
-                  : "border-line bg-white text-ink"
+                  ? "border-accent bg-success/10 text-accent"
+                  : "border-line bg-surface text-ink"
               }`}
             >
               {RECORD_MODULES[key].label}
@@ -58,11 +58,11 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
             id="q"
             name="q"
             defaultValue={search}
-            className="focus-ring h-10 flex-1 rounded-md border border-line bg-white px-3 text-sm"
+            className="focus-ring h-10 flex-1 rounded-md border border-line bg-surface px-3 text-sm"
             placeholder={`Search ${RECORD_MODULES[moduleKey].label.toLowerCase()}`}
           />
           <button
-            className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md border border-line bg-white"
+            className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md border border-line bg-surface"
             type="submit"
             aria-label="Search records"
           >
@@ -71,7 +71,7 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
         </form>
       </div>
 
-      <section className="overflow-hidden rounded-md border border-line bg-white shadow-soft">
+      <section className="overflow-hidden rounded-md border border-line bg-surface ">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-surface text-xs uppercase text-muted">
@@ -121,3 +121,4 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
     </AppShell>
   );
 }
+

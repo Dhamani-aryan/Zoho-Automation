@@ -24,10 +24,10 @@ const navItems: Array<{
 }> = [
   { href: "/agent", label: "Agent", icon: BotMessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/runs", label: "Runs", icon: ClipboardList },
   { href: "/skills", label: "Skills", icon: BookOpenCheck },
   { href: "/records", label: "Records", icon: Database },
   { href: "/imports", label: "Imports", icon: FileUp },
-  { href: "/runs", label: "Runs", icon: ClipboardList },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/admin/agent-activity", label: "Agent Activity", icon: ChartNoAxesColumnIncreasing, roles: ["admin"] },
   { href: "/admin/field-meta", label: "Field Meta", icon: Settings2, roles: ["admin"] }
@@ -58,8 +58,8 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const visibleNavItems = navItems.filter((item) => !item.roles || (role && item.roles.includes(role)));
 
   return (
-    <div className="min-h-screen bg-surface text-ink">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-line bg-white lg:block">
+    <div className="min-h-screen bg-canvas text-ink">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-line bg-surface lg:block">
         <div className="flex h-16 items-center border-b border-line px-5">
           <div>
             <div className="text-sm font-semibold tracking-[0]">Zoho Agent</div>
@@ -73,7 +73,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex h-10 items-center gap-3 rounded-md px-3 text-sm text-ink hover:bg-surface"
+                className="flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted hover:bg-line hover:text-ink"
               >
                 <Icon className="h-4 w-4 text-muted" aria-hidden="true" />
                 {item.label}
@@ -83,7 +83,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
       </aside>
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 border-b border-line bg-white/95 backdrop-blur">
+        <header className="sticky top-0 z-10 border-b border-line bg-surface/95 backdrop-blur">
           <div className="flex min-h-16 flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between lg:px-8">
             <div>
               <div className="text-sm font-semibold">KloudData sales operations</div>
@@ -96,7 +96,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="rounded-md border border-line bg-white px-3 py-2 text-xs"
+                  className="rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted"
                 >
                   {item.label}
                 </Link>
@@ -113,3 +113,4 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+

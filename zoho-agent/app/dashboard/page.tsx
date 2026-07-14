@@ -36,7 +36,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="rounded-md border border-line bg-white shadow-soft">
+        <section className="rounded-md border border-line bg-surface ">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <h2 className="text-sm font-semibold">Recent chats</h2>
             <Link href="/agent" className="text-xs font-semibold text-accent hover:underline">
@@ -75,7 +75,7 @@ export default async function DashboardPage() {
           )}
         </section>
 
-        <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+        <section className="rounded-md border border-line bg-surface p-4 ">
           <h2 className="text-sm font-semibold">V2 rollout status</h2>
           <div className="mt-4 space-y-3 text-sm">
             {[
@@ -96,3 +96,4 @@ export default async function DashboardPage() {
     </AppShell>
   );
 }
+

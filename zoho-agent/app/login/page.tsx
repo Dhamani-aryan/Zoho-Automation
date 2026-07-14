@@ -4,7 +4,7 @@ import { LoginForm } from "@/components/login-form";
 export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-surface px-4 py-10">
-      <section className="w-full max-w-md rounded-md border border-line bg-white p-6 shadow-soft">
+      <section className="w-full max-w-md rounded-md border border-line bg-surface p-6 ">
         <div className="mb-6">
           <Link href="/agent" className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">
             Zoho Agent
@@ -19,3 +19,4 @@ export default function LoginPage() {
     </main>
   );
 }
+

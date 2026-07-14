@@ -194,7 +194,7 @@ function ToolTrace({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-white"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-line"
         aria-expanded={open}
       >
         <Chevron className="h-3.5 w-3.5 shrink-0 text-muted" />
@@ -203,7 +203,7 @@ function ToolTrace({
         ) : (
           <Wrench className="h-3.5 w-3.5 shrink-0 text-muted" />
         )}
-        <span className={failed ? "text-red-600" : running ? "text-muted" : "text-emerald-700"}>{label}</span>
+        <span className={failed ? "text-danger" : running ? "text-muted" : "text-success"}>{label}</span>
         <span className="font-normal text-muted">
           Tier {item.tier ?? 0} tool: {item.name}
         </span>
@@ -540,13 +540,13 @@ export function AgentChat({
 
   return (
     <div className="grid h-[calc(100vh-12rem)] min-h-[520px] gap-5 overflow-hidden xl:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
+      <aside className="flex min-h-0 flex-col overflow-hidden border border-line bg-surface">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="text-sm font-semibold">Chats</div>
           <button
             type="button"
             onClick={() => createSession().catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not create chat."))}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line bg-white text-ink hover:bg-surface"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-surface"
             title="New chat"
           >
             <Plus className="h-4 w-4" />
@@ -589,7 +589,7 @@ export function AgentChat({
                         type="button"
                         onClick={() => setPendingDeleteSessionId(null)}
                         className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                          active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
+                          active ? "text-white/70 hover:bg-line hover:text-white" : "text-muted hover:bg-line hover:text-ink"
                         }`}
                         aria-label="Cancel delete"
                         title="Cancel delete"
@@ -605,7 +605,7 @@ export function AgentChat({
                           });
                         }}
                         className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                          active ? "text-red-200 hover:bg-white/10 hover:text-red-100" : "text-red-600 hover:bg-red-50"
+                          active ? "text-danger hover:bg-line" : "text-danger hover:bg-danger/10"
                         } disabled:cursor-not-allowed disabled:opacity-40`}
                         aria-label={`Confirm delete ${titleFor(session)}`}
                         title="Confirm delete"
@@ -619,7 +619,7 @@ export function AgentChat({
                       disabled={loading}
                       onClick={() => setPendingDeleteSessionId(session.id)}
                       className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                        active ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted hover:bg-white hover:text-ink"
+                        active ? "text-white/70 hover:bg-line hover:text-white" : "text-muted hover:bg-line hover:text-ink"
                       } disabled:cursor-not-allowed disabled:opacity-40`}
                       aria-label={`Delete ${titleFor(session)}`}
                       title="Delete chat"
@@ -634,7 +634,7 @@ export function AgentChat({
         </div>
       </aside>
 
-      <section className="flex min-h-0 flex-col overflow-hidden border border-line bg-white">
+      <section className="flex min-h-0 flex-col overflow-hidden border border-line bg-surface">
         <div className="shrink-0 border-b border-line px-5 py-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -653,8 +653,8 @@ export function AgentChat({
               }}
               className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${
                 activeSession?.teach_mode
-                  ? "border-amber-300 bg-amber-50 text-amber-900"
-                  : "border-line bg-white text-ink hover:bg-surface"
+                  ? "border-pending/40 bg-pending/10 text-pending"
+                  : "border-line bg-surface text-ink hover:bg-surface"
               } disabled:cursor-not-allowed disabled:opacity-50`}
               title="Teach a workflow"
             >
@@ -663,7 +663,7 @@ export function AgentChat({
             </button>
           </div>
           {activeSession?.teach_mode ? (
-            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <div className="mt-3 rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-xs text-pending">
               Teach mode is on. The agent will do one live action per instruction, verify it, and distill the method into a skill guide when you ask it to remember.
             </div>
           ) : null}
@@ -717,14 +717,14 @@ export function AgentChat({
                 >
                   {linkifyContent(
                     item.content,
-                    "text-blue-600 underline underline-offset-2 hover:text-blue-700 break-all"
+                    "text-accent underline underline-offset-2 hover:text-accent/80 break-all"
                   )}
                 </div>
               );
             })
           )}
           {loading ? <div className="text-sm text-muted">Agent is working...</div> : null}
-          {error ? <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+          {error ? <div className="border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div> : null}
         </div>
 
         <form onSubmit={sendMessage} className="shrink-0 border-t border-line p-4">
@@ -742,7 +742,7 @@ export function AgentChat({
                     type="button"
                     disabled={loading}
                     onClick={() => setAttachedFiles((current) => current.filter((item) => item.id !== file.id))}
-                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-white hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                     title={`Remove ${file.name}`}
                     aria-label={`Remove ${file.name}`}
                   >
@@ -769,7 +769,7 @@ export function AgentChat({
               type="button"
               disabled={loading || attachedFiles.length >= ATTACHMENT_MAX_FILES}
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-line bg-white text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
               title="Attach context files"
               aria-label="Attach context files"
             >
@@ -797,7 +797,7 @@ export function AgentChat({
                     setError(err instanceof Error ? err.message : "Could not stop the active task.");
                   });
                 }}
-                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700"
+                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-danger text-white hover:bg-danger/90"
                 title="Stop the active task"
                 aria-label="Stop the active task"
               >
@@ -820,4 +820,5 @@ export function AgentChat({
     </div>
   );
 }
+
 

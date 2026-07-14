@@ -186,7 +186,7 @@ export function SettingsOpenAICard() {
   }
 
   return (
-    <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+    <section className="rounded-md border border-line bg-surface p-4 ">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold">OpenAI connection</h2>
@@ -310,3 +310,4 @@ export function SettingsOpenAICard() {
     </section>
   );
 }
+

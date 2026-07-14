@@ -2,7 +2,7 @@ import { StatusBadge } from "@/components/status-badge";
 
 export function ConnectionBanner({ connected }: { connected: boolean }) {
   return (
-    <div className="mb-6 rounded-md border border-line bg-white p-4">
+    <div className="mb-6 rounded-md border border-line bg-surface p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm font-semibold">Supabase connection</div>
@@ -17,3 +17,4 @@ export function ConnectionBanner({ connected }: { connected: boolean }) {
     </div>
   );
 }
+

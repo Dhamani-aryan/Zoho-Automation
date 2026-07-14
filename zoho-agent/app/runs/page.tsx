@@ -16,7 +16,7 @@ export default async function RunsPage() {
         title="Run history"
         description="Every workflow run will land here with status, counts, Zoho links, and report downloads."
       />
-      <section className="overflow-hidden rounded-md border border-line bg-white shadow-soft">
+      <section className="overflow-hidden rounded-md border border-line bg-surface ">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-surface text-xs uppercase text-muted">
@@ -62,3 +62,4 @@ export default async function RunsPage() {
     </AppShell>
   );
 }
+

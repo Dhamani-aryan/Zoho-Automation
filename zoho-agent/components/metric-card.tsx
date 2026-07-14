@@ -12,13 +12,14 @@ export function MetricCard({
   note?: string;
 }) {
   return (
-    <div className="rounded-md border border-line bg-white p-4 shadow-soft">
+    <div className="rounded-lg border border-line bg-surface p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted">{label}</div>
         <Icon className="h-4 w-4 text-accent" aria-hidden="true" />
       </div>
-      <div className="mt-3 text-3xl font-semibold tracking-[0]">{value}</div>
+      <div className="mt-3 text-2xl font-semibold tracking-[0]">{value}</div>
       {note ? <div className="mt-2 text-xs text-muted">{note}</div> : null}
     </div>
   );
 }
+

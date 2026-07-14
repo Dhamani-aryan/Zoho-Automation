@@ -156,12 +156,12 @@ export function ImportPreviewer() {
   }
 
   return (
-    <div className="rounded-md border border-line bg-white p-4 shadow-soft">
+    <div className="rounded-md border border-line bg-surface p-4 ">
       <form onSubmit={preview} className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex-1">
           <span className="text-sm font-medium">File</span>
           <input
-            className="focus-ring mt-1 w-full rounded-md border border-line bg-white px-3 py-2 text-sm"
+            className="focus-ring mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
             type="file"
             accept=".csv,.tsv,.md,.markdown,.txt"
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
@@ -182,7 +182,7 @@ export function ImportPreviewer() {
       </form>
 
       {error ? (
-        <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mt-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
           {error}
         </div>
       ) : null}
@@ -205,7 +205,7 @@ export function ImportPreviewer() {
           </div>
 
           {result.warnings.length > 0 ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <div className="rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
               {result.warnings.join(" ")}
             </div>
           ) : null}
@@ -260,7 +260,7 @@ export function ImportPreviewer() {
                   </div>
                 </div>
                 <select
-                  className="focus-ring h-10 rounded-md border border-line bg-white px-3 text-sm"
+                  className="focus-ring h-10 rounded-md border border-line bg-surface px-3 text-sm"
                   value={targetModule}
                   onChange={(event) => {
                     const nextModule = event.target.value as ImportModule;
@@ -283,7 +283,7 @@ export function ImportPreviewer() {
                       {field.required ? " *" : ""}
                     </span>
                     <select
-                      className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-white px-3 text-sm"
+                      className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
                       value={mapping[field.key] ?? ""}
                       onChange={(event) =>
                         setMapping((current) => ({
@@ -314,7 +314,7 @@ export function ImportPreviewer() {
               </button>
 
               {importResult ? (
-                <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                <div className="mt-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
                   {importResult.stored ? "Stored" : "Validated"} {importResult.importableRows}{" "}
                   {importResult.module} rows. Skipped {importResult.skippedRows}.{" "}
                   {importResult.warning ?? ""}
@@ -328,3 +328,4 @@ export function ImportPreviewer() {
     </div>
   );
 }
+

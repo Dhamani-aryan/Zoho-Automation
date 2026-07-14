@@ -54,7 +54,7 @@ function GuideSection({ label, content }: { label: string; content: string }) {
   return (
     <div>
       <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">{label}</div>
-      <div className="whitespace-pre-wrap rounded-md border border-line bg-slate-50 p-3 text-sm leading-6 text-ink">
+      <div className="whitespace-pre-wrap rounded-md border border-line bg-canvas p-3 text-sm leading-6 text-ink">
         {content}
       </div>
     </div>
@@ -88,12 +88,12 @@ export default async function SkillsPage() {
       />
 
       {loadError ? (
-        <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <div className="flex items-center gap-2 rounded-md border border-pending/40 bg-pending/10 p-4 text-sm text-pending">
           <TriangleAlert className="h-4 w-4 shrink-0" />
           Could not load skill guides: {loadError}
         </div>
       ) : guides.length === 0 ? (
-        <div className="rounded-md border border-line bg-white p-8 text-center text-sm text-muted">
+        <div className="rounded-md border border-line bg-surface p-8 text-center text-sm text-muted">
           No skill guides saved yet. Walk the agent through a task in teach mode, then ask it to
           &ldquo;save this as a skill guide&rdquo;.
         </div>
@@ -105,17 +105,17 @@ export default async function SkillsPage() {
             return (
               <details
                 key={guide.id}
-                className="group rounded-lg border border-line bg-white shadow-sm open:shadow-md"
+                className="group rounded-lg border border-line bg-surface  "
               >
                 <summary className="flex cursor-pointer flex-col gap-2 p-4 [&::-webkit-details-marker]:hidden sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-sm font-semibold text-ink">{guide.name}</span>
-                      <span className="rounded-full border border-line bg-slate-50 px-2 py-0.5 text-xs text-muted">
+                      <span className="rounded-full border border-line bg-canvas px-2 py-0.5 text-xs text-muted">
                         v{guide.version}
                       </span>
                       {triggers ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-accent">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs text-accent">
                           <Sparkles className="h-3 w-3" />
                           auto-loaded
                         </span>
@@ -136,7 +136,7 @@ export default async function SkillsPage() {
                         {triggers.map((keyword) => (
                           <span
                             key={keyword}
-                            className="rounded-md border border-line bg-slate-50 px-2 py-0.5 text-xs text-ink"
+                            className="rounded-md border border-line bg-canvas px-2 py-0.5 text-xs text-ink"
                           >
                             {keyword}
                           </span>
@@ -152,7 +152,7 @@ export default async function SkillsPage() {
                       </div>
                       <div className="overflow-x-auto rounded-md border border-line">
                         <table className="w-full text-left text-sm">
-                          <thead className="bg-slate-50 text-xs uppercase tracking-[0.05em] text-muted">
+                          <thead className="bg-canvas text-xs uppercase tracking-[0.05em] text-muted">
                             <tr>
                               <th className="px-3 py-2 font-semibold">Name</th>
                               <th className="px-3 py-2 font-semibold">Description</th>
@@ -193,3 +193,4 @@ export default async function SkillsPage() {
     </AppShell>
   );
 }
+

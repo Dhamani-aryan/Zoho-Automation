@@ -118,7 +118,7 @@ export function RunCommandBuilder() {
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+      <section className="rounded-md border border-line bg-surface p-4 ">
         <label htmlFor="command" className="text-sm font-semibold">
           Command
         </label>
@@ -127,7 +127,7 @@ export function RunCommandBuilder() {
           value={command}
           onChange={(event) => setCommand(event.target.value)}
           rows={9}
-          className="focus-ring mt-2 w-full resize-y rounded-md border border-line bg-white px-3 py-2 text-sm leading-6"
+          className="focus-ring mt-2 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-sm leading-6"
           placeholder="Update selected deals so Next Step is 3rd Email"
         />
         <label className="mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-line bg-surface px-3 py-4 text-center text-sm text-muted">
@@ -155,7 +155,7 @@ export function RunCommandBuilder() {
             type="button"
             onClick={validatePlan}
             disabled={!state.plan || busy !== null}
-            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "validate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             Validate
@@ -164,21 +164,21 @@ export function RunCommandBuilder() {
             type="button"
             onClick={saveRun}
             disabled={!state.validation || busy !== null}
-            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save preview
           </button>
         </div>
         {state.error ? (
-          <div className="mt-4 flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="mt-4 flex gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {state.error}
           </div>
         ) : null}
       </section>
 
-      <section className="rounded-md border border-line bg-white shadow-soft">
+      <section className="rounded-md border border-line bg-surface ">
         <div className="border-b border-line p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-semibold">Preview</h2>
@@ -209,7 +209,7 @@ export function RunCommandBuilder() {
           )}
 
           {state.validation?.missing_info.length ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
               {state.validation.missing_info.join(" ")}
             </div>
           ) : null}
@@ -260,3 +260,4 @@ export function RunCommandBuilder() {
     </div>
   );
 }
+

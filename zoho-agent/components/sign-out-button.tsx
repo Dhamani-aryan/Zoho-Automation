@@ -14,10 +14,11 @@ export function SignOutButton() {
     <button
       type="button"
       onClick={signOut}
-      className="focus-ring inline-flex h-9 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm hover:bg-surface"
+      className="focus-ring inline-flex h-9 items-center justify-center gap-2 rounded-md border border-line bg-surface px-3 text-sm hover:bg-surface"
     >
       <LogOut className="h-4 w-4" aria-hidden="true" />
       Sign out
     </button>
   );
 }
+

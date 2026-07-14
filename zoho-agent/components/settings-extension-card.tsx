@@ -121,7 +121,7 @@ export function SettingsExtensionCard() {
   const isBusy = busy !== null;
 
   return (
-    <section className="rounded-md border border-line bg-white p-4 shadow-soft">
+    <section className="rounded-md border border-line bg-surface p-4 ">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold">Chrome extension</h2>
@@ -153,7 +153,7 @@ export function SettingsExtensionCard() {
         <div className="mt-4 rounded-md border border-line bg-surface p-3">
           <div className="text-xs font-semibold uppercase text-muted">Token shown once</div>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-            <code className="min-w-0 flex-1 break-all rounded-md bg-white px-3 py-2 text-xs">{status.token}</code>
+            <code className="min-w-0 flex-1 break-all rounded-md bg-surface px-3 py-2 text-xs">{status.token}</code>
             <button
               type="button"
               onClick={copyToken}
@@ -199,3 +199,4 @@ export function SettingsExtensionCard() {
     </section>
   );
 }
+

@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
+import { Geist } from "next/font/google";
 import { TopLoadingBar } from "@/components/top-loading-bar";
 import "./globals.css";
+
+const geist = Geist({
+  subsets: ["latin"],
+  variable: "--font-geist"
+});
 
 export const metadata: Metadata = {
   title: "Zoho Agent",
@@ -14,10 +20,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
+      <body className={geist.className}>
         <TopLoadingBar />
         {children}
       </body>
     </html>
   );
 }
+

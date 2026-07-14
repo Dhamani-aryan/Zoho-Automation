@@ -9,16 +9,22 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        surface: "#f7f8f6",
-        ink: "#1f2933",
-        muted: "#667085",
-        line: "#d9ded8",
-        accent: "#13795b",
-        warn: "#9a6700",
-        danger: "#b42318"
+        canvas: "#09090B",
+        surface: "#111113",
+        ink: "#FAFAFA",
+        muted: "#A1A1AA",
+        subtle: "#71717A",
+        line: "#232326",
+        accent: "#3B82F6",
+        success: "#22C55E",
+        running: "#3B82F6",
+        pending: "#F97316",
+        idle: "#71717A",
+        warn: "#F97316",
+        danger: "#EF4444"
       },
       boxShadow: {
-        soft: "0 10px 30px rgba(31, 41, 51, 0.08)"
+        soft: "none"
       }
     }
   },

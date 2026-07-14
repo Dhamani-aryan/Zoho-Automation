@@ -52,12 +52,12 @@ export function FieldMetaImporter() {
   }
 
   return (
-    <div className="rounded-md border border-line bg-white p-4 shadow-soft">
+    <div className="rounded-md border border-line bg-surface p-4 ">
       <form onSubmit={submit} className="space-y-4">
         <label className="block max-w-xs">
           <span className="text-sm font-medium">Module</span>
           <select
-            className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-white px-3 text-sm"
+            className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
             value={module}
             onChange={(event) => setModule(event.target.value)}
           >
@@ -70,7 +70,7 @@ export function FieldMetaImporter() {
         <label className="block">
           <span className="text-sm font-medium">Zoho fields JSON</span>
           <textarea
-            className="focus-ring mt-1 min-h-80 w-full rounded-md border border-line bg-white p-3 font-mono text-xs leading-5"
+            className="focus-ring mt-1 min-h-80 w-full rounded-md border border-line bg-surface p-3 font-mono text-xs leading-5"
             value={jsonText}
             onChange={(event) => setJsonText(event.target.value)}
             placeholder='Paste the full response from /crm/v3/settings/fields?module=Deals'
@@ -78,7 +78,7 @@ export function FieldMetaImporter() {
           />
         </label>
         {error ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             {error}
           </div>
         ) : null}
@@ -99,7 +99,7 @@ export function FieldMetaImporter() {
       {result ? (
         <div className="mt-5 space-y-4">
           {result.warning ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <div className="rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
               {result.warning}
             </div>
           ) : null}
@@ -142,3 +142,4 @@ export function FieldMetaImporter() {
     </div>
   );
 }
+

@@ -33,7 +33,7 @@ export function AdminAgentPurgeButton({ disabled }: { disabled: boolean }) {
         type="button"
         onClick={purge}
         disabled={disabled || loading}
-        className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex h-10 items-center gap-2 rounded-md border border-danger/40 bg-surface px-3 text-sm font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Trash2 className="h-4 w-4" aria-hidden="true" />
         {loading ? "Purging" : "Purge archived"}
@@ -42,3 +42,4 @@ export function AdminAgentPurgeButton({ disabled }: { disabled: boolean }) {
     </div>
   );
 }
+

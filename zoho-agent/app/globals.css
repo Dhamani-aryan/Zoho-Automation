@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
-  --background: #f7f8f6;
-  --foreground: #1f2933;
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
 }
 
 * {
@@ -44,5 +44,5 @@ textarea {
 }
 
 .focus-ring:focus-visible {
-  outline-color: #13795b;
+  outline-color: #3b82f6;
 }

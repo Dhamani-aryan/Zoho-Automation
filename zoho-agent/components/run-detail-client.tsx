@@ -128,13 +128,13 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
         title={run.run_parameters.intent_summary ?? "Workflow run"}
         description={`Created ${new Date(run.created_at).toLocaleString()}`}
         action={
-          <Link href="/run/new" className="rounded-md border border-line bg-white px-3 py-2 text-sm">
+          <Link href="/run/new" className="rounded-md border border-line bg-surface px-3 py-2 text-sm">
             New run
           </Link>
         }
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-md border border-line bg-white p-3 shadow-soft">
+      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface p-3 ">
         {showApprove ? (
           <button
             type="button"
@@ -173,7 +173,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
             type="button"
             onClick={() => mutate("cancel")}
             disabled={busy !== null}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-danger/40 px-3 text-sm text-danger disabled:opacity-60"
           >
             {busy === "cancel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <StopCircle className="h-4 w-4" />}
             Cancel
@@ -209,7 +209,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
           { label: "Success", value: totals.success },
           { label: "Failed", value: totals.failed }
         ].map(({ label, value }) => (
-          <div key={label} className="rounded-md border border-line bg-white p-3 shadow-soft">
+          <div key={label} className="rounded-md border border-line bg-surface p-3 ">
             <div className="text-xs uppercase text-muted">{label}</div>
             <div className="mt-2">{value}</div>
           </div>
@@ -217,24 +217,24 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
       </div>
 
       {run.stop_reason ? (
-        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="mb-4 rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
           {run.stop_reason}
         </div>
       ) : null}
 
       {run.run_parameters.missing_info?.length ? (
-        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="mb-4 rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
           {run.run_parameters.missing_info.join(" ")}
         </div>
       ) : null}
 
       {run.run_parameters.warnings?.length ? (
-        <div className="mb-4 rounded-md border border-line bg-white p-3 text-sm text-muted">
+        <div className="mb-4 rounded-md border border-line bg-surface p-3 text-sm text-muted">
           {run.run_parameters.warnings.join(" ")}
         </div>
       ) : null}
 
-      <section className="overflow-hidden rounded-md border border-line bg-white shadow-soft">
+      <section className="overflow-hidden rounded-md border border-line bg-surface ">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-surface text-xs uppercase text-muted">
@@ -297,3 +297,4 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
     </>
   );
 }
+
