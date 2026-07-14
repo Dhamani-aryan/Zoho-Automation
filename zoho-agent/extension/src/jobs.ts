@@ -1548,21 +1548,40 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         };
       }
 
-      element.scrollIntoView({ block: "center", inline: "center" });
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
       scrollElementIntoAncestors(element);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const rect = element.getBoundingClientRect();
       const view = window;
-      const left = ctx.offsetX + rect.left;
-      const right = ctx.offsetX + rect.right;
-      const top = ctx.offsetY + rect.top;
-      const bottom = ctx.offsetY + rect.bottom;
-      const intersects = bottom > 0 && top < view.innerHeight && right > 0 && left < view.innerWidth;
+      let rect = element.getBoundingClientRect();
+      let left = ctx.offsetX + rect.left;
+      let right = ctx.offsetX + rect.right;
+      let top = ctx.offsetY + rect.top;
+      let bottom = ctx.offsetY + rect.bottom;
+      let intersects = bottom > 0 && top < view.innerHeight && right > 0 && left < view.innerWidth;
+      for (let attempt = 0; attempt < 10 && !intersects; attempt += 1) {
+        scrollElementIntoAncestors(element);
+        rect = element.getBoundingClientRect();
+        left = ctx.offsetX + rect.left;
+        right = ctx.offsetX + rect.right;
+        top = ctx.offsetY + rect.top;
+        bottom = ctx.offsetY + rect.bottom;
+        intersects = bottom > 0 && top < view.innerHeight && right > 0 && left < view.innerWidth;
+        if (!intersects) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       if (!intersects) {
         const fixedOverlay = nearestFixedOverlay(element);
+        const roundedRect = {
+          left: Math.round(left),
+          top: Math.round(top),
+          right: Math.round(right),
+          bottom: Math.round(bottom)
+        };
         return {
           ok: false,
-          error_message: "UI target was found but is outside the clickable viewport after scrolling.",
+          error_message:
+            `UI target was found but stayed outside the clickable viewport after scrolling for 1s. ` +
+            `rect=(${roundedRect.left},${roundedRect.top},${roundedRect.right},${roundedRect.bottom}) ` +
+            `viewport=(${view.innerWidth}x${view.innerHeight}) fixed_overlay=${Boolean(fixedOverlay)}. ` +
+            `Scroll the page container first (browser_input key PageDown on the main list, or browser_eval scrollTo on the scroll container), then re-observe and retry.`,
           result: {
             rect: {
               left,
