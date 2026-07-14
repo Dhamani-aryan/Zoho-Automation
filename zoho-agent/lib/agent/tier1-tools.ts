@@ -4,6 +4,8 @@ import type { AgentToolCall, AgentToolDefinition } from "@/lib/llm/provider";
 import { upsertZohoRecords, type MirrorDbClient, type SyncModule } from "@/lib/records/zoho-upsert";
 import { normalizeZohoReadFields } from "@/lib/agent/zoho-read-fields";
 import { zohoApiReadSchema } from "@/lib/agent/zoho-api";
+import { emailBatchArgsSchema } from "@/lib/agent/email-batch";
+import { maxBatchItemsPerCall } from "@/lib/agent/runtime-config";
 
 const modules = ["Accounts", "Contacts", "Deals"] as const;
 const relatedChildren = ["Contacts", "Deals"] as const;
@@ -208,8 +210,50 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = ([
         }
       }
     }
+  },
+  {
+    name: "schedule_zoho_email_batch",
+    tier: 1,
+    description:
+      "Use for structured multi-email scheduling AFTER parsing the source file yourself. Resolve nothing here - pass fully resolved, structured items (recipient, subject, body, schedule date/time) and this tool dispatches one proven schedule_zoho_email job per item, sequentially, with a resumable ledger. Items already scheduled under the same batch_reference are skipped automatically and reported as already_done; if the result shows pending > 0, call again with the SAME batch_reference and the remaining items until pending is 0. Never invent subjects, bodies, recipients, dates, or times not present in the source; a blank/omitted cc means no CC.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["batch_reference", "items"],
+      properties: {
+        batch_reference: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          description: "Stable id for this batch, chosen by you, e.g. \"kd-blitz-2026-07-15\". Reuse the same value across follow-up calls for the same batch."
+        },
+        timezone: { type: "string", description: "IANA timezone, defaults to Asia/Kolkata." },
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: maxBatchItemsPerCall(),
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["reference", "to_email", "subject", "body", "schedule_date", "schedule_time"],
+            properties: {
+              reference: { type: "string", description: "Unique id for this item within the batch, e.g. \"row-3\"." },
+              to_email: { type: "string" },
+              to_name: { type: "string" },
+              cc: { type: "array", items: { type: "string" }, description: "Omit or send [] for no CC." },
+              subject: { type: "string", minLength: 1, maxLength: 300 },
+              body: { type: "string", minLength: 1, maxLength: 20000 },
+              schedule_date: { type: "string", description: "YYYY-MM-DD" },
+              schedule_time: { type: "string", description: "e.g. \"1:30 PM\"" }
+            }
+          }
+        }
+      }
+    }
   }
-] as AgentToolDefinition[]).filter((tool) => tool.name === "zoho_api" || tool.name === "db_sync_records");
+] as AgentToolDefinition[]).filter(
+  (tool) => tool.name === "zoho_api" || tool.name === "db_sync_records" || tool.name === "schedule_zoho_email_batch"
+);
 
 export type Tier1ToolName = (typeof TIER1_TOOL_DEFINITIONS)[number]["name"];
 
@@ -267,6 +311,11 @@ export async function validateTier1ToolCall(call: AgentToolCall, service: Supaba
 
   if (call.name === "db_sync_records") {
     const args = dbSyncRecordsSchema.parse(call.args);
+    return { ...call, args };
+  }
+
+  if (call.name === "schedule_zoho_email_batch") {
+    const args = emailBatchArgsSchema().parse(call.args);
     return { ...call, args };
   }
 

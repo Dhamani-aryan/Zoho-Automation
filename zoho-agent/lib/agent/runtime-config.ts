@@ -23,6 +23,11 @@ export const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 90 * 1000;
 export const DEFAULT_CODEX_TOTAL_TIMEOUT_MS = 10 * 60 * 1000;
 // Non-streaming OpenAI API-key calls: one bound for the whole request.
 export const DEFAULT_OPENAI_TIMEOUT_MS = 5 * 60 * 1000;
+// schedule_zoho_email_batch: how many items a single tool call accepts, and
+// how long the tool is allowed to keep dispatching extension jobs before it
+// must stop and leave the rest 'pending' for a follow-up call.
+export const MAX_BATCH_ITEMS_PER_CALL = 10;
+export const EMAIL_BATCH_MAX_WALL_MS = 10 * 60 * 1000;
 
 export function agentMaxToolCalls() {
   return positiveIntEnv("AGENT_MAX_TOOL_CALLS", AGENT_DEFAULT_MAX_TOOL_CALLS);
@@ -74,4 +79,12 @@ export function openAiTimeoutMs() {
 
 export function llmModel(defaultModel: string) {
   return getEnv("LLM_MODEL") ?? defaultModel;
+}
+
+export function maxBatchItemsPerCall() {
+  return positiveIntEnv("EMAIL_BATCH_MAX_ITEMS", MAX_BATCH_ITEMS_PER_CALL);
+}
+
+export function emailBatchMaxWallMs() {
+  return positiveIntEnv("EMAIL_BATCH_MAX_WALL_MS", EMAIL_BATCH_MAX_WALL_MS);
 }

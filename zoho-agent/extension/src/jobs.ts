@@ -3831,10 +3831,19 @@ async function claimAndRunRealtimeJob() {
 // claims a job and then crashes, hangs, or cannot deliver the report, the
 // backend waits out its full timeout and surfaces "picked this job up but
 // never reported a result". Guard all three failure modes:
-// - watchdog: bound executeInTab below the backend's 90s job timeout;
+// - watchdog: bound executeInTab below the backend's per-tool job timeout
+//   (see executeWatchdogMsFor below - most tools stay under the default 90s
+//   backend wait, but schedule_zoho_email gets a longer backend wait to match);
 // - crash: catch every throw between claim and report;
 // - delivery: retry the report POST (the Next.js server may be restarting).
-const EXECUTE_WATCHDOG_MS = 75 * 1000;
+const DEFAULT_EXECUTE_WATCHDOG_MS = 75 * 1000;
+// schedule_zoho_email drives a full deal-open -> composer -> schedule-popup
+// -> Scheduled-row verification flow; the default watchdog kills it well
+// before that proven sequence can finish, so it gets its own longer budget.
+const EMAIL_JOB_EXECUTE_WATCHDOG_MS = 300 * 1000;
+function executeWatchdogMsFor(toolName: string) {
+  return toolName === "schedule_zoho_email" ? EMAIL_JOB_EXECUTE_WATCHDOG_MS : DEFAULT_EXECUTE_WATCHDOG_MS;
+}
 const REPORT_RETRY_DELAYS_MS = [0, 2000, 5000];
 
 // MV3 suspends the service worker ~30 seconds after the last extension API
@@ -3945,13 +3954,14 @@ async function runClaimedJob(settings: Awaited<ReturnType<typeof loadSettings>>,
         };
       } else {
         await saveLastJobStatus(`Running ${job.tool_name} in dedicated Chrome window tab ${tab.id}.`);
+        const watchdogMs = executeWatchdogMsFor(job.tool_name);
         response = await Promise.race([
           executeInTab(tab.id, job),
-          sleep(EXECUTE_WATCHDOG_MS).then(
+          sleep(watchdogMs).then(
             (): PageResult => ({
               ok: false,
               error_message: `${job.tool_name} did not finish within ${Math.round(
-                EXECUTE_WATCHDOG_MS / 1000
+                watchdogMs / 1000
               )}s inside the extension. The Zoho tab may be stuck; refresh the crm.zoho.com tab and try again.`
             })
           )

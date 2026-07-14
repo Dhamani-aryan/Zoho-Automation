@@ -14,6 +14,7 @@ import {
   validateTier1ToolCall
 } from "@/lib/agent/tier1-tools";
 import { runBridgedTool } from "@/lib/agent/bridge";
+import { runEmailBatchTool } from "@/lib/agent/email-batch";
 import {
   BROWSER_TOOL_DEFINITIONS,
   isBrowserTool,
@@ -152,6 +153,7 @@ Workflows and guides:
 - Use read_workspace_file for local drafts, batch inputs, source playbooks, and reference docs. Read every required page by following next_start_line; never claim a file was parsed from its name or from a truncated first page.
 - When the user attaches or references a CRM work Markdown file, infer the requested operations from its sections: email fields mean schedule the email, New tasks means create those tasks, and Tasks to complete or Closed tasks means complete those exact tasks. An attachment-only message, "Process this", or "Do this" is a complete instruction; do not ask the user to restate the actions. Parse all rules, body, CC, subject, task sections, and contact sections. Resolve missing contact email and all Zoho Contact/Account/Deal/task ids and links yourself using Supabase mirror search first and live Zoho when current identity matters. Use contact email as the strongest supplied key, then contact name + account/company + deal name. Do not ask the user for links, email addresses that CRM can resolve, tool choices, selectors, or a walkthrough. Stop only for true identity ambiguity, missing required body/subject, or a missing schedule date/time the file/request does not specify.
 - For every structured email scheduling request, parse the complete input first. Resolve Contact -> Account -> Deal with db_* and zoho_api, duplicate-check requested Tasks against the exact Deal before any POST, create/complete only missing/open Tasks with zoho_api POST/PUT plus API read-back behavior, adopt already-open/already-completed requested Tasks as verified when they match exactly, then use browser tools for the composer and schedule popup. Do not invent task subjects, due dates, recipients, CCs, body text, dates, or times.
+- For a batch of two or more structured email-scheduling rows (a Markdown table, CSV, or list where each row has its own recipient/subject/body/date/time), parse the source yourself with read_workspace_file, then call schedule_zoho_email_batch ONCE with all rows as fully resolved items instead of driving the composer per row - it dispatches the proven single-email flow per item for you. Resolve or double-check identity beforehand only if the tool's own resolution fails; otherwise let it resolve Contact -> Deal per item. Items already scheduled under the same batch_reference are skipped automatically (already_done) so the call is safe to repeat; if the returned totals.pending is greater than 0, call again with the SAME batch_reference and the remaining items until pending is 0. Report the result as a per-item table: reference, status, deal, and error when failed. A blank or omitted cc for a row means cc: [] exactly; never invent subjects, bodies, recipients, dates, or times not present in the source.
 - Email composer recipient reconciliation is desired-state work, not a fixed removal recipe. Read committed To/Cc identities and inputs, compare them case-insensitively with the requested address sets, and preserve values that are already correct. For any mismatch, reason from the current snapshot and local target context to choose the most appropriate visible affordance or keyboard interaction. Verify the committed identities after every action. After Enter, wait until no recipient is unresolved (for example Loading, missing email identity, or pending state) before judging success. Remove duplicates adaptively and stop only when committed recipients and leftover inputs exactly match the requested state. A blank requested CC means no CC.
 - To remove or cancel a recipient chip, call browser_input with action "remove" targeting the chip by its email/text (or its @eN ref). Do not click the chip body and do not search only for a visible X/close ref: browser_observe.removable_items can list a hover-hidden cancel control with reveal_on_hover=true, and the remove action hovers before resolving and clicking that control. browser_observe also surfaces hover-hidden chip remove controls as refs flagged hidden_until_hover=true; click or remove on such a ref automatically hovers the chip first. After removal, re-observe and confirm by email identity that the chip is absent. If no control is found after hover, focus the recipient field and try Backspace/Delete once, then verify.
 - browser_input type returns real read-back: observed is the element's actual post-input value, verified tells whether it matches the request, and recipient fields also return committed_to_chips/committed_cc_chips with email attributes. Typing into a To/Cc recipient field auto-commits the chip with Enter (press_enter defaults to true there; pass false to leave text uncommitted). Never treat a type result with verified=false as success; observe, correct, and re-verify instead.
@@ -171,7 +173,7 @@ Reporting style:
 - Final answers should be plain: done/not done, counts, skipped/failed reasons, and links. Be honest on partial failure.`;
 
 const V3_TIER0_TOOL_NAMES = new Set(["read_workspace_file", "db_search_records", "db_get_record", "db_query"]);
-const V3_TIER1_TOOL_NAMES = new Set(["zoho_api", "db_sync_records"]);
+const V3_TIER1_TOOL_NAMES = new Set(["zoho_api", "db_sync_records", "schedule_zoho_email_batch"]);
 
 const AGENT_TOOL_DEFINITIONS = [
   ...TIER0_TOOL_DEFINITIONS.filter((tool) => V3_TIER0_TOOL_NAMES.has(tool.name)),
@@ -1138,6 +1140,11 @@ export async function runAgentTurn({
             ok = apiResult.ok;
             result = apiResult.result;
             pausedMs += apiResult.pausedMs;
+          } else if (call.name === "schedule_zoho_email_batch") {
+            const validatedCall = await validateTier1ToolCall(call, service);
+            const batchResult = await runEmailBatchTool({ service, user, sessionId, call: validatedCall, emit });
+            ok = batchResult.ok;
+            result = batchResult.result;
           } else {
             const validatedCall = await validateTier1ToolCall(call, service);
             if (isInProcessTier1Tool(validatedCall.name)) {
