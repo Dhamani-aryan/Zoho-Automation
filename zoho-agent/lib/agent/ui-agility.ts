@@ -53,6 +53,7 @@ export function browserObservationFingerprint(result: unknown) {
     url: root.url ?? null,
     title: root.title ?? null,
     composer: root.composer ?? null,
+    schedule_popup: root.schedule_popup ?? null,
     headings: root.headings ?? null,
     target_context: root.target_context ?? null,
     elements

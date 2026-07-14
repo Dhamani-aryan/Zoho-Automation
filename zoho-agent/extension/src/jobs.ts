@@ -135,6 +135,7 @@ async function resolveBrowserSnapshotRef(
       ...(typeof element.container_selector === "string" && element.container_selector
         ? { container_selector: element.container_selector }
         : {}),
+      ...(typeof element.name === "string" && element.name ? { expected_text: element.name } : {}),
       snapshot_id: snapshot.id,
       ref
     }
@@ -1500,32 +1501,102 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
           : [])
       ].filter(Boolean);
       const text = typeof rawStep.text === "string" ? rawStep.text.trim().toLowerCase() : "";
+      function normalizeLabel(value: string) {
+        return value.replace(/\s+/g, " ").trim().toLowerCase();
+      }
+      const expectedTextRaw = typeof rawStep.expected_text === "string" ? rawStep.expected_text.trim() : "";
+      const expectedText = expectedTextRaw ? normalizeLabel(expectedTextRaw) : "";
+      function candidateLabels(candidate: Element): string[] {
+        const labels: string[] = [textOf(candidate)];
+        const ariaLabel = candidate.getAttribute("aria-label");
+        if (ariaLabel) labels.push(ariaLabel);
+        const title = candidate.getAttribute("title");
+        if (title) labels.push(title);
+        if (
+          candidate instanceof HTMLInputElement ||
+          candidate instanceof HTMLTextAreaElement ||
+          candidate instanceof HTMLSelectElement
+        ) {
+          labels.push(candidate.value);
+        }
+        return labels.map(normalizeLabel).filter(Boolean);
+      }
+      function matchesExpectedText(candidate: Element) {
+        if (!expectedText) return true;
+        const labels = candidateLabels(candidate);
+        return labels.some((label) => label.includes(expectedText) || expectedText.includes(label));
+      }
       let element: Element | null = null;
       let ambiguous = false;
-      for (const selector of selectors) {
-        let matches: Element[] = [];
-        try {
-          matches = Array.from(ctx.doc.querySelectorAll(selector));
-        } catch {
-          continue;
+      let expectedTextMismatch = false;
+
+      // Fix B3: the composer's "Schedule"/"Schedule & Close" confirm controls
+      // live inside the schedule popup. Third-party extensions (e.g. Apollo)
+      // can inject DOM elsewhere on the page and shift structural selector
+      // indices, so resolve these two labels only within the popup root when
+      // it is open, ignoring the stored selector entirely.
+      if (expectedText === "schedule & close" || expectedText === "schedule") {
+        const popupRoot = ctx.doc.querySelector("#etSchedulePopId");
+        if (popupRoot) {
+          const popupCandidates = Array.from(popupRoot.querySelectorAll("button,span,a,div,input")).filter(isVisible);
+          element =
+            popupCandidates.find((candidate) => candidateLabels(candidate).some((label) => label === expectedText)) ??
+            null;
         }
-        if (matches.length === 1) {
-          element = matches[0];
-          break;
-        }
-        const visibleMatches = matches.filter(isVisible);
-        if (visibleMatches.length === 1) {
-          element = visibleMatches[0];
-          break;
-        }
-        if (matches.length > 1) ambiguous = true;
       }
-      if (!element && text) {
+
+      if (!element) {
+        for (const selector of selectors) {
+          let matches: Element[] = [];
+          try {
+            matches = Array.from(ctx.doc.querySelectorAll(selector));
+          } catch {
+            continue;
+          }
+          let candidate: Element | null = null;
+          if (matches.length === 1) {
+            candidate = matches[0];
+          } else {
+            const visibleMatches = matches.filter(isVisible);
+            if (visibleMatches.length === 1) {
+              candidate = visibleMatches[0];
+            } else if (matches.length > 1) {
+              ambiguous = true;
+            }
+          }
+          if (!candidate) continue;
+          // Fix B2: a structurally-resolved selector may now point at a
+          // different element if the DOM shifted (e.g. injected nodes from
+          // another extension). Reject it and keep trying selectors instead
+          // of blindly trusting the first structural match.
+          if (!matchesExpectedText(candidate)) {
+            expectedTextMismatch = true;
+            continue;
+          }
+          element = candidate;
+          break;
+        }
+      }
+      if (!element && (text || expectedText)) {
         const all = [...ctx.doc.querySelectorAll("button,a,input,textarea,select,[role='button'],[role='option'],[tabindex],span,div")].filter(isVisible);
-        element =
-          all.find((candidate) => textOf(candidate).toLowerCase() === text) ??
-          all.find((candidate) => textOf(candidate).toLowerCase().includes(text)) ??
-          null;
+        for (const needle of [text, expectedText].filter(Boolean)) {
+          element =
+            all.find((candidate) => textOf(candidate).toLowerCase() === needle) ??
+            all.find((candidate) => textOf(candidate).toLowerCase().includes(needle)) ??
+            null;
+          if (element) break;
+        }
+        if (element && !matchesExpectedText(element)) {
+          expectedTextMismatch = true;
+          element = null;
+        }
+      }
+      if (!element && expectedText && expectedTextMismatch) {
+        return {
+          ok: false,
+          error_message: `Resolved element no longer matches its snapshot name ('${expectedTextRaw}'). The page DOM shifted (possibly another browser extension injected elements). Run browser_observe again.`,
+          result: { stale_ref: Boolean(rawStep.ref), ref: rawStep.ref ?? null, selectors }
+        };
       }
       if (!element || !isVisible(element)) {
         return {
@@ -3591,7 +3662,8 @@ async function executeInTab(tabId: number, job: ToolJob): Promise<PageResult> {
       alternative_selectors: target.alternative_selectors,
       text: target.text,
       frame_selector: target.frame_selector,
-      frame_selectors: target.frame_selectors
+      frame_selectors: target.frame_selectors,
+      expected_text: target.expected_text
     };
     // Snapshot refs flagged hidden_until_hover point at chip remove controls
     // that only render while their container is hovered. Route them through

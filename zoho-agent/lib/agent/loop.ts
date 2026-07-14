@@ -1238,9 +1238,14 @@ export async function runAgentTurn({
       }
 
       if (uiActionDecision) {
+        const resultObject =
+          ok && result && typeof result === "object" && !Array.isArray(result)
+            ? (result as Record<string, unknown>)
+            : null;
+        const selfVerified = resultObject?.verified === true;
         noteBrowserAction(uiAgility, uiActionDecision);
-        browserActionAwaitingVerification = true;
-        uiRecoveryRequired = true;
+        browserActionAwaitingVerification = !selfVerified;
+        uiRecoveryRequired = !selfVerified;
       }
 
       const truncated = truncateToolResult(
