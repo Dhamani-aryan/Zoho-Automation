@@ -16,6 +16,13 @@ export const TASK_ORDER_DEFAULT_WALL_MS = 45 * 60 * 1000;
 export const DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
+// Codex streaming: time allowed to receive response headers, maximum silence
+// between SSE chunks once streaming, and an absolute cap per model call.
+export const DEFAULT_CODEX_CONNECT_TIMEOUT_MS = 90 * 1000;
+export const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 90 * 1000;
+export const DEFAULT_CODEX_TOTAL_TIMEOUT_MS = 10 * 60 * 1000;
+// Non-streaming OpenAI API-key calls: one bound for the whole request.
+export const DEFAULT_OPENAI_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function agentMaxToolCalls() {
   return positiveIntEnv("AGENT_MAX_TOOL_CALLS", AGENT_DEFAULT_MAX_TOOL_CALLS);
@@ -47,6 +54,22 @@ export function agentTurnLockTimeoutMs() {
 
 export function codexResponsesUrl() {
   return getEnv("CODEX_RESPONSES_URL") ?? DEFAULT_CODEX_RESPONSES_URL;
+}
+
+export function codexConnectTimeoutMs() {
+  return positiveIntEnv("CODEX_CONNECT_TIMEOUT_MS", DEFAULT_CODEX_CONNECT_TIMEOUT_MS);
+}
+
+export function codexIdleTimeoutMs() {
+  return positiveIntEnv("CODEX_IDLE_TIMEOUT_MS", DEFAULT_CODEX_IDLE_TIMEOUT_MS);
+}
+
+export function codexTotalTimeoutMs() {
+  return positiveIntEnv("CODEX_TOTAL_TIMEOUT_MS", DEFAULT_CODEX_TOTAL_TIMEOUT_MS);
+}
+
+export function openAiTimeoutMs() {
+  return positiveIntEnv("OPENAI_TIMEOUT_MS", DEFAULT_OPENAI_TIMEOUT_MS);
 }
 
 export function llmModel(defaultModel: string) {

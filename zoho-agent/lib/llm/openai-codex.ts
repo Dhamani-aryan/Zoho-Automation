@@ -22,14 +22,103 @@ import {
   responsesInputFromMessages
 } from "@/lib/llm/tool-calls";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
-import { codexResponsesUrl, DEFAULT_CODEX_MODEL, llmModel } from "@/lib/agent/runtime-config";
+import {
+  codexConnectTimeoutMs,
+  codexIdleTimeoutMs,
+  codexResponsesUrl,
+  codexTotalTimeoutMs,
+  DEFAULT_CODEX_MODEL,
+  llmModel
+} from "@/lib/agent/runtime-config";
 
 const CODEX_RESPONSES_URL = codexResponsesUrl();
 // Must be a model id from the pi reference's openai-codex.models.ts registry.
 // "gpt-5-codex" is NOT in the current registry and the backend rejects it.
 const CODEX_MODEL = llmModel(DEFAULT_CODEX_MODEL);
-const CODEX_TIMEOUT_MS = 90000;
 const refreshLocks = new Map<string, Promise<CodexToken>>();
+
+// Fetch a Codex SSE response with timeouts that tolerate long reasoning
+// turns. The old implementation armed one 90s abort timer over the whole
+// request INCLUDING stream buffering, so any turn where the model thought or
+// streamed for more than 90s total died with "Codex did not respond". Now:
+// - connect timeout: time allowed to receive response headers;
+// - idle timeout: maximum silence between SSE chunks while streaming;
+// - total timeout: absolute cap per model call.
+async function fetchCodexSse(options: {
+  accessToken: string;
+  accountId: string;
+  sessionId: string;
+  body: Record<string, unknown>;
+}): Promise<{ response: Response; raw: string }> {
+  const connectMs = codexConnectTimeoutMs();
+  const idleMs = codexIdleTimeoutMs();
+  const totalMs = codexTotalTimeoutMs();
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> = setTimeout(() => controller.abort(), connectMs);
+  const armIdleTimer = () => {
+    clearTimeout(timer);
+    const remainingTotal = totalMs - (Date.now() - startedAt);
+    timer = setTimeout(() => controller.abort(), Math.max(1, Math.min(idleMs, remainingTotal)));
+  };
+
+  let response: Response;
+  try {
+    // Header set and body shape mirror pi's openai-codex-responses api
+    // (originator/User-Agent/session-id matter — diffs cause 403s).
+    response = await fetch(CODEX_RESPONSES_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${options.accessToken}`,
+        "content-type": "application/json",
+        accept: "text/event-stream",
+        "chatgpt-account-id": options.accountId,
+        "OpenAI-Beta": "responses=experimental",
+        originator: "pi",
+        "User-Agent": "pi (zoho-agent)",
+        "session-id": options.sessionId,
+        "x-client-request-id": options.sessionId
+      },
+      body: JSON.stringify(options.body)
+    });
+  } catch (error) {
+    clearTimeout(timer);
+    throw new Error(
+      error instanceof Error && error.name === "AbortError"
+        ? `Codex did not start responding within ${Math.round(connectMs / 1000)}s.`
+        : "Could not reach the Codex backend."
+    );
+  }
+
+  try {
+    armIdleTimer();
+    if (!response.body) {
+      const raw = await response.text();
+      return { response, raw };
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) raw += decoder.decode(value, { stream: true });
+      armIdleTimer();
+    }
+    raw += decoder.decode();
+    return { response, raw };
+  } catch (error) {
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+    throw new Error(
+      error instanceof Error && error.name === "AbortError"
+        ? `Codex stream stalled after ${elapsedSeconds}s: no data for ${Math.round(idleMs / 1000)}s (total cap ${Math.round(totalMs / 1000)}s).`
+        : `Codex stream failed after ${elapsedSeconds}s: ${error instanceof Error ? error.message : "unknown error"}`
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // The Codex backend only serves streaming (SSE) responses. Buffer the whole
 // stream, then pull the final response object from the `response.completed`
@@ -219,59 +308,27 @@ export class OpenAICodexProvider implements LLMProvider {
     if (!accountId) throw new Error("ChatGPT account id was not present in the Codex credential.");
 
     const sessionId = crypto.randomUUID();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CODEX_TIMEOUT_MS);
-
-    let response: Response;
-    try {
-      // Header set and body shape mirror pi's openai-codex-responses api
-      // (originator/User-Agent/session-id matter — diffs cause 403s).
-      response = await fetch(CODEX_RESPONSES_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${token.accessToken}`,
-          "content-type": "application/json",
-          accept: "text/event-stream",
-          "chatgpt-account-id": accountId,
-          "OpenAI-Beta": "responses=experimental",
-          originator: "pi",
-          "User-Agent": "pi (zoho-agent)",
-          "session-id": sessionId,
-          "x-client-request-id": sessionId
-        },
-        body: JSON.stringify({
-          model: CODEX_MODEL,
-          store: false,
-          stream: true,
-          instructions: input.systemPrompt ?? "",
-          // The Codex backend requires the list form of `input` ("Input must
-          // be a list"), unlike api.openai.com which also accepts a string.
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: composeUserInput(input) }]
-            }
-          ],
-          text: { verbosity: "low" }
-        })
-      });
-    } catch (error) {
-      clearTimeout(timeout);
-      throw new Error(
-        error instanceof Error && error.name === "AbortError"
-          ? `Codex did not respond within ${CODEX_TIMEOUT_MS / 1000}s.`
-          : "Could not reach the Codex backend."
-      );
-    }
-
-    let raw: string;
-    try {
-      raw = await response.text();
-    } finally {
-      clearTimeout(timeout);
-    }
+    const { response, raw } = await fetchCodexSse({
+      accessToken: token.accessToken,
+      accountId,
+      sessionId,
+      body: {
+        model: CODEX_MODEL,
+        store: false,
+        stream: true,
+        instructions: input.systemPrompt ?? "",
+        // The Codex backend requires the list form of `input` ("Input must
+        // be a list"), unlike api.openai.com which also accepts a string.
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: composeUserInput(input) }]
+          }
+        ],
+        text: { verbosity: "low" }
+      }
+    });
 
     if (!response.ok) {
       let detail = raw.slice(0, 300);
@@ -313,52 +370,22 @@ export class OpenAICodexProvider implements LLMProvider {
     if (!accountId) throw new Error("ChatGPT account id was not present in the Codex credential.");
 
     const sessionId = crypto.randomUUID();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CODEX_TIMEOUT_MS);
-
-    let response: Response;
-    try {
-      response = await fetch(CODEX_RESPONSES_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${token.accessToken}`,
-          "content-type": "application/json",
-          accept: "text/event-stream",
-          "chatgpt-account-id": accountId,
-          "OpenAI-Beta": "responses=experimental",
-          originator: "pi",
-          "User-Agent": "pi (zoho-agent)",
-          "session-id": sessionId,
-          "x-client-request-id": sessionId
-        },
-        body: JSON.stringify({
-          model: CODEX_MODEL,
-          store: false,
-          stream: true,
-          instructions: input.instructions,
-          input: responsesInputFromMessages(input.messages),
-          tools: formatResponsesTools(input.tools),
-          tool_choice: "auto",
-          parallel_tool_calls: false,
-          text: { verbosity: "low" }
-        })
-      });
-    } catch (error) {
-      clearTimeout(timeout);
-      throw new Error(
-        error instanceof Error && error.name === "AbortError"
-          ? `Codex did not respond within ${CODEX_TIMEOUT_MS / 1000}s.`
-          : "Could not reach the Codex backend."
-      );
-    }
-
-    let raw: string;
-    try {
-      raw = await response.text();
-    } finally {
-      clearTimeout(timeout);
-    }
+    const { response, raw } = await fetchCodexSse({
+      accessToken: token.accessToken,
+      accountId,
+      sessionId,
+      body: {
+        model: CODEX_MODEL,
+        store: false,
+        stream: true,
+        instructions: input.instructions,
+        input: responsesInputFromMessages(input.messages),
+        tools: formatResponsesTools(input.tools),
+        tool_choice: "auto",
+        parallel_tool_calls: false,
+        text: { verbosity: "low" }
+      }
+    });
 
     if (!response.ok) {
       let detail = raw.slice(0, 300);
