@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Copy, KeyRound, Loader2, Unplug } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, Unplug } from "lucide-react";
 
 type ExtensionTokenStatus = {
   configured: boolean;
@@ -30,6 +30,7 @@ export function SettingsExtensionCard() {
   const [label, setLabel] = useState("Aryan Chrome");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<"generate" | "revoke" | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function refreshStatus() {
     try {
@@ -115,7 +116,9 @@ export function SettingsExtensionCard() {
   async function copyToken() {
     if (!status?.token) return;
     await navigator.clipboard.writeText(status.token);
+    setCopied(true);
     setMessage("Token copied.");
+    window.setTimeout(() => setCopied(false), 1500);
   }
 
   const isBusy = busy !== null;
@@ -157,10 +160,14 @@ export function SettingsExtensionCard() {
             <button
               type="button"
               onClick={copyToken}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm"
+              className={`inline-flex h-10 min-w-24 items-center justify-center gap-2 rounded-md border px-3 text-sm transition-colors ${
+                copied
+                  ? "border-success/40 bg-success/10 text-success"
+                  : "border-line text-ink hover:bg-line"
+              }`}
             >
-              <Copy className="h-4 w-4" />
-              Copy
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? "Copied" : "Copy"}
             </button>
           </div>
         </div>

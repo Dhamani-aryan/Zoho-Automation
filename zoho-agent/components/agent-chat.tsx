@@ -669,7 +669,7 @@ export function AgentChat({
                   className={`mb-1 grid ${
                     confirmingDelete ? "grid-cols-[minmax(0,1fr)_68px]" : "grid-cols-[minmax(0,1fr)_32px]"
                   } items-center rounded-md ${
-                    active ? "bg-ink text-white" : "hover:bg-surface"
+                    active ? "border border-accent/40 bg-accent/10 text-ink" : "hover:bg-line"
                   }`}
                 >
                   <button
@@ -685,7 +685,7 @@ export function AgentChat({
                     className="min-w-0 px-3 py-2 text-left text-sm"
                   >
                     <div className="truncate">{titleFor(session)}</div>
-                    <div className={`mt-1 text-xs ${active ? "text-white/70" : "text-muted"}`}>{session.status}</div>
+                    <div className={`mt-1 text-xs ${active ? "text-accent" : "text-muted"}`}>{session.status}</div>
                   </button>
                   {confirmingDelete ? (
                     <div className="mr-1 flex items-center gap-1">
@@ -693,7 +693,7 @@ export function AgentChat({
                         type="button"
                         onClick={() => setPendingDeleteSessionId(null)}
                         className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                          active ? "text-white/70 hover:bg-line hover:text-white" : "text-muted hover:bg-line hover:text-ink"
+                          active ? "text-muted hover:bg-line hover:text-ink" : "text-muted hover:bg-line hover:text-ink"
                         }`}
                         aria-label="Cancel delete"
                         title="Cancel delete"
@@ -723,7 +723,7 @@ export function AgentChat({
                       disabled={loading}
                       onClick={() => setPendingDeleteSessionId(session.id)}
                       className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
-                        active ? "text-white/70 hover:bg-line hover:text-white" : "text-muted hover:bg-line hover:text-ink"
+                        active ? "text-muted hover:bg-line hover:text-ink" : "text-muted hover:bg-line hover:text-ink"
                       } disabled:cursor-not-allowed disabled:opacity-40`}
                       aria-label={`Delete ${titleFor(session)}`}
                       title="Delete chat"
@@ -786,7 +786,7 @@ export function AgentChat({
               if (item.kind === "user") {
                 return (
                   <div key={item.id} className="group flex flex-col items-end gap-1">
-                    <div className="max-w-3xl whitespace-pre-wrap rounded-md bg-ink px-4 py-3 text-sm text-white">
+                    <div className="max-w-3xl whitespace-pre-wrap rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-ink">
                       {linkifyContent(item.content, "underline underline-offset-2 hover:opacity-80 break-all")}
                     </div>
                     <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
@@ -890,7 +890,7 @@ export function AgentChat({
                 }
               }}
               rows={2}
-              className="min-h-12 flex-1 resize-none rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-ink"
+              className="min-h-12 flex-1 resize-none rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
               placeholder="Ask about a deal, contact, account, tag, or missing tool... (Enter to send, Shift+Enter for a new line)"
             />
             {loading ? (
@@ -911,7 +911,7 @@ export function AgentChat({
               <button
                 type="submit"
                 disabled={!input.trim() && attachedFiles.length === 0}
-                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-ink text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-accent text-white disabled:cursor-not-allowed disabled:opacity-50"
                 title="Send"
                 aria-label="Send message"
               >
