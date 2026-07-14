@@ -52,6 +52,7 @@ export const config = {
     "/dashboard/:path*",
     "/agent/:path*",
     "/records/:path*",
+    "/skills/:path*",
     "/imports/:path*",
     "/run/:path*",
     "/runs/:path*",

@@ -1,4 +1,5 @@
 import {
+  BookOpenCheck,
   BotMessageSquare,
   ChartNoAxesColumnIncreasing,
   ClipboardList,
@@ -23,6 +24,7 @@ const navItems: Array<{
 }> = [
   { href: "/agent", label: "Agent", icon: BotMessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/skills", label: "Skills", icon: BookOpenCheck },
   { href: "/records", label: "Records", icon: Database },
   { href: "/imports", label: "Imports", icon: FileUp },
   { href: "/runs", label: "Runs", icon: ClipboardList },
