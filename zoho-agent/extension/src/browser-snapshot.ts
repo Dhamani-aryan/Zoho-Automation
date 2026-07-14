@@ -63,7 +63,7 @@ export function compactBrowserObservation(payload: unknown) {
   const snapshot = root.snapshot && typeof root.snapshot === "object"
     ? (root.snapshot as Record<string, unknown>)
     : null;
-  const elements = compactArray(snapshot?.elements, 40).map((value) => {
+  const elements = compactArray(snapshot?.elements, 35).map((value) => {
     const element = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
     const compact: Record<string, unknown> = {
       ref: element.ref ?? null,
@@ -78,7 +78,7 @@ export function compactBrowserObservation(payload: unknown) {
     if (element.hidden_until_hover === true) compact.hidden_until_hover = true;
     return compact;
   });
-  const controls = compactArray(root.controls, 20).map((value) => {
+  const controls = compactArray(root.controls, 15).map((value) => {
     const control = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
     const compact: Record<string, unknown> = {
       tag: control.tag ?? null,
@@ -102,6 +102,7 @@ export function compactBrowserObservation(payload: unknown) {
     recovery_hint: root.recovery_hint ?? null,
     verification_hint: root.verification_hint ?? null,
     composer: root.composer ?? null,
+    schedule_popup: root.schedule_popup ?? null,
     removable_items: compactArray(root.removable_items, 20),
     target_context: targetContext
       ? {

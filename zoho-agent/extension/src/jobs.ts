@@ -1106,6 +1106,29 @@ function browserObservePageRunner(input?: {
       }
     : null;
 
+  // Zoho schedule popup read-back. The visible time field (#schTimeMail) is a
+  // filtered combobox whose real state lives in hidden hour/minute/ampm
+  // inputs, so expose all of them as verification evidence.
+  const scheduleRoot =
+    elementsAcrossContexts("#etSchedulePopId").find(
+      (element) => isVisible(element) && !(element.getAttribute("class") ?? "").includes("hide")
+    ) ?? null;
+  function scheduleFieldValue(selector: string) {
+    const field = scheduleRoot?.querySelector(selector) ?? null;
+    return field instanceof HTMLInputElement || field instanceof HTMLSelectElement ? field.value : null;
+  }
+  const schedulePopup = scheduleRoot
+    ? {
+        open: true,
+        date: scheduleFieldValue("#startDate"),
+        time: scheduleFieldValue("#schTimeMail"),
+        hour: scheduleFieldValue("input[name='startDatehour']"),
+        minute: scheduleFieldValue("#startDateminute"),
+        ampm: scheduleFieldValue("#startDateampm"),
+        timezone: scheduleFieldValue("#timeZone")
+      }
+    : null;
+
   const recoveryHint = location.pathname.includes("/tab/Home")
     ? "Zoho Home is a recoverable navigation state. If the task or recent conversation contains a known record URL/id, use ui_step open_url to navigate there, wait for the expected record, and continue. Stop only when the target identity is unknown or ambiguous."
     : null;
@@ -1114,9 +1137,12 @@ function browserObservePageRunner(input?: {
         title: document.title,
         recovery_hint: recoveryHint,
     verification_hint: composerDetected
-      ? "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
+      ? schedulePopup
+        ? "Composer and schedule popup detected. Use schedule_popup.date/time/hour/minute/ampm as read-back; browser_input type on the schedule time/date fields commits them deterministically. Confirm with the Schedule & Close control and verify the popup closed afterwards."
+        : "Composer detected. Use composer.to_chips, cc_chips, subject, body_text, and signature_present as read-back evidence; if a required value is absent, perform one targeted browser_eval/browser_observe before reporting failure."
       : null,
         composer,
+        schedule_popup: schedulePopup,
         snapshot: {
           id: snapshotId,
           url: location.href,
@@ -1141,6 +1167,7 @@ function browserObservePageRunner(input?: {
       recovery_hint: result.recovery_hint,
       verification_hint: result.verification_hint,
       composer: result.composer,
+      schedule_popup: result.schedule_popup,
       snapshot: result.snapshot,
       target_context: result.target_context,
       removable_items: result.removable_items,
@@ -1379,6 +1406,8 @@ type LocatedUiTarget =
       tag_name: string;
       is_recipient_field?: boolean;
       recipient_kind?: "to" | "cc" | null;
+      is_schedule_time_field?: boolean;
+      is_schedule_date_field?: boolean;
     }
   | { ok: false; error_message: string; result?: unknown };
 
@@ -1553,6 +1582,12 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         element.matches("[id^='ceCCAddr_']") || Boolean(element.closest("[id^='ceCCAddrDetails']"));
       const toField =
         element.matches("[id^='ceToAddr_']") || Boolean(element.closest("[id^='ceToAddrDetails']"));
+      // Zoho schedule popup fields: the visible time input is a filtered
+      // combobox backed by hidden hour/minute/ampm inputs, so typed text
+      // never commits; callers route these to a deterministic DOM commit.
+      const inSchedulePopup = Boolean(element.closest("#etSchedulePopId"));
+      const scheduleTimeField = inSchedulePopup && element.matches("#schTimeMail");
+      const scheduleDateField = inSchedulePopup && element.matches("#startDate");
       return {
         ok: true,
         x,
@@ -1560,7 +1595,9 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
         observed: valueOf(element),
         tag_name: element.tagName.toLowerCase(),
         is_recipient_field: ccField || toField,
-        recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null
+        recipient_kind: ccField ? ("cc" as const) : toField ? ("to" as const) : null,
+        is_schedule_time_field: scheduleTimeField,
+        is_schedule_date_field: scheduleDateField
       };
     },
     args: [step]
@@ -2133,6 +2170,163 @@ function chipMatchesRequested(chip: { text: string; email: string | null }, requ
   return (chip.email ?? "").includes(requestedLower) || chip.text.toLowerCase().includes(requestedLower);
 }
 
+// Accepts "1pm", "1 PM", "1:00 pm", "01:00 PM", "13:00". Returns null when
+// the text is not a time. A missing meridiem with an hour of 1-12 keeps the
+// popup's current AM/PM value (ampm: null).
+export function parseScheduleTimeValue(raw: string): { hour: string; minute: string; ampm: "AM" | "PM" | null } | null {
+  const match = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = match[2] ?? "00";
+  let ampm: "AM" | "PM" | null = match[3] ? (match[3].toUpperCase() as "AM" | "PM") : null;
+  if (Number(minute) > 59 || hour > 24) return null;
+  if (hour === 24) hour = 0;
+  if (hour === 0) {
+    hour = 12;
+    ampm = "AM";
+  } else if (hour > 12) {
+    hour -= 12;
+    ampm = "PM";
+  } else if (hour === 12 && !ampm) {
+    ampm = "PM";
+  }
+  return { hour: String(hour), minute, ampm };
+}
+
+// The Zoho schedule popup time field (#schTimeMail) is a filtered combobox:
+// typed text filters a dropdown but commits nothing, and the real state
+// lives in hidden hour/minute/ampm inputs. Commit those directly (the same
+// mechanism the proven schedule_zoho_email flow uses) and return read-back.
+async function commitScheduleTime(tabId: number, requested: string): Promise<PageResult> {
+  const parsed = parseScheduleTimeValue(requested);
+  if (!parsed) {
+    return {
+      ok: false,
+      error_message: `Could not parse schedule time "${requested}". Use a form like "1:00 PM", "1pm", or "13:00".`
+    };
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (hour: string, minute: string, ampm: string | null) => {
+      const root = document.getElementById("etSchedulePopId");
+      if (!root) return { ok: false, error_message: "Schedule popup (#etSchedulePopId) is not open." };
+      const custom = root.querySelector("#ecSchduleTime");
+      if (custom instanceof HTMLInputElement && !custom.checked) {
+        custom.checked = true;
+        custom.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const ampmInput = root.querySelector("#startDateampm");
+      const effectiveAmpm =
+        ampm ??
+        (ampmInput instanceof HTMLInputElement && ampmInput.value.trim() ? ampmInput.value.trim().toUpperCase() : "PM");
+      const timeInput = root.querySelector("#schTimeMail");
+      if (timeInput instanceof HTMLInputElement) {
+        timeInput.value = `${hour.padStart(2, "0")}:${minute}`;
+        timeInput.dispatchEvent(new Event("input", { bubbles: true }));
+        timeInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const hourInput = root.querySelector('input[name="startDatehour"]');
+      const minuteInput = root.querySelector("#startDateminute");
+      if (hourInput instanceof HTMLInputElement) hourInput.value = hour;
+      if (minuteInput instanceof HTMLInputElement) minuteInput.value = minute;
+      if (ampmInput instanceof HTMLInputElement) ampmInput.value = effectiveAmpm;
+      for (const field of [hourInput, minuteInput, ampmInput]) {
+        if (field instanceof HTMLInputElement) field.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return {
+        ok: true,
+        time: timeInput instanceof HTMLInputElement ? timeInput.value : null,
+        hour: hourInput instanceof HTMLInputElement ? hourInput.value : null,
+        minute: minuteInput instanceof HTMLInputElement ? minuteInput.value : null,
+        ampm: ampmInput instanceof HTMLInputElement ? ampmInput.value : null
+      };
+    },
+    args: [parsed.hour, parsed.minute, parsed.ampm]
+  });
+  const committed = results?.[0]?.result as
+    | { ok: true; time: string | null; hour: string | null; minute: string | null; ampm: string | null }
+    | { ok: false; error_message: string }
+    | undefined;
+  if (!committed) return { ok: false, error_message: "Schedule time commit returned no result." };
+  if (!committed.ok) return { ok: false, error_message: committed.error_message };
+  const verified =
+    committed.hour === parsed.hour &&
+    committed.minute === parsed.minute &&
+    (parsed.ampm === null || committed.ampm === parsed.ampm);
+  return {
+    ok: true,
+    result: {
+      observed: `${committed.hour ?? "?"}:${committed.minute ?? "?"} ${committed.ampm ?? "?"}`,
+      requested_value: requested,
+      verified,
+      schedule_time: { time: committed.time, hour: committed.hour, minute: committed.minute, ampm: committed.ampm },
+      input_method: "dom",
+      trusted: false,
+      ...(verified
+        ? {}
+        : {
+            warning:
+              "Schedule time read-back did not match the requested time. Observe schedule_popup and correct before clicking Schedule & Close."
+          })
+    }
+  };
+}
+
+async function commitScheduleDate(tabId: number, requested: string): Promise<PageResult> {
+  const value = requested.trim();
+  if (!value) return { ok: false, error_message: "Schedule date value is empty." };
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (dateValue: string) => {
+      const root = document.getElementById("etSchedulePopId");
+      if (!root) return { ok: false, error_message: "Schedule popup (#etSchedulePopId) is not open." };
+      const custom = root.querySelector("#ecSchduleTime");
+      if (custom instanceof HTMLInputElement && !custom.checked) {
+        custom.checked = true;
+        custom.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const dateInput = root.querySelector("#startDate");
+      if (!(dateInput instanceof HTMLInputElement)) {
+        return { ok: false, error_message: "Schedule date input (#startDate) is missing." };
+      }
+      dateInput.value = dateValue;
+      dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+      dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true, date: dateInput.value };
+    },
+    args: [value]
+  });
+  const committed = results?.[0]?.result as
+    | { ok: true; date: string }
+    | { ok: false; error_message: string }
+    | undefined;
+  if (!committed) return { ok: false, error_message: "Schedule date commit returned no result." };
+  if (!committed.ok) return { ok: false, error_message: committed.error_message };
+  const verified = committed.date.trim() === value;
+  return {
+    ok: true,
+    result: {
+      observed: committed.date,
+      requested_value: requested,
+      verified,
+      input_method: "dom",
+      trusted: false,
+      ...(verified
+        ? {}
+        : {
+            warning:
+              "Schedule date read-back did not match the requested date (Zoho may reformat it). Observe schedule_popup.date and confirm the intended day before clicking Schedule & Close."
+          })
+    }
+  };
+}
+
 async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): Promise<PageResult> {
   const type = String(step.type ?? "");
   if (type === "press_key") {
@@ -2164,6 +2358,12 @@ async function runTrustedUiStep(tabId: number, step: Record<string, unknown>): P
   return withDebugger(tabId, async (target) => {
     const located = await locateUiTarget(tabId, step);
     if (!located.ok) return { ok: false, error_message: located.error_message, result: located.result };
+    if (type === "fill_field" && located.is_schedule_time_field === true) {
+      return commitScheduleTime(tabId, String(step.value ?? ""));
+    }
+    if (type === "fill_field" && located.is_schedule_date_field === true) {
+      return commitScheduleDate(tabId, String(step.value ?? ""));
+    }
     if (type === "remove_item") {
       await hoverTrusted(target, located.x, located.y);
       const remove = await locateRemoveAffordance(tabId, step);
