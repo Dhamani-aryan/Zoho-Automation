@@ -28,6 +28,9 @@ declare namespace chrome {
     attach(target: Debuggee, requiredVersion: string): Promise<void>;
     detach(target: Debuggee): Promise<void>;
     sendCommand(target: Debuggee, method: string, commandParams?: Record<string, unknown>): Promise<unknown>;
+    onDetach: {
+      addListener(callback: (source: Debuggee, reason: string) => void): void;
+    };
   };
 
   namespace storage {
@@ -67,6 +70,9 @@ declare namespace chrome {
     const onUpdated: {
       addListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
       removeListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
+    };
+    const onRemoved: {
+      addListener(callback: (tabId: number) => void): void;
     };
   }
 

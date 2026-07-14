@@ -1630,23 +1630,76 @@ async function locateUiTarget(tabId: number, step: Record<string, unknown>): Pro
   return located ?? { ok: false, error_message: "UI locator returned no result." };
 }
 
-// NOTE: trusted input intentionally runs against the tab's real viewport.
-// A per-action Emulation.setDeviceMetricsOverride used to force a 1440x2200
-// layout for every click, which reflowed the page between coordinate
-// measurement and CDP dispatch and made small targets (recipient chips,
-// chip remove icons, Cc/Bcc links) miss. Coordinates are now measured in the
-// same layout the events are dispatched into.
-async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => Promise<T>) {
-  const target = { tabId };
-  let attached = false;
+// Persistent CDP session. Attaching/detaching chrome.debugger per action
+// toggles Chrome's "is debugging this browser" infobar, which RESIZES the
+// viewport between actions - resize-sensitive Zoho UI (the schedule popover)
+// dismissed itself the moment each job detached. Keeping the debugger
+// attached across the whole task removes the flapping, keeps transient
+// popovers alive between actions, and saves an attach round-trip per step.
+// Detach happens only after idle, on tab close, or when Chrome reports a
+// detach (e.g. the user cancels via the infobar).
+const attachedDebuggerTabs = new Set<number>();
+let debuggerIdleDetachTimer: ReturnType<typeof setTimeout> | undefined;
+const DEBUGGER_IDLE_DETACH_MS = 3 * 60 * 1000;
+
+function scheduleDebuggerIdleDetach() {
+  if (debuggerIdleDetachTimer !== undefined) clearTimeout(debuggerIdleDetachTimer);
+  debuggerIdleDetachTimer = setTimeout(() => {
+    debuggerIdleDetachTimer = undefined;
+    for (const tabId of [...attachedDebuggerTabs]) {
+      attachedDebuggerTabs.delete(tabId);
+      void debuggerApi()
+        .detach({ tabId })
+        .catch(() => undefined);
+    }
+  }, DEBUGGER_IDLE_DETACH_MS);
+}
+
+async function ensureDebuggerAttached(tabId: number): Promise<chrome.Debuggee> {
+  const target: chrome.Debuggee = { tabId };
+  if (attachedDebuggerTabs.has(tabId)) return target;
   try {
     await debuggerApi().attach(target, "1.3");
-    attached = true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A previous service-worker lifetime may have left the tab attached;
+    // treat "already attached" (by this extension) as success.
+    if (!/already attached/i.test(message)) throw error;
+  }
+  attachedDebuggerTabs.add(tabId);
+  // Let the layout settle after the debugger infobar appears so coordinates
+  // measured next reflect the final geometry.
+  await sleep(300);
+  return target;
+}
+
+try {
+  debuggerApi().onDetach.addListener((source) => {
+    if (typeof source.tabId === "number") attachedDebuggerTabs.delete(source.tabId);
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    attachedDebuggerTabs.delete(tabId);
+  });
+} catch {
+  // Listener registration is best-effort; stale entries self-heal on retry.
+}
+
+async function withDebugger<T>(tabId: number, run: (target: chrome.Debuggee) => Promise<T>) {
+  const target = await ensureDebuggerAttached(tabId);
+  try {
     return await run(target);
-  } finally {
-    if (attached) {
-      await debuggerApi().detach(target).catch(() => undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/not attached|detached/i.test(message)) {
+      // The session died between jobs (infobar Cancel, tab reload, Chrome
+      // reclaim). Re-attach once and retry.
+      attachedDebuggerTabs.delete(tabId);
+      const retryTarget = await ensureDebuggerAttached(tabId);
+      return await run(retryTarget);
     }
+    throw error;
+  } finally {
+    scheduleDebuggerIdleDetach();
   }
 }
 
