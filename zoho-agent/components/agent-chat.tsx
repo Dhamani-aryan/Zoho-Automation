@@ -61,6 +61,7 @@ type AttachedContextFile = {
 
 const ATTACHMENT_MAX_FILES = 4;
 const ATTACHMENT_MAX_BYTES = 750_000;
+const TEXTAREA_MAX_HEIGHT_PX = 220;
 const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".csv", ".tsv"]);
 
 function buildTimeline(rows: AgentMessageRow[]): TimelineItem[] {
@@ -323,6 +324,14 @@ function ToolTrace({
   );
 }
 
+function resizeComposerTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return;
+  element.style.height = "auto";
+  const nextHeight = Math.min(element.scrollHeight, TEXTAREA_MAX_HEIGHT_PX);
+  element.style.height = `${nextHeight}px`;
+  element.style.overflowY = element.scrollHeight > TEXTAREA_MAX_HEIGHT_PX ? "auto" : "hidden";
+}
+
 export function AgentChat({
   initialSessions,
   initialMessages,
@@ -360,7 +369,12 @@ export function AgentChat({
     if (!el) return;
     el.focus();
     el.setSelectionRange(initialDraft.length, initialDraft.length);
+    resizeComposerTextarea(el);
   }, [initialDraft]);
+
+  useEffect(() => {
+    resizeComposerTextarea(textareaRef.current);
+  }, [input]);
 
   // Hydrate the active session on mount so the persisted tool trace rebuilds
   // after a reload/reconnect.
@@ -832,31 +846,31 @@ export function AgentChat({
         </div>
 
         <form onSubmit={sendMessage} className="shrink-0 border-t border-line p-4">
-          {attachedFiles.length > 0 ? (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {attachedFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className="inline-flex max-w-full items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink"
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
-                  <span className="max-w-64 truncate font-medium">{file.name}</span>
-                  <span className="shrink-0 text-muted">{formatBytes(file.size)}</span>
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={() => setAttachedFiles((current) => current.filter((item) => item.id !== file.id))}
-                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
-                    title={`Remove ${file.name}`}
-                    aria-label={`Remove ${file.name}`}
+          <div className="rounded-2xl border border-line bg-surface p-3 transition-colors focus-within:border-accent">
+            {attachedFiles.length > 0 ? (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {attachedFiles.map((file) => (
+                  <div
+                    key={file.id}
+                    className="inline-flex max-w-full items-center gap-2 rounded-xl border border-line bg-canvas px-2 py-1 text-xs text-ink"
                   >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="flex gap-3">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
+                    <span className="max-w-64 truncate font-medium">{file.name}</span>
+                    <span className="shrink-0 text-muted">{formatBytes(file.size)}</span>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => setAttachedFiles((current) => current.filter((item) => item.id !== file.id))}
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                      title={`Remove ${file.name}`}
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <input
               ref={fileInputRef}
               type="file"
@@ -869,55 +883,60 @@ export function AgentChat({
                 });
               }}
             />
-            <button
-              type="button"
-              disabled={loading || attachedFiles.length >= ATTACHMENT_MAX_FILES}
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
-              title="Attach context files"
-              aria-label="Attach context files"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(event) => setInput(event.target.value)}
+              onChange={(event) => {
+                setInput(event.target.value);
+                resizeComposerTextarea(event.target);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   if (!loading) event.currentTarget.form?.requestSubmit();
                 }
               }}
-              rows={2}
-              className="min-h-12 flex-1 resize-none rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+              rows={1}
+              className="min-h-8 w-full resize-none bg-transparent px-1 py-1 text-sm text-ink outline-none placeholder:text-muted"
               placeholder="Ask about a deal, contact, account, tag, or missing tool... (Enter to send, Shift+Enter for a new line)"
             />
-            {loading ? (
+            <div className="mt-2 flex items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  stopStreaming().catch((err: unknown) => {
-                    setError(err instanceof Error ? err.message : "Could not stop the active task.");
-                  });
-                }}
-                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-danger text-white hover:bg-danger/90"
-                title="Stop the active task"
-                aria-label="Stop the active task"
+                disabled={loading || attachedFiles.length >= ATTACHMENT_MAX_FILES}
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink hover:bg-line disabled:cursor-not-allowed disabled:opacity-50"
+                title="Attach context files"
+                aria-label="Attach context files"
               >
-                <Square className="h-4 w-4" fill="currentColor" />
+                <Plus className="h-4 w-4" />
               </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim() && attachedFiles.length === 0}
-                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-accent text-white disabled:cursor-not-allowed disabled:opacity-50"
-                title="Send"
-                aria-label="Send message"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            )}
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopStreaming().catch((err: unknown) => {
+                      setError(err instanceof Error ? err.message : "Could not stop the active task.");
+                    });
+                  }}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90"
+                  title="Stop the active task"
+                  aria-label="Stop the active task"
+                >
+                  <Square className="h-4 w-4" fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!input.trim() && attachedFiles.length === 0}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Send"
+                  aria-label="Send message"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
         </form>
       </section>
