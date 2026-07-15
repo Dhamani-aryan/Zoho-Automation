@@ -48,6 +48,87 @@ export async function getRecentRuns(): Promise<RecentRun[]> {
   return data as RecentRun[];
 }
 
+function startOfTodayIso() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today.toISOString();
+}
+
+function sevenDaysAgoIso() {
+  const date = new Date();
+  date.setDate(date.getDate() - 7);
+  return date.toISOString();
+}
+
+async function countAgentRows(
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
+  table: string,
+  filters: Array<{ column: string; value: string; operator?: "eq" | "gte" }>
+) {
+  if (!supabase) return 0;
+  let query = supabase.from(table).select("id", { count: "exact", head: true });
+  for (const filter of filters) {
+    query = filter.operator === "gte" ? query.gte(filter.column, filter.value) : query.eq(filter.column, filter.value);
+  }
+  const { count, error } = await query;
+  if (error) return 0;
+  return count ?? 0;
+}
+
+export async function getAgentDashboardCounts() {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return {
+      emailsScheduledToday: 0,
+      emailsFailedSevenDays: 0,
+      activeAgentChats: 0
+    };
+  }
+
+  const [emailsScheduledToday, emailsFailedSevenDays, activeAgentChats] = await Promise.all([
+    countAgentRows(supabase, "email_batch_items", [
+      { column: "status", value: "scheduled" },
+      { column: "updated_at", value: startOfTodayIso(), operator: "gte" }
+    ]),
+    countAgentRows(supabase, "email_batch_items", [
+      { column: "status", value: "failed" },
+      { column: "updated_at", value: sevenDaysAgoIso(), operator: "gte" }
+    ]),
+    countAgentRows(supabase, "agent_sessions", [{ column: "status", value: "active" }])
+  ]);
+
+  return {
+    emailsScheduledToday,
+    emailsFailedSevenDays,
+    activeAgentChats
+  };
+}
+
+export type RecentScheduledEmail = {
+  id: string;
+  to_email: string;
+  subject: string;
+  status: string;
+  batch_reference: string;
+  schedule_date: string;
+  schedule_time: string;
+  updated_at: string;
+};
+
+export async function getRecentScheduledEmails(limit = 6): Promise<RecentScheduledEmail[]> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("email_batch_items")
+    .select("id,to_email,subject,status,batch_reference,schedule_date,schedule_time,updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return [];
+  return data as RecentScheduledEmail[];
+}
+
 export type RecentChat = { id: string; title: string | null; updated_at: string };
 
 export async function getRecentChats(limit = 3): Promise<RecentChat[]> {

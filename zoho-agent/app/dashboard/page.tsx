@@ -1,58 +1,52 @@
-import { Activity, CheckCircle2, CircleDashed, Database, MessageSquare, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, Database, MailCheck, MessageSquare, MessagesSquare } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { ConnectionBanner } from "@/components/connection-banner";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { getDashboardStats, getRecentChats, getRecentRuns } from "@/lib/supabase/queries";
+import {
+  getAgentDashboardCounts,
+  getDashboardStats,
+  getRecentChats,
+  getRecentScheduledEmails
+} from "@/lib/supabase/queries";
 
 export const dynamic = "force-dynamic";
 
-function startOfTodayIso() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today.toISOString();
-}
-
-function totalCount(totals: Record<string, number> | null | undefined) {
-  if (!totals) return 0;
-  return Object.values(totals).reduce((sum, value) => sum + Number(value ?? 0), 0);
+function emailStatusForBadge(status: string) {
+  if (status === "scheduled") return "success";
+  if (status === "failed") return "error";
+  if (status === "pending" || status === "resolving") return "pending";
+  if (status === "skipped_duplicate") return "idle";
+  return status;
 }
 
 export default async function DashboardPage() {
-  const [stats, recentChats, recentRuns] = await Promise.all([
+  const [stats, counts, recentChats, recentScheduledEmails] = await Promise.all([
     getDashboardStats(),
+    getAgentDashboardCounts(),
     getRecentChats(5),
-    getRecentRuns()
+    getRecentScheduledEmails(6)
   ]);
-  const supabase = await createServerSupabaseClient();
-  const todayIso = startOfTodayIso();
-  const [activeRunsResult, completedTodayResult, failedRunsResult] = supabase
-    ? await Promise.all([
-        supabase.from("workflow_runs").select("id", { count: "exact", head: true }).in("status", ["running", "paused"]),
-        supabase
-          .from("workflow_runs")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "completed")
-          .gte("completed_at", todayIso),
-        supabase.from("workflow_runs").select("id", { count: "exact", head: true }).eq("status", "failed")
-      ])
-    : [{ count: 0 }, { count: 0 }, { count: 0 }];
 
   const compactStats = [
-    { label: "Active runs", value: activeRunsResult.count ?? 0, icon: CircleDashed },
-    { label: "Completed today", value: completedTodayResult.count ?? 0, icon: CheckCircle2 },
-    { label: "Failed runs", value: failedRunsResult.count ?? 0, icon: XCircle },
-    { label: "Sync count", value: stats.accounts + stats.contacts + stats.deals, icon: Database }
+    { label: "Emails scheduled today", value: counts.emailsScheduledToday, icon: MailCheck },
+    {
+      label: "Emails failed (7 days)",
+      value: counts.emailsFailedSevenDays,
+      icon: AlertTriangle,
+      danger: counts.emailsFailedSevenDays > 0
+    },
+    { label: "Active agent chats", value: counts.activeAgentChats, icon: MessagesSquare },
+    { label: "CRM records mirrored", value: stats.accounts + stats.contacts + stats.deals, icon: Database }
   ];
 
   return (
     <AppShell>
       <PageHeader
-        eyebrow="V2 Agent"
+        eyebrow="Agent"
         title="Operations dashboard"
-        description="Current run state, recent execution history, and recent agent activity."
+        description="Scheduled email activity, agent sessions, and CRM mirror state."
         action={
           <Link
             href="/agent"
@@ -71,9 +65,9 @@ export default async function DashboardPage() {
             <div key={item.label} className="rounded-2xl border border-line bg-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs uppercase tracking-[0.08em] text-muted">{item.label}</div>
-                <Icon className="h-4 w-4 text-accent" />
+                <Icon className={`h-4 w-4 ${item.danger ? "text-danger" : "text-accent"}`} />
               </div>
-              <div className="mt-2 text-2xl font-semibold">{item.value}</div>
+              <div className={`mt-2 text-2xl font-semibold ${item.danger ? "text-danger" : ""}`}>{item.value}</div>
             </div>
           );
         })}
@@ -82,42 +76,44 @@ export default async function DashboardPage() {
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <section className="rounded-2xl border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <h2 className="text-sm font-semibold">Recent runs</h2>
-            <Link href="/runs" className="text-xs font-semibold text-accent hover:underline">
+            <h2 className="text-sm font-semibold">Recent scheduled emails</h2>
+            <Link href="/agent" className="text-xs font-semibold text-accent hover:underline">
               View all
             </Link>
           </div>
-          {recentRuns.length > 0 ? (
+          {recentScheduledEmails.length > 0 ? (
             <div className="overflow-auto">
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-canvas text-xs uppercase tracking-[0.05em] text-muted">
                   <tr>
-                    <th className="px-4 py-3">Run</th>
+                    <th className="px-4 py-3">To</th>
+                    <th className="px-4 py-3">Subject</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Items</th>
-                    <th className="px-4 py-3">Created</th>
+                    <th className="px-4 py-3">Batch</th>
+                    <th className="px-4 py-3">When</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recentRuns.map((run) => (
-                    <tr key={run.id} className="border-t border-line">
-                      <td className="px-4 py-3 font-mono text-xs">
-                        <Link href={`/run/${run.id}`} className="text-accent hover:underline">
-                          {run.id.slice(0, 8)}
-                        </Link>
+                  {recentScheduledEmails.map((email) => (
+                    <tr key={email.id} className="border-t border-line">
+                      <td className="px-4 py-3 text-muted">{email.to_email}</td>
+                      <td className="max-w-xs truncate px-4 py-3 text-ink" title={email.subject}>
+                        {email.subject}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={run.status} />
+                        <StatusBadge status={emailStatusForBadge(email.status)} />
                       </td>
-                      <td className="px-4 py-3 text-muted">{totalCount(run.totals)}</td>
-                      <td className="px-4 py-3 text-muted">{new Date(run.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted">{email.batch_reference}</td>
+                      <td className="px-4 py-3 text-muted">
+                        {email.schedule_date} {email.schedule_time}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <div className="px-4 py-10 text-sm text-muted">No run history yet.</div>
+            <div className="px-4 py-10 text-sm text-muted">No scheduled emails yet.</div>
           )}
         </section>
 
