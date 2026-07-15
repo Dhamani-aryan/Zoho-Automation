@@ -56,7 +56,7 @@ export default async function DashboardPage() {
         action={
           <Link
             href="/agent"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-accent px-4 text-sm font-semibold text-white"
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white"
           >
             Open agent
           </Link>
@@ -68,7 +68,7 @@ export default async function DashboardPage() {
         {compactStats.map((item) => {
           const Icon = item.icon;
           return (
-            <div key={item.label} className="rounded-lg border border-line bg-surface px-4 py-3">
+            <div key={item.label} className="rounded-2xl border border-line bg-surface px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs uppercase tracking-[0.08em] text-muted">{item.label}</div>
                 <Icon className="h-4 w-4 text-accent" />
@@ -80,7 +80,7 @@ export default async function DashboardPage() {
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="rounded-lg border border-line bg-surface">
+        <section className="rounded-2xl border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <h2 className="text-sm font-semibold">Recent runs</h2>
             <Link href="/runs" className="text-xs font-semibold text-accent hover:underline">
@@ -121,7 +121,7 @@ export default async function DashboardPage() {
           )}
         </section>
 
-        <section className="rounded-lg border border-line bg-surface">
+        <section className="rounded-2xl border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <h2 className="text-sm font-semibold">Recent activity</h2>
             <Activity className="h-4 w-4 text-muted" />
@@ -148,3 +148,5 @@ export default async function DashboardPage() {
     </AppShell>
   );
 }
+
+

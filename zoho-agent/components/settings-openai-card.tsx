@@ -186,7 +186,7 @@ export function SettingsOpenAICard() {
   }
 
   return (
-    <section className="rounded-md border border-line bg-surface p-4 ">
+    <section className="rounded-2xl border border-line bg-surface p-4 ">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold">OpenAI connection</h2>
@@ -194,7 +194,7 @@ export function SettingsOpenAICard() {
             Connect your own ChatGPT subscription or OpenAI API key. Secrets are encrypted per user.
           </p>
         </div>
-        <div className="rounded-md border border-line bg-surface px-3 py-2 text-sm">
+        <div className="rounded-xl border border-line bg-surface px-3 py-2 text-sm">
           {status?.connected
             ? `${status.kind === "codex_oauth" ? "ChatGPT" : "API key"} connected`
             : "Not connected"}
@@ -202,7 +202,7 @@ export function SettingsOpenAICard() {
       </div>
 
       {status?.connected ? (
-        <div className="mt-4 rounded-md border border-line bg-surface p-3 text-sm">
+        <div className="mt-4 rounded-xl border border-line bg-surface p-3 text-sm">
           <div>Status: {status.status}</div>
           {status.label ? <div>Label: {status.label}</div> : null}
           {status.account_id ? <div>Account: {status.account_id}</div> : null}
@@ -210,19 +210,19 @@ export function SettingsOpenAICard() {
       ) : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-md border border-line p-4">
+        <div className="rounded-xl border border-line p-4">
           <h3 className="text-sm font-semibold">ChatGPT subscription</h3>
           <p className="mt-2 text-sm text-muted">Use the device-code flow for hosted apps.</p>
           {device ? (
             <div className="mt-4 space-y-3 text-sm">
-              <div className="rounded-md bg-surface p-3">
+              <div className="rounded-xl bg-surface p-3">
                 Code: <span className="font-mono text-base font-semibold">{device.user_code}</span>
               </div>
               <a
                 href={device.verification_uri}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex h-10 items-center rounded-md border border-line px-3"
+                className="inline-flex h-10 items-center rounded-xl border border-line px-3"
               >
                 Open approval page
               </a>
@@ -230,7 +230,7 @@ export function SettingsOpenAICard() {
                 type="button"
                 onClick={pollDeviceFlow}
                 disabled={isBusy}
-                className="ml-2 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-white disabled:opacity-60"
+                className="ml-2 inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-white disabled:opacity-60"
               >
                 {busy === "poll" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
                 Check approval
@@ -241,7 +241,7 @@ export function SettingsOpenAICard() {
               type="button"
               onClick={startDeviceFlow}
               disabled={isBusy}
-              className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
+              className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
             >
               <PlugZap className="h-4 w-4" />
               Connect ChatGPT
@@ -256,7 +256,7 @@ export function SettingsOpenAICard() {
               auto-refreshed — no device-auth setting needed.
             </p>
             <textarea
-              className="focus-ring mt-2 h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-xs"
+              className="focus-ring mt-2 h-24 w-full rounded-xl border border-line px-3 py-2 font-mono text-xs"
               value={pasteValue}
               onChange={(event) => setPasteValue(event.target.value)}
               placeholder='{"tokens":{"refresh_token":"rt.1..."}}'
@@ -264,7 +264,7 @@ export function SettingsOpenAICard() {
             <button
               type="submit"
               disabled={isBusy || !pasteValue.trim()}
-              className="mt-3 inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm font-semibold disabled:opacity-60"
+              className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl border border-line px-3 text-sm font-semibold disabled:opacity-60"
             >
               {busy === "paste" ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
               Connect from paste
@@ -272,12 +272,12 @@ export function SettingsOpenAICard() {
           </form>
         </div>
 
-        <form onSubmit={saveApiKey} className="rounded-md border border-line p-4">
+        <form onSubmit={saveApiKey} className="rounded-xl border border-line p-4">
           <h3 className="text-sm font-semibold">OpenAI API key</h3>
           <label className="mt-3 block">
             <span className="text-sm text-muted">API key</span>
             <input
-              className="focus-ring mt-1 h-10 w-full rounded-md border border-line px-3 text-sm"
+              className="focus-ring mt-1 h-10 w-full rounded-xl border border-line px-3 text-sm"
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
@@ -287,7 +287,7 @@ export function SettingsOpenAICard() {
           <button
             type="submit"
             disabled={isBusy || !apiKey}
-            className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
+            className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
           >
             <KeyRound className="h-4 w-4" />
             Save API key
@@ -301,7 +301,7 @@ export function SettingsOpenAICard() {
           type="button"
           onClick={disconnect}
           disabled={isBusy || !status?.connected}
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-50"
+          className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-3 text-sm disabled:opacity-50"
         >
           <Unplug className="h-4 w-4" />
           Disconnect
@@ -310,4 +310,6 @@ export function SettingsOpenAICard() {
     </section>
   );
 }
+
+
 

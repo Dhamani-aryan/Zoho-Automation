@@ -118,7 +118,7 @@ export function RunCommandBuilder() {
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <section className="rounded-md border border-line bg-surface p-4 ">
+      <section className="rounded-2xl border border-line bg-surface p-4 ">
         <label htmlFor="command" className="text-sm font-semibold">
           Command
         </label>
@@ -127,10 +127,10 @@ export function RunCommandBuilder() {
           value={command}
           onChange={(event) => setCommand(event.target.value)}
           rows={9}
-          className="focus-ring mt-2 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-sm leading-6"
+          className="focus-ring mt-2 w-full resize-y rounded-xl border border-line bg-surface px-3 py-2 text-sm leading-6"
           placeholder="Update selected deals so Next Step is 3rd Email"
         />
-        <label className="mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-line bg-surface px-3 py-4 text-center text-sm text-muted">
+        <label className="mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface px-3 py-4 text-center text-sm text-muted">
           <FileUp className="mb-2 h-5 w-5" aria-hidden="true" />
           <span>{files?.length ? `${files.length} file(s) selected` : "Attach CSV or Markdown context"}</span>
           <input
@@ -146,7 +146,7 @@ export function RunCommandBuilder() {
             type="button"
             onClick={parseCommand}
             disabled={!command.trim() || busy !== null}
-            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "parse" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Parse
@@ -155,7 +155,7 @@ export function RunCommandBuilder() {
             type="button"
             onClick={validatePlan}
             disabled={!state.plan || busy !== null}
-            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "validate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             Validate
@@ -164,21 +164,21 @@ export function RunCommandBuilder() {
             type="button"
             onClick={saveRun}
             disabled={!state.validation || busy !== null}
-            className="focus-ring inline-flex h-10 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save preview
           </button>
         </div>
         {state.error ? (
-          <div className="mt-4 flex gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+          <div className="mt-4 flex gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {state.error}
           </div>
         ) : null}
       </section>
 
-      <section className="rounded-md border border-line bg-surface ">
+      <section className="rounded-2xl border border-line bg-surface ">
         <div className="border-b border-line p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-semibold">Preview</h2>
@@ -189,33 +189,33 @@ export function RunCommandBuilder() {
         <div className="grid gap-4 p-4">
           {state.plan ? (
             <div className="grid gap-3 text-sm md:grid-cols-3">
-              <div className="rounded-md border border-line bg-surface p-3">
+              <div className="rounded-xl border border-line bg-surface p-3">
                 <div className="text-xs uppercase text-muted">Kind</div>
                 <div className="mt-1 font-medium capitalize">{state.plan.run_kind}</div>
               </div>
-              <div className="rounded-md border border-line bg-surface p-3">
+              <div className="rounded-xl border border-line bg-surface p-3">
                 <div className="text-xs uppercase text-muted">Module</div>
                 <div className="mt-1 font-medium capitalize">{state.plan.record_selector.module}</div>
               </div>
-              <div className="rounded-md border border-line bg-surface p-3">
+              <div className="rounded-xl border border-line bg-surface p-3">
                 <div className="text-xs uppercase text-muted">Targets</div>
                 <div className="mt-1 font-medium">{state.validation?.target_count ?? "Not validated"}</div>
               </div>
             </div>
           ) : (
-            <div className="rounded-md border border-line bg-surface p-6 text-sm text-muted">
+            <div className="rounded-2xl border border-line bg-surface p-6 text-sm text-muted">
               Parsed plans and validation rows appear here.
             </div>
           )}
 
           {state.validation?.missing_info.length ? (
-            <div className="rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
+            <div className="rounded-xl border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
               {state.validation.missing_info.join(" ")}
             </div>
           ) : null}
 
           {state.validation ? (
-            <div className="overflow-hidden rounded-md border border-line">
+            <div className="overflow-hidden rounded-xl border border-line">
               <div className="overflow-auto">
                 <table className="min-w-full text-left text-sm">
                   <thead className="bg-surface text-xs uppercase text-muted">
@@ -250,7 +250,7 @@ export function RunCommandBuilder() {
           ) : null}
 
           {state.plan ? (
-            <details className="rounded-md border border-line bg-surface p-3 text-sm">
+            <details className="rounded-xl border border-line bg-surface p-3 text-sm">
               <summary className="cursor-pointer font-medium">Plan JSON</summary>
               <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-xs">{formatJson(state.plan)}</pre>
             </details>
@@ -260,4 +260,6 @@ export function RunCommandBuilder() {
     </div>
   );
 }
+
+
 

@@ -257,7 +257,7 @@ function ToolTrace({
   const StatusIcon = failed ? XCircle : running ? Loader2 : CheckCircle2;
 
   return (
-    <div className="rounded-lg border border-line bg-surface">
+    <div className="rounded-2xl border border-line bg-surface">
       <div className="flex items-start gap-3 px-3 py-3">
         <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line bg-canvas">
           <StatusIcon
@@ -282,13 +282,13 @@ function ToolTrace({
             <div className="mt-2 grid gap-2 lg:grid-cols-2">
               <div>
                 <div className="mb-1 font-semibold text-muted">Args</div>
-                <pre className="max-h-64 overflow-auto rounded-md border border-line bg-canvas p-3 text-xs text-ink">
+                <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-canvas p-3 text-xs text-ink">
                   {shortJson(item.args)}
                 </pre>
               </div>
               <div>
                 <div className="mb-1 font-semibold text-muted">Result</div>
-                <pre className="max-h-64 overflow-auto rounded-md border border-line bg-canvas p-3 text-xs text-ink">
+                <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-canvas p-3 text-xs text-ink">
                   {shortJson(item.result)}
                 </pre>
               </div>
@@ -304,7 +304,7 @@ function ToolTrace({
               <div className="font-semibold text-ink">Verification evidence</div>
               <div className="mt-1 flex flex-wrap gap-2">
                 {evidence.map((item) => (
-                  <span key={item} className="rounded-md border border-success/30 bg-success/10 px-2 py-1 text-success">
+                  <span key={item} className="rounded-xl border border-success/30 bg-success/10 px-2 py-1 text-success">
                     {item}
                   </span>
                 ))}
@@ -664,7 +664,7 @@ export function AgentChat({
           <button
             type="button"
             onClick={() => createSession().catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not create chat."))}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-surface"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-line bg-surface text-ink hover:bg-surface"
             title="New chat"
           >
             <Plus className="h-4 w-4" />
@@ -682,7 +682,7 @@ export function AgentChat({
                   key={session.id}
                   className={`mb-1 grid ${
                     confirmingDelete ? "grid-cols-[minmax(0,1fr)_68px]" : "grid-cols-[minmax(0,1fr)_32px]"
-                  } items-center rounded-md ${
+                  } items-center rounded-xl ${
                     active ? "border border-accent/40 bg-accent/10 text-ink" : "hover:bg-line"
                   }`}
                 >
@@ -706,7 +706,7 @@ export function AgentChat({
                       <button
                         type="button"
                         onClick={() => setPendingDeleteSessionId(null)}
-                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${
                           active ? "text-muted hover:bg-line hover:text-ink" : "text-muted hover:bg-line hover:text-ink"
                         }`}
                         aria-label="Cancel delete"
@@ -722,7 +722,7 @@ export function AgentChat({
                             setError(err instanceof Error ? err.message : "Could not delete chat.");
                           });
                         }}
-                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${
                           active ? "text-danger hover:bg-line" : "text-danger hover:bg-danger/10"
                         } disabled:cursor-not-allowed disabled:opacity-40`}
                         aria-label={`Confirm delete ${titleFor(session)}`}
@@ -736,7 +736,7 @@ export function AgentChat({
                       type="button"
                       disabled={loading}
                       onClick={() => setPendingDeleteSessionId(session.id)}
-                      className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md ${
+                      className={`mr-1 inline-flex h-8 w-8 items-center justify-center rounded-full ${
                         active ? "text-muted hover:bg-line hover:text-ink" : "text-muted hover:bg-line hover:text-ink"
                       } disabled:cursor-not-allowed disabled:opacity-40`}
                       aria-label={`Delete ${titleFor(session)}`}
@@ -769,7 +769,7 @@ export function AgentChat({
                   setError(err instanceof Error ? err.message : "Could not update teach mode.");
                 });
               }}
-              className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${
+              className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-semibold ${
                 activeSession?.teach_mode
                   ? "border-pending/40 bg-pending/10 text-pending"
                   : "border-line bg-surface text-ink hover:bg-surface"
@@ -781,7 +781,7 @@ export function AgentChat({
             </button>
           </div>
           {activeSession?.teach_mode ? (
-            <div className="mt-3 rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-xs text-pending">
+            <div className="mt-3 rounded-xl border border-pending/40 bg-pending/10 px-3 py-2 text-xs text-pending">
               Teach mode is on. The agent will do one live action per instruction, verify it, and distill the method into a skill guide when you ask it to remember.
             </div>
           ) : null}
@@ -800,7 +800,7 @@ export function AgentChat({
               if (item.kind === "user") {
                 return (
                   <div key={item.id} className="group flex flex-col items-end gap-1">
-                    <div className="max-w-3xl whitespace-pre-wrap rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-ink">
+                    <div className="max-w-3xl whitespace-pre-wrap rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-ink">
                       {linkifyContent(item.content, "underline underline-offset-2 hover:opacity-80 break-all")}
                     </div>
                     <div className="flex gap-1 opacity-0 transition group-hover:opacity-100">
@@ -808,7 +808,7 @@ export function AgentChat({
                         type="button"
                         onClick={() => editMessage(item.content)}
                         disabled={loading}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                         title="Edit message"
                         aria-label="Edit message"
                       >
@@ -818,7 +818,7 @@ export function AgentChat({
                         type="button"
                         onClick={() => resend(item.content)}
                         disabled={loading}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                         title="Resend message"
                         aria-label="Resend message"
                       >
@@ -831,7 +831,7 @@ export function AgentChat({
               return (
                 <div
                   key={item.id}
-                  className="max-w-3xl whitespace-pre-wrap rounded-md bg-surface px-4 py-3 text-sm text-ink"
+                  className="max-w-3xl whitespace-pre-wrap rounded-xl bg-surface px-4 py-3 text-sm text-ink"
                 >
                   {linkifyContent(
                     item.content,
@@ -943,5 +943,7 @@ export function AgentChat({
     </div>
   );
 }
+
+
 
 

@@ -55,7 +55,7 @@ function GuideSection({ label, content }: { label: string; content: string }) {
   return (
     <div>
       <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">{label}</div>
-      <div className="whitespace-pre-wrap rounded-md border border-line bg-canvas p-3 text-sm leading-6 text-ink">
+      <div className="whitespace-pre-wrap rounded-xl border border-line bg-canvas p-3 text-sm leading-6 text-ink">
         {content}
       </div>
     </div>
@@ -80,7 +80,7 @@ function EditField({
         name={name}
         defaultValue={defaultValue}
         rows={rows}
-        className="mt-1 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+        className="mt-1 w-full rounded-xl border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
       />
     </label>
   );
@@ -148,7 +148,7 @@ export function SkillsLibrary({
 
   if (error && guides.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-pending/40 bg-pending/10 p-4 text-sm text-pending">
+      <div className="flex items-center gap-2 rounded-xl border border-pending/40 bg-pending/10 p-4 text-sm text-pending">
         <TriangleAlert className="h-4 w-4 shrink-0" />
         Could not load skill guides: {error}
       </div>
@@ -158,26 +158,26 @@ export function SkillsLibrary({
   return (
     <div className="space-y-4">
       {error ? (
-        <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+        <div className="flex items-center gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
           <TriangleAlert className="h-4 w-4 shrink-0" />
           {error}
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-3 lg:flex-row lg:items-center">
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-3 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="h-10 w-full rounded-md border border-line bg-canvas pl-9 pr-3 text-sm text-ink outline-none focus:border-accent"
+            className="h-10 w-full rounded-xl border border-line bg-canvas pl-9 pr-3 text-sm text-ink outline-none focus:border-accent"
             placeholder="Search name or intent"
           />
         </div>
         <select
           value={method}
           onChange={(event) => setMethod(event.target.value)}
-          className="h-10 rounded-md border border-line bg-canvas px-3 text-sm text-ink outline-none focus:border-accent"
+          className="h-10 rounded-xl border border-line bg-canvas px-3 text-sm text-ink outline-none focus:border-accent"
         >
           <option value="all">All methods</option>
           <option value="API">API</option>
@@ -187,11 +187,11 @@ export function SkillsLibrary({
       </div>
 
       {filteredGuides.length === 0 ? (
-        <div className="rounded-md border border-line bg-surface p-8 text-center text-sm text-muted">
+        <div className="rounded-2xl border border-line bg-surface p-8 text-center text-sm text-muted">
           No skill guides match the current filters.
         </div>
       ) : (
-        <section className="overflow-hidden rounded-lg border border-line bg-surface">
+        <section className="overflow-hidden rounded-2xl border border-line bg-surface">
           <div className="overflow-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-canvas text-xs uppercase tracking-[0.05em] text-muted">
@@ -224,7 +224,7 @@ export function SkillsLibrary({
                             <div className="text-muted">{methodFor(guide)}</div>
                             <div>
                               {triggers ? (
-                                <span className="inline-flex items-center gap-1 rounded-md border border-success/40 bg-success/10 px-2 py-1 text-xs text-success">
+                                <span className="inline-flex items-center gap-1 rounded-xl border border-success/40 bg-success/10 px-2 py-1 text-xs text-success">
                                   <Sparkles className="h-3 w-3" />
                                   Yes
                                 </span>
@@ -236,7 +236,7 @@ export function SkillsLibrary({
                             <div className="flex flex-wrap gap-2">
                               <Link
                                 href={`/agent?prefill=${encodeURIComponent(buildPrefill(guide))}`}
-                                className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-2 text-xs font-semibold text-white"
+                                className="inline-flex h-8 items-center gap-1 rounded-xl bg-accent px-2 text-xs font-semibold text-white"
                               >
                                 <Play className="h-3.5 w-3.5" />
                                 Run
@@ -248,7 +248,7 @@ export function SkillsLibrary({
                                     event.preventDefault();
                                     setEditingId(isEditing ? null : guide.id);
                                   }}
-                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-line px-2 text-xs text-ink hover:bg-line"
+                                  className="inline-flex h-8 items-center gap-1 rounded-xl border border-line px-2 text-xs text-ink hover:bg-line"
                                 >
                                   {isEditing ? <X className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
                                   {isEditing ? "Close" : "Edit"}
@@ -272,7 +272,7 @@ export function SkillsLibrary({
                                   <button
                                     type="submit"
                                     disabled={savingId === guide.id}
-                                    className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
+                                    className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
                                   >
                                     <Save className="h-4 w-4" />
                                     {savingId === guide.id ? "Saving" : "Save changes"}
@@ -290,7 +290,7 @@ export function SkillsLibrary({
                                       {triggers.map((keyword) => (
                                         <span
                                           key={keyword}
-                                          className="rounded-md border border-line bg-canvas px-2 py-0.5 text-xs text-ink"
+                                          className="rounded-xl border border-line bg-canvas px-2 py-0.5 text-xs text-ink"
                                         >
                                           {keyword}
                                         </span>
@@ -303,7 +303,7 @@ export function SkillsLibrary({
                                     <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
                                       Parameters
                                     </div>
-                                    <div className="overflow-x-auto rounded-md border border-line">
+                                    <div className="overflow-x-auto rounded-xl border border-line">
                                       <table className="w-full text-left text-sm">
                                         <thead className="bg-canvas text-xs uppercase tracking-[0.05em] text-muted">
                                           <tr>
@@ -351,3 +351,5 @@ export function SkillsLibrary({
     </div>
   );
 }
+
+

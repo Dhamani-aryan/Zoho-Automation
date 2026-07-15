@@ -38,7 +38,7 @@ export function LoginForm() {
       <label className="block">
         <span className="text-sm font-medium">Email</span>
         <input
-          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
+          className="focus-ring mt-1 h-10 w-full rounded-xl border border-line bg-surface px-3 text-sm"
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
@@ -49,7 +49,7 @@ export function LoginForm() {
       <label className="block">
         <span className="text-sm font-medium">Password</span>
         <input
-          className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
+          className="focus-ring mt-1 h-10 w-full rounded-xl border border-line bg-surface px-3 text-sm"
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
@@ -58,14 +58,14 @@ export function LoginForm() {
         />
       </label>
       {message ? (
-        <div className="rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
+        <div className="rounded-xl border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
           {message}
         </div>
       ) : null}
       <button
         type="submit"
         disabled={loading}
-        className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
+        className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
       >
         <LogIn className="h-4 w-4" aria-hidden="true" />
         {loading ? "Signing in" : "Sign in"}
@@ -73,4 +73,6 @@ export function LoginForm() {
     </form>
   );
 }
+
+
 

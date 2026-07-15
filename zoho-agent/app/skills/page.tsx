@@ -44,3 +44,5 @@ export default async function SkillsPage() {
     </AppShell>
   );
 }
+
+

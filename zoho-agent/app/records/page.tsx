@@ -39,7 +39,7 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
             <Link
               key={key}
               href={`/records?module=${key}`}
-              className={`rounded-md border px-3 py-2 text-sm ${
+              className={`rounded-xl border px-3 py-2 text-sm ${
                 key === moduleKey
                   ? "border-accent bg-success/10 text-accent"
                   : "border-line bg-surface text-ink"
@@ -58,11 +58,11 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
             id="q"
             name="q"
             defaultValue={search}
-            className="focus-ring h-10 flex-1 rounded-md border border-line bg-surface px-3 text-sm"
+            className="focus-ring h-10 flex-1 rounded-xl border border-line bg-surface px-3 text-sm"
             placeholder={`Search ${RECORD_MODULES[moduleKey].label.toLowerCase()}`}
           />
           <button
-            className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md border border-line bg-surface"
+            className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-surface"
             type="submit"
             aria-label="Search records"
           >
@@ -71,7 +71,7 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
         </form>
       </div>
 
-      <section className="overflow-hidden rounded-md border border-line bg-surface ">
+      <section className="overflow-hidden rounded-2xl border border-line bg-surface ">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-surface text-xs uppercase text-muted">
@@ -100,7 +100,7 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
                         href={row.zoho_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-line"
                         aria-label={`Open ${row.name} in Zoho`}
                       >
                         <ExternalLink className="h-4 w-4" aria-hidden="true" />
@@ -121,4 +121,6 @@ export default async function RecordsPage({ searchParams }: RecordsPageProps) {
     </AppShell>
   );
 }
+
+
 

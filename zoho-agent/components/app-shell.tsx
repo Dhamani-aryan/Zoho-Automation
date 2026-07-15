@@ -73,7 +73,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex h-10 items-center gap-3 rounded-md px-3 text-sm text-muted hover:bg-line hover:text-ink"
+                className="flex h-10 items-center gap-3 rounded-lg px-3 text-sm text-muted hover:bg-line hover:text-ink"
               >
                 <Icon className="h-4 w-4 text-muted" aria-hidden="true" />
                 {item.label}
@@ -96,7 +96,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted"
+                  className="rounded-lg border border-line bg-surface px-3 py-2 text-xs text-muted"
                 >
                   {item.label}
                 </Link>
@@ -113,4 +113,6 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+
 

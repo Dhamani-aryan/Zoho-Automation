@@ -128,19 +128,19 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
         title={run.run_parameters.intent_summary ?? "Workflow run"}
         description={`Created ${new Date(run.created_at).toLocaleString()}`}
         action={
-          <Link href="/run/new" className="rounded-md border border-line bg-surface px-3 py-2 text-sm">
+          <Link href="/run/new" className="rounded-xl border border-line bg-surface px-3 py-2 text-sm">
             New run
           </Link>
         }
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface p-3 ">
+      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface p-3 ">
         {showApprove ? (
           <button
             type="button"
             onClick={() => mutate("approve")}
             disabled={busy !== null}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
           >
             {busy === "approve" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             Approve
@@ -151,7 +151,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
             type="button"
             onClick={() => mutate("pause")}
             disabled={busy !== null}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-3 text-sm disabled:opacity-60"
           >
             {busy === "pause" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
             Pause
@@ -162,7 +162,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
             type="button"
             onClick={() => mutate("resume")}
             disabled={busy !== null}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60"
           >
             {busy === "resume" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Resume
@@ -173,7 +173,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
             type="button"
             onClick={() => mutate("cancel")}
             disabled={busy !== null}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-danger/40 px-3 text-sm text-danger disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-danger/40 px-3 text-sm text-danger disabled:opacity-60"
           >
             {busy === "cancel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <StopCircle className="h-4 w-4" />}
             Cancel
@@ -183,7 +183,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
           type="button"
           onClick={() => refresh().catch((error) => setMessage(error instanceof Error ? error.message : "Refresh failed."))}
           disabled={busy !== null}
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-60"
+          className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-3 text-sm disabled:opacity-60"
         >
           <RotateCcw className="h-4 w-4" />
           Refresh
@@ -191,7 +191,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
         {run.status === "completed" ? (
           <a
             href={`/api/runs/${run.id}/report.csv`}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm"
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-3 text-sm"
           >
             <Download className="h-4 w-4" />
             CSV
@@ -209,7 +209,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
           { label: "Success", value: totals.success },
           { label: "Failed", value: totals.failed }
         ].map(({ label, value }) => (
-          <div key={label} className="rounded-md border border-line bg-surface p-3 ">
+          <div key={label} className="rounded-xl border border-line bg-surface p-3 ">
             <div className="text-xs uppercase text-muted">{label}</div>
             <div className="mt-2">{value}</div>
           </div>
@@ -217,24 +217,24 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
       </div>
 
       {run.stop_reason ? (
-        <div className="mb-4 rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
+        <div className="mb-4 rounded-xl border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
           {run.stop_reason}
         </div>
       ) : null}
 
       {run.run_parameters.missing_info?.length ? (
-        <div className="mb-4 rounded-md border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
+        <div className="mb-4 rounded-xl border border-pending/40 bg-pending/10 p-3 text-sm text-pending">
           {run.run_parameters.missing_info.join(" ")}
         </div>
       ) : null}
 
       {run.run_parameters.warnings?.length ? (
-        <div className="mb-4 rounded-md border border-line bg-surface p-3 text-sm text-muted">
+        <div className="mb-4 rounded-xl border border-line bg-surface p-3 text-sm text-muted">
           {run.run_parameters.warnings.join(" ")}
         </div>
       ) : null}
 
-      <section className="overflow-hidden rounded-md border border-line bg-surface ">
+      <section className="overflow-hidden rounded-2xl border border-line bg-surface ">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-surface text-xs uppercase text-muted">
@@ -277,7 +277,7 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
                           href={item.zoho_url}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-line"
                           aria-label="Open Zoho record"
                         >
                           <ExternalLink className="h-4 w-4" aria-hidden="true" />
@@ -297,4 +297,6 @@ export function RunDetailClient({ initialRun, initialItems }: { initialRun: RunD
     </>
   );
 }
+
+
 

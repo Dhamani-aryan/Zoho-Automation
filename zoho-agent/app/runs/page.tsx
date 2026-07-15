@@ -110,7 +110,7 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
         title="Run history"
         description="Sortable execution history with status, timing, progress, and owner metadata."
       />
-      <section className="overflow-hidden rounded-lg border border-line bg-surface">
+      <section className="overflow-hidden rounded-2xl border border-line bg-surface">
         <div className="overflow-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-canvas text-xs uppercase tracking-[0.05em] text-muted">
@@ -165,3 +165,5 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
     </AppShell>
   );
 }
+
+

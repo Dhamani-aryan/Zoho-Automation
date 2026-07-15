@@ -156,12 +156,12 @@ export function ImportPreviewer() {
   }
 
   return (
-    <div className="rounded-md border border-line bg-surface p-4 ">
+    <div className="rounded-2xl border border-line bg-surface p-4 ">
       <form onSubmit={preview} className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex-1">
           <span className="text-sm font-medium">File</span>
           <input
-            className="focus-ring mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
+            className="focus-ring mt-1 w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm"
             type="file"
             accept=".csv,.tsv,.md,.markdown,.txt"
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
@@ -170,7 +170,7 @@ export function ImportPreviewer() {
         <button
           type="submit"
           disabled={loading}
-          className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
+          className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -182,7 +182,7 @@ export function ImportPreviewer() {
       </form>
 
       {error ? (
-        <div className="mt-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+        <div className="mt-4 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
           {error}
         </div>
       ) : null}
@@ -190,22 +190,22 @@ export function ImportPreviewer() {
       {result ? (
         <div className="mt-5 space-y-4">
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-md border border-line bg-surface p-3">
+            <div className="rounded-xl border border-line bg-surface p-3">
               <div className="text-xs text-muted">File</div>
               <div className="mt-1 truncate text-sm font-semibold">{result.fileName}</div>
             </div>
-            <div className="rounded-md border border-line bg-surface p-3">
+            <div className="rounded-xl border border-line bg-surface p-3">
               <div className="text-xs text-muted">Type</div>
               <div className="mt-1 text-sm font-semibold uppercase">{result.fileType}</div>
             </div>
-            <div className="rounded-md border border-line bg-surface p-3">
+            <div className="rounded-xl border border-line bg-surface p-3">
               <div className="text-xs text-muted">Rows or sections</div>
               <div className="mt-1 text-sm font-semibold">{result.rowCount}</div>
             </div>
           </div>
 
           {result.warnings.length > 0 ? (
-            <div className="rounded-md border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
+            <div className="rounded-xl border border-pending/40 bg-pending/10 px-3 py-2 text-sm text-pending">
               {result.warnings.join(" ")}
             </div>
           ) : null}
@@ -213,7 +213,7 @@ export function ImportPreviewer() {
           {result.sections?.length ? (
             <div>
               <div className="mb-2 text-sm font-semibold">Markdown sections</div>
-              <div className="max-h-64 overflow-auto rounded-md border border-line">
+              <div className="max-h-64 overflow-auto rounded-xl border border-line">
                 {result.sections.map((section) => (
                   <div key={section} className="border-b border-line px-3 py-2 text-sm last:border-b-0">
                     {section}
@@ -224,7 +224,7 @@ export function ImportPreviewer() {
           ) : null}
 
           {result.rows.length > 0 ? (
-          <div className="overflow-auto rounded-md border border-line">
+          <div className="overflow-auto rounded-xl border border-line">
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-surface text-xs uppercase text-muted">
                   <tr>
@@ -251,7 +251,7 @@ export function ImportPreviewer() {
           ) : null}
 
           {result.fileType === "csv" || result.fileType === "text" ? (
-            <div className="rounded-md border border-line bg-surface p-4">
+            <div className="rounded-2xl border border-line bg-surface p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold">Map and import records</div>
@@ -260,7 +260,7 @@ export function ImportPreviewer() {
                   </div>
                 </div>
                 <select
-                  className="focus-ring h-10 rounded-md border border-line bg-surface px-3 text-sm"
+                  className="focus-ring h-10 rounded-xl border border-line bg-surface px-3 text-sm"
                   value={targetModule}
                   onChange={(event) => {
                     const nextModule = event.target.value as ImportModule;
@@ -283,7 +283,7 @@ export function ImportPreviewer() {
                       {field.required ? " *" : ""}
                     </span>
                     <select
-                      className="focus-ring mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"
+                      className="focus-ring mt-1 h-10 w-full rounded-xl border border-line bg-surface px-3 text-sm"
                       value={mapping[field.key] ?? ""}
                       onChange={(event) =>
                         setMapping((current) => ({
@@ -307,14 +307,14 @@ export function ImportPreviewer() {
                 type="button"
                 onClick={importRecords}
                 disabled={importing}
-                className="focus-ring mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
+                className="focus-ring mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60"
               >
                 {importing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
                 Import mapped records
               </button>
 
               {importResult ? (
-                <div className="mt-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
+                <div className="mt-4 rounded-xl border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
                   {importResult.stored ? "Stored" : "Validated"} {importResult.importableRows}{" "}
                   {importResult.module} rows. Skipped {importResult.skippedRows}.{" "}
                   {importResult.warning ?? ""}
@@ -328,4 +328,6 @@ export function ImportPreviewer() {
     </div>
   );
 }
+
+
 

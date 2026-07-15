@@ -24,7 +24,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium capitalize",
+        "inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium capitalize",
         statusClasses[status] ?? "border-line bg-surface text-muted"
       )}
     >
@@ -32,4 +32,6 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+
 

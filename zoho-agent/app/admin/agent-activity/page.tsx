@@ -71,7 +71,7 @@ export default async function AgentActivityPage() {
 
       <section className="mb-6 grid gap-3 md:grid-cols-3">
         {[...counts.values()].slice(0, 6).map((entry) => (
-          <div key={entry.user} className="rounded-md border border-line bg-surface p-4">
+          <div key={entry.user} className="rounded-2xl border border-line bg-surface p-4">
             <div className="truncate text-sm font-medium">{entry.user}</div>
             <div className="mt-2 text-2xl font-semibold">{entry.total}</div>
             <div className="text-xs text-muted">{entry.failures} latest failure(s)</div>
@@ -79,7 +79,7 @@ export default async function AgentActivityPage() {
         ))}
       </section>
 
-      <section className="mb-6 rounded-md border border-line bg-surface p-4">
+      <section className="mb-6 rounded-2xl border border-line bg-surface p-4">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold">Archived session retention</h2>
@@ -91,7 +91,7 @@ export default async function AgentActivityPage() {
         </div>
       </section>
 
-      <section className="mb-6 rounded-md border border-line bg-surface p-4">
+      <section className="mb-6 rounded-2xl border border-line bg-surface p-4">
         <h2 className="mb-3 text-sm font-semibold">Latest failures</h2>
         <div className="divide-y divide-line">
           {latestFailures.length === 0 ? (
@@ -111,7 +111,7 @@ export default async function AgentActivityPage() {
         </div>
       </section>
 
-      <section className="rounded-md border border-line bg-surface p-4">
+      <section className="rounded-2xl border border-line bg-surface p-4">
         <h2 className="mb-3 text-sm font-semibold">Recent activity</h2>
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm">
@@ -139,4 +139,6 @@ export default async function AgentActivityPage() {
     </AppShell>
   );
 }
+
+
 
