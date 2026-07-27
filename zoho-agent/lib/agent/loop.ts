@@ -47,6 +47,7 @@ import type { AuthorizedUser } from "@/lib/auth/guards";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
 import { agentMaxToolCalls, agentTurnTimeoutMs } from "@/lib/agent/runtime-config";
 import { routeCoreSkillGuides } from "@/lib/agent/guide-routing";
+import { KNOWN_OWNERS } from "@/lib/constants";
 import {
   assistantAdmitsUiIncomplete,
   createUiAgilityState,
@@ -90,6 +91,10 @@ type AgentMessageRow = {
 };
 
 type UndoLogModule = "Accounts" | "Contacts" | "Deals";
+
+const KNOWN_OWNER_DIRECTORY = KNOWN_OWNERS.map(
+  (owner) => `- ${owner.name} <${owner.email}>: ${owner.zoho_user_id}`
+).join("\n");
 
 const AGENT_INSTRUCTIONS = `You are ZohoOps, an autonomous operations agent for the KloudData sales team.
 
@@ -141,6 +146,9 @@ CRM writes and safety:
 - No deletes. Do not create records unless a duplicate check is part of the approved task and the tool surface supports it. Before any zoho_api POST /crm/v3/Tasks, read the deal's tasks with GET /crm/v3/Tasks in bounded pages or Tasks/search scoped to the Deal through What_Id. Create only requested task subjects that do not already exist as an open task with the same subject. Requested completions that already show Completed are adopted as verified, not re-created. Schedule means schedule; never send immediately.
 - Org is 890324941. Only Accounts, Contacts, Deals, and Tasks are in scope. Deals use "Deals" in the API and "Potentials" in URLs.
 - Stage edits are admin-only. Deal_Name cannot be changed.
+- Known CRM owner directory:
+${KNOWN_OWNER_DIRECTORY}
+- Owner changes: resolve the requested owner against the known CRM owner directory by exact name, email, Zoho user id, or a unique case-insensitive name substring. If exactly one known owner matches (for example "ankur" -> Ankur Das), do not ask the user to confirm and do not claim the owner id is missing. Write the lookup id with zoho_api PUT /crm/v2.2/{Module} using { data: [{ id: record_id, Owner: { id: owner_zoho_user_id } }] }, then read the record back with fields Owner and verify Owner.id equals the target owner id. If the known directory has no match or multiple matches, make one live GET /crm/v3/users lookup before asking the user.
 - Verify every write by read-back before reporting success. For scheduled email, confirm recipient, subject, date/time, and scheduled state.
 - For composer verification, use browser_observe.composer first: committed To/CC chips, subject, body_text, and signature_present. Also inspect browser_observe.removable_items when the UI shows chips/tags/pills/tokens. A truncated general observation is not a reason to stop because the compact composer summary survives truncation. If any required field is still unavailable, perform one targeted read-only browser_eval (window.document for top composer fields and frame_selector #z_editor for body/signature) before reporting that verification is impossible.
 - When a UI field contains content that must survive, such as a signature, prefilled value, or existing text, never overwrite the whole container. Identify the anchor to preserve, insert or edit surgically relative to it, and verify the anchor still exists afterward.
