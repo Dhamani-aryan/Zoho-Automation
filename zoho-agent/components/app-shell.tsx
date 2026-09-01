@@ -86,7 +86,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-10 border-b border-line bg-surface/95 backdrop-blur">
           <div className="flex min-h-16 flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between lg:px-8">
             <div>
-              <div className="text-sm font-semibold">KloudData sales operations</div>
+              <div className="text-sm font-semibold">CRM agent operations</div>
               <div className="text-xs text-muted">
                 Zoho org {ZOHO_ORG_ID} on {ZOHO_CRM_DOMAIN}
               </div>

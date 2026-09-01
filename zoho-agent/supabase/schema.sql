@@ -56,7 +56,7 @@ create table if not exists public.users (
 create table if not exists public.zoho_connections (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
-  zoho_org_id text not null default '890324941',
+  zoho_org_id text not null default '0000000000000000000',
   zoho_domain text not null default 'crm.zoho.com',
   zoho_user_email text,
   connection_type text not null default 'browser_session',
@@ -586,7 +586,7 @@ values
     '["api_search","children_enumeration","client_side_filter"]',
     '["resolved_ids_or_review_reasons"]',
     '["no_match","multiple_matches"]',
-    '{"zoho_org_id":"890324941","zoho_domain":"crm.zoho.com"}',
+    '{"zoho_org_id":"0000000000000000000","zoho_domain":"crm.zoho.com"}',
     false,
     1,
     'active'
@@ -721,7 +721,7 @@ values
     '["open_url","confirm_record_identity","compose_email","verify_before_schedule","schedule_and_close","verify_scheduled_tab"]',
     '["to_cc_chips_read_back","pre_schedule_screenshot_all_records","success_toast","scheduled_tab_time_matches"]',
     '["wrong_record","missing_email","duplicate_scheduled_email","verification_failed","logged_out"]',
-    '{"default_cc":["ankur@klouddata.com"],"schedule_only":true}',
+    '{"default_cc":[],"schedule_only":true}',
     false,
     1,
     'active'
@@ -745,21 +745,21 @@ insert into public.presets
   (name, slug, description, block_chain, default_run_parameters, status)
 values
   (
-    'KD Blitz',
-    'kd_blitz',
-    'Create and complete campaign task, update Next Step, then schedule one Zoho email per contact.',
+    'Outbound follow-up',
+    'outbound_follow_up',
+    'Create and complete a follow-up task, update the next step, then schedule one Zoho email per contact.',
     '[
       {"slug":"create_task","config":{"subject_parameter":"task_subject","default_subject":"1st Email"}},
       {"slug":"complete_task","config":{"subject_parameter":"task_subject","default_subject":"1st Email"}},
       {"slug":"update_deal_field","config":{"field_api_name":"Next_Step","value_parameter":"next_step_value","default_value":"2nd Email"}},
       {"slug":"schedule_email","config":{"use_first_subject_option":true,"schedule_only":true}}
     ]',
-    '{"cc":["ankur@klouddata.com"],"task_subject":"1st Email","next_step_value":"2nd Email"}',
+    '{"cc":[],"task_subject":"First email","next_step_value":"Follow-up"}',
     'active'
   ),
   (
-    'Assign book of business',
-    'assign_book_of_business',
+    'Assign account portfolio',
+    'assign_account_portfolio',
     'Assign accounts and explicitly selected child contacts/deals to a target owner with per-module verification.',
     '[
       {"slug":"resolve_records","config":{"record_type":"Accounts","include_children":["Contacts","Deals"]}},

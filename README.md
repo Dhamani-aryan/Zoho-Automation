@@ -1,54 +1,104 @@
-# Zoho Automation
+# Zoho Workflow Agent
 
-Private internal repo for the KloudData Zoho Workflow Agent.
+Zoho Workflow Agent is an AI operations agent for repetitive CRM work. It turns plain-English requests into validated previews, then executes approved actions through the user's own logged-in Zoho session.
 
-The project is a controlled workflow executor for repetitive Zoho CRM operations. Users type a plain-English command, attach any needed files, review a deterministic preview, approve the run, and later the system executes verified actions inside each user's own logged-in Zoho session.
+The project is built around one principle: agents should do the work, but humans should stay in control. Every meaningful change is parsed, checked, previewed, executed with guardrails, verified after the fact, and written to an audit trail.
 
-## Current Status
+## Why I built this
 
-- Phase 1 foundation is complete: Next.js app, Supabase Auth, role guards, RLS, imports, record browser, and operational dashboard.
-- Phase 2 command planning is complete: per-user encrypted OpenAI/ChatGPT credentials, command parsing, deterministic validation, and preview run creation.
-- Phase 3 is next: Chrome extension plus the first live Zoho executor block, starting with `update_deal_field` for Deal `Next_Step`.
+CRM operations often become repetitive browser work: updating fields, creating tasks, changing owners, tagging records, preparing outreach, and checking whether the change actually landed. A normal script is too brittle, and a free-form AI agent is too risky.
 
-Phase 2 does not call Zoho and does not write CRM data. Live Zoho execution begins in Phase 3.
+This project explores the middle path:
 
-## Repository Layout
+- AI translates the user's request into a structured plan.
+- Deterministic validation checks records, fields, picklists, dates, and eligibility.
+- A preview shows exactly what will change before execution.
+- A Chrome extension runs approved work inside the user's existing Zoho session.
+- Live read-backs verify the final state instead of trusting the click or API response.
 
-- `zoho-agent/` - Next.js app, API routes, Supabase schema, LLM provider layer, validation engine, and app README.
-- `zoho-agent/docs/` - engineering decision logs for Phase 1 and Phase 2.
-- `zoho-agent/supabase/` - Supabase schema and Phase 2 migration SQL.
-- `workflows/` - workflow specs for record editing, KD Blitz, parser/preview, and LLM credentials.
-- `reference/` - Zoho session API reference.
-- `source_docs/` - original workflow/source playbooks.
-- `PROJECT_OVERVIEW.md` - plain-English project overview.
-- `ZOHO_AGENT_WORK_PLAN.md` - master plan and build guide.
-- `HANDOFF.md` - handoff summary for future coding sessions.
+## Core capabilities
 
-## Local App Setup
+- Natural-language command parsing for CRM workflows.
+- Supabase-backed record mirror for fast search and filtering.
+- Role-based access for admins, operators, and reviewers.
+- Per-user LLM credentials encrypted at rest.
+- Preview-first workflow planning with skip and needs-review states.
+- Chrome extension bridge for live Zoho reads, writes, and UI-only workflows.
+- Approval-aware execution model for CRM changes.
+- Post-action verification and reporting.
+- Audit-friendly run history.
 
-```powershell
+## Agent workflow
+
+```text
+User request
+  -> AI command parser
+  -> Deterministic validator
+  -> Human-readable preview
+  -> Approval gate
+  -> Zoho session executor
+  -> Live verification
+  -> Run report
+```
+
+The agent never treats model output as authority. The model proposes structure. The application validates and executes.
+
+## Architecture
+
+```text
+Next.js app
+  -> Supabase Auth, Postgres, and RLS
+  -> LLM provider layer
+  -> Validation and preview engine
+  -> Agent runtime
+  -> Chrome extension job bridge
+  -> Zoho CRM live session
+```
+
+The extension uses the user's browser session instead of storing Zoho passwords. This keeps account permissions tied to the person who is actually logged in.
+
+## Tech stack
+
+- Next.js
+- TypeScript
+- Supabase
+- PostgreSQL with row-level security
+- Chrome extension APIs
+- OpenAI-compatible LLM provider layer
+- Zod validation
+- Vitest and TypeScript test configs
+
+## Safety model
+
+- No deletes in the first version.
+- No immediate email sends.
+- Preview and approval before CRM-changing runs.
+- Live read-back after each write.
+- Duplicate checks before creating tasks or scheduled work.
+- Encrypted user-level LLM credentials.
+- Role guards for sensitive actions.
+- Structured run reports for successes, skips, and failures.
+
+## Local setup
+
+```sh
 cd zoho-agent
 npm install
 copy .env.example .env.local
 npm run dev
 ```
 
-Fill `.env.local` with Supabase credentials and `LLM_CRED_ENC_KEY` before testing Phase 2 credential storage. See `zoho-agent/README.md` for the detailed setup steps.
+Fill `.env.local` with Supabase values and an encryption key before testing credential storage.
 
-## Safety Model
+## Public docs
 
-- Preview and approval before any write.
-- No deletes in v1.
-- No immediate email sends; email workflows schedule only.
-- Zoho passwords are not stored.
-- LLM output is only a structured plan; deterministic code validates before anything is considered runnable.
-- Audit logs record who did what and why rows were eligible, skipped, or marked for review.
+- [Architecture](docs/ARCHITECTURE.md)
+- [Sample workflow](docs/SAMPLE_WORKFLOW.md)
 
-## Key Docs
+## Project status
 
-Start here:
+The app foundation, authentication, record mirror, command parser, validation flow, preview runs, agent chat surface, and extension bridge are in place. The next focus is production-hardening live execution flows and adding more reusable workflow guides.
 
-1. `PROJECT_OVERVIEW.md`
-2. `ZOHO_AGENT_WORK_PLAN.md`
-3. `zoho-agent/README.md`
-4. `zoho-agent/docs/PHASE_2_DECISIONS.md`
+## What this shows
+
+This repo is a serious example of agentic automation for real business software: browser control, structured planning, approval gates, deterministic validation, and verification-driven execution.

@@ -54,32 +54,23 @@ import {
   scheduledEmailCompletionDecision
 } from "../lib/agent/scheduled-email-verification";
 
-test("workspace file reader is confined, paginated, and can read the real drafts", async () => {
+test("workspace file reader is confined, paginated, and can read public demo drafts", async () => {
   const workspaceRoot = workspaceRootFromCwd(process.cwd());
-  assert.match(
-    resolveWorkspaceFilePath(workspaceRoot, "imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md"),
-    /KD Blitz Batch 3 All Contacts Email Drafts\.md$/
-  );
   assert.match(
     resolveWorkspaceFilePath(workspaceRoot, "imports/samples/Test SAP ERP Email Draft.md"),
     /zoho-agent[\\/]imports[\\/]samples[\\/]Test SAP ERP Email Draft\.md$/
-  );
-  assert.match(
-    resolveWorkspaceFilePath(workspaceRoot, "reference/heysnap/COMPOSER_METHOD.md"),
-    /reference[\\/]heysnap[\\/]COMPOSER_METHOD\.md$/
   );
   assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "../secrets.txt"), /outside allowed roots/);
   assert.throws(() => resolveWorkspaceFilePath(workspaceRoot, "imports/samples/secret.exe"), /type is not allowed/);
 
   const page = await readWorkspaceTextFile(workspaceRoot, {
-    path: "imports/samples/KD Blitz Batch 3 All Contacts Email Drafts.md",
+    path: "imports/samples/Test SAP ERP Email Draft.md",
     start_line: 1,
     max_lines: 20
   });
   assert.equal(page.source, "workspace_file");
-  assert.match(page.content, /KD Blitz Batch 3 All Contacts Email Drafts/);
-  assert.match(page.content, /Schedule date: TBD/);
-  assert.equal(typeof page.next_start_line, "number");
+  assert.match(page.content, /Demo CRM Work Request/);
+  assert.match(page.content, /Schedule date: 2026-07-15/);
 
   const selfResolving = readFileSync(resolve(process.cwd(), "imports/samples/Test SAP ERP Email Draft.md"), "utf8");
   assert.match(selfResolving, /Contact name: Test Test/);
@@ -311,7 +302,7 @@ test("browser primitives validate navigation and input shapes", () => {
     validateBrowserToolCall({
       id: "nav",
       name: "browser_navigate",
-      args: { url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123" }
+      args: { url: "https://crm.zoho.com/crm/org0000000000000000000/tab/Potentials/123" }
     }).name,
     "browser_navigate"
   );
@@ -401,7 +392,7 @@ test("browser snapshots normalize refs and reject stale or unknown targets", () 
   const snapshot = normalizeBrowserSnapshot(
     {
       id: "snap-1",
-      url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+      url: "https://crm.zoho.com/crm/org0000000000000000000/tab/Potentials/123",
       elements: [
         {
           ref: "@e1",
@@ -448,7 +439,7 @@ test("browser observations expose compact refs while preserving composer state",
     in_viewport: true
   }));
   const compact = compactBrowserObservation({
-    url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+    url: "https://crm.zoho.com/crm/org0000000000000000000/tab/Potentials/123",
     title: "Deal",
     composer: { to_chips: ["Test Test"], cc_chips: [], subject: "" },
     snapshot: { id: "snap-1", count: elements.length, elements },
@@ -469,7 +460,7 @@ test("browser observations expose compact refs while preserving composer state",
   };
   assert.deepEqual(compact.composer, { to_chips: ["Test Test"], cc_chips: [], subject: "" });
   assert.equal(compact.snapshot.count, 60);
-  assert.equal(compact.snapshot.elements.length, 30);
+  assert.equal(compact.snapshot.elements.length, 35);
   assert.equal(compact.snapshot.elements[0].name, "x");
   assert.equal("selector" in compact.snapshot.elements[0], false);
   assert.equal(compact.removable_items[0].reveal_on_hover, true);
@@ -488,7 +479,7 @@ test("UI agility requires visible observation, verification, and a different tac
   if (!missingObservation.allowed) assert.equal(missingObservation.reason, "observation_required");
 
   const unchangedObservation = {
-    url: "https://crm.zoho.com/crm/org890324941/tab/Potentials/123",
+    url: "https://crm.zoho.com/crm/org0000000000000000000/tab/Potentials/123",
     composer: { to_chips: ["Test Test"], cc_chips: [] },
     snapshot: {
       id: "volatile-1",

@@ -7,8 +7,8 @@ type PromptCatalog = {
   tags: Record<string, string[]>;
 };
 
-// Tags live as delimited strings in raw_data (tags / matched_tags / all_tags)
-// — same keys tagsOf() reads in lib/plan/validation.ts.
+// Tags live as delimited strings in raw_data (tags / matched_tags / all_tags).
+// This matches the keys read by tagsOf() in lib/plan/validation.ts.
 function collectTags(rows: Array<Record<string, unknown>> | null): string[] {
   const set = new Set<string>();
   for (const row of rows ?? []) {
@@ -94,7 +94,7 @@ export function buildPlanSystemPrompt(catalog: PromptCatalog) {
     "",
     "Record selector rules:",
     `Known tags by module: ${JSON.stringify(catalog.tags)}`,
-    'If the command references one of these tags — or names a campaign/batch that matches one (e.g. "the KD Blitz deals" when "KD Blitz" is a deals tag) — use record_selector.mode="tag" with the exact tag string in record_selector.tag.',
+    'If the command references one of these tags or names a campaign/batch that matches one, use record_selector.mode="tag" with the exact tag string in record_selector.tag.',
     'Use mode="names" only for actual record names (account/contact/deal names).',
     'Omit optional keys entirely when unused: no "filter" unless mode="filter", no "tag" unless mode="tag", never emit empty objects or null for optional fields.',
     "",

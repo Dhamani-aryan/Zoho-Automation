@@ -1,4 +1,4 @@
-export const ZOHO_ORG_ID = "890324941";
+export const ZOHO_ORG_ID = "0000000000000000000";
 export const ZOHO_CRM_DOMAIN = "crm.zoho.com";
 
 export const RECORD_MODULES = {
@@ -27,12 +27,11 @@ export const RECORD_MODULES = {
 
 export type RecordModuleKey = keyof typeof RECORD_MODULES;
 
-// Known Zoho CRM users (owners), from reference/ZOHO_SESSION_API_REFERENCE.md.
-// Used to validate change_owner targets before a run. Extend as the team grows.
+// Demo owner directory. Replace this with tenant-specific data in production.
 export const KNOWN_OWNERS: Array<{ name: string; email: string; zoho_user_id: string }> = [
-  { name: "Aryan Dhamani", email: "aryan@klouddata.com", zoho_user_id: "6834250000001208001" },
-  { name: "Linda Spione", email: "linda.spione@klouddata.com", zoho_user_id: "6834250000003103001" },
-  { name: "Ankur Das", email: "ankur@klouddata.com", zoho_user_id: "6834250000000719001" }
+  { name: "Demo Admin", email: "admin@example.com", zoho_user_id: "1000000000000000001" },
+  { name: "Demo Operator", email: "operator@example.com", zoho_user_id: "1000000000000000002" },
+  { name: "Demo Reviewer", email: "reviewer@example.com", zoho_user_id: "1000000000000000003" }
 ];
 
 export function resolveOwner(input: string) {

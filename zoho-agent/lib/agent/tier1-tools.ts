@@ -156,7 +156,7 @@ export const TIER1_TOOL_DEFINITIONS: AgentToolDefinition[] = ([
       required: ["method", "path"],
       properties: {
         method: { type: "string", enum: ["GET", "POST", "PUT"] },
-        path: { type: "string", description: "Allowlisted CRM API path, e.g. /crm/v3/Deals/6834250000000000001." },
+        path: { type: "string", description: "Allowlisted CRM API path, e.g. /crm/v3/Deals/1000000000000000001." },
         params: {
           type: "object",
           additionalProperties: { oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] },

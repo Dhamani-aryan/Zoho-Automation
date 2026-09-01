@@ -71,7 +71,7 @@ test("inserts live Zoho accounts and preserves raw data", async () => {
         Website: "https://example.com",
         Phone: "555-0100",
         Industry: "Manufacturing",
-        Owner: { id: "owner-1", name: "Aryan Dhamani" },
+        Owner: { id: "owner-1", name: "Demo Admin" },
         Tag: [{ name: "Q3 Prospects" }]
       }
     ]
@@ -82,28 +82,28 @@ test("inserts live Zoho accounts and preserves raw data", async () => {
   assert.equal(result.unchanged_count, 0);
   assert.equal(rows.accounts[0].account_name, "Q3 Prospect");
   assert.equal((rows.accounts[0].raw_data as Row).Account_Name, "Q3 Prospect");
-  assert.equal(rows.accounts[0].zoho_url, "https://crm.zoho.com/crm/org890324941/tab/Accounts/1001");
+  assert.equal(rows.accounts[0].zoho_url, "https://crm.zoho.com/crm/org0000000000000000000/tab/Accounts/1001");
 });
 
 test("classifies unchanged and updated rows idempotently", async () => {
   const account = {
     id: "accounts-1",
     zoho_account_id: "1001",
-    zoho_url: "https://crm.zoho.com/crm/org890324941/tab/Accounts/1001",
+    zoho_url: "https://crm.zoho.com/crm/org0000000000000000000/tab/Accounts/1001",
     account_name: "Q3 Prospect",
     website: null,
     phone: null,
     industry: null,
-    owner: "Aryan Dhamani",
+    owner: "Demo Admin",
     source: "zoho_live",
-    raw_data: { id: "1001", Account_Name: "Q3 Prospect", Owner: { name: "Aryan Dhamani" } }
+    raw_data: { id: "1001", Account_Name: "Q3 Prospect", Owner: { name: "Demo Admin" } }
   };
   const { db } = fakeDb({ accounts: [account] });
 
   const unchanged = await upsertZohoRecords({
     db,
     module: "accounts",
-    records: [{ id: "1001", Account_Name: "Q3 Prospect", Owner: { name: "Aryan Dhamani" } }]
+    records: [{ id: "1001", Account_Name: "Q3 Prospect", Owner: { name: "Demo Admin" } }]
   });
   assert.equal(unchanged.unchanged_count, 1);
   assert.deepEqual(unchanged.updated, []);
@@ -111,7 +111,7 @@ test("classifies unchanged and updated rows idempotently", async () => {
   const updated = await upsertZohoRecords({
     db,
     module: "accounts",
-    records: [{ id: "1001", Account_Name: "Q3 Prospect", Phone: "555-0199", Owner: { name: "Aryan Dhamani" } }]
+    records: [{ id: "1001", Account_Name: "Q3 Prospect", Phone: "555-0199", Owner: { name: "Demo Admin" } }]
   });
   assert.deepEqual(updated.updated, [{ zoho_id: "1001", name: "Q3 Prospect" }]);
 });

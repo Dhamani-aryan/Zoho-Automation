@@ -30,7 +30,7 @@ const IDLE_BACKOFF_AFTER_MS = 5 * 60 * 1000;
 const REALTIME_RECONNECT_MS = 5000;
 const STREAM_RECONNECT_MS = 1000;
 const STREAM_TIMEOUT_MS = 70000;
-const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org890324941/tab/Potentials/custom-view/6834250000000087545/list";
+const AGENT_WINDOW_HOME = "https://crm.zoho.com/crm/org0000000000000000000/tab/Potentials";
 const AGENT_WINDOW_KEYS = {
   agentWindowId: null as number | null,
   agentTabId: null as number | null,
@@ -4478,4 +4478,3 @@ export function startJobPolling() {
 export function pollAgentJobOnce() {
   return pollOnce();
 }
-
